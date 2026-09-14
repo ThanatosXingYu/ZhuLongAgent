@@ -55,6 +55,17 @@
     codexPollTimer: null,
     codexTerminalSeen: new Set(),
     codexEventsFollowTail: true,
+    codexLoadedEvents: new Map(),
+    codexHasMoreEvents: new Map(),
+    codexExpandedEvents: new Set(),
+    codexCollapsedEvents: new Set(),
+    codexCollapsedRounds: new Set(),
+    codexRoundCursor: new Map(),
+    codexCollapsedTaskGroups: new Set(),
+    codexCollapsedSessions: new Set(),
+    codexAutoResumeInterrupted: false,
+    exerciseSearch: "",
+    exerciseFilters: { unsolved: false, attachment: false, environment: false },
     toolManagerTimer: null,
     tools: [],
     toolSelection: new Set(),
@@ -77,6 +88,11 @@
     overviewUpdated: $("overview-updated-at"),
     exerciseCount: $("exercise-count"),
     exerciseList: $("exercise-list"),
+    exerciseSearch: $("exercise-search"),
+    filterUnsolved: $("filter-unsolved"),
+    filterAttachment: $("filter-attachment"),
+    filterEnvironment: $("filter-environment"),
+    resetExerciseFilters: $("reset-exercise-filters"),
     selectedExerciseName: $("selected-exercise-name"),
     exerciseMeta: $("exercise-meta"),
     exerciseDetail: $("exercise-detail"),
@@ -168,6 +184,7 @@
     settingCodexConcurrency: $("setting-codex-concurrency"),
     settingCodexSystemPrompt: $("setting-codex-system-prompt"),
     settingCodexCtfSkills: $("setting-codex-ctf-skills"),
+    settingCodexAutoResume: $("setting-codex-auto-resume"),
     toolManagerStatus: $("tool-manager-status"),
     toolManagerProgress: $("tool-manager-progress"),
     toolManagerProgressTitle: $("tool-manager-progress-title"),
@@ -189,20 +206,32 @@
     codexTaskResume: $("codex-task-resume"),
     codexTaskEvents: $("codex-task-events"),
     codexTaskOutput: $("codex-task-output"),
-    continueCodexTask: $("continue-codex-task"),
-    cancelCodexTask: $("cancel-codex-task"),
+    codexPrimaryAction: $("codex-primary-action"),
+    codexTaskCompose: $("codex-task-compose"),
+    codexMoreMenu: $("codex-more-menu"),
     deleteCodexTask: $("delete-codex-task"),
     openCodexTerminal: $("open-codex-terminal"),
     openCodexFolder: $("open-codex-folder"),
     showCodexTaskDetails: $("show-codex-task-details"),
-    codexTaskDetailsDialog: $("codex-task-details-dialog"),
-    codexTaskDetailsContent: $("codex-task-details-content"),
+    renameCodexTask: $("rename-codex-task"),
+    codexReturnParent: $("codex-return-parent"),
+    copyCodexLog: $("copy-codex-log"),
+    downloadCodexLog: $("download-codex-log"),
+    exportCodexJson: $("export-codex-json"),
+    openCodexLogFile: $("open-codex-log-file"),
+    finishCodexTask: $("finish-codex-task"),
+    codexLoadEarlier: $("codex-load-earlier"),
+    codexCollapseAll: $("codex-collapse-all"),
+    codexExpandAll: $("codex-expand-all"),
+    codexPrevRound: $("codex-prev-round"),
+    codexNextRound: $("codex-next-round"),
+    codexLatestRound: $("codex-latest-round"),
+    codexPendingMessage: $("codex-pending-message"),
     codexTaskMessage: $("codex-task-message"),
     codexTaskFollowUp: $("codex-task-follow-up"),
     codexTaskSide: $("codex-task-side"),
-    codexPromptDialog: $("codex-prompt-dialog"),
-    codexStartPrompt: $("codex-start-prompt"),
-    codexPromptMode: $("codex-prompt-mode"),
+    codexTaskDetailsDialog: $("codex-task-details-dialog"),
+    codexTaskDetailsContent: $("codex-task-details-content"),
     confirmCodexStart: $("confirm-codex-start"),
     cancelCodexStart: $("cancel-codex-start"),
     attachmentDialog: $("attachment-manager-dialog"),
@@ -499,6 +528,8 @@
     els.settingCodexSystemPrompt.value = state.codexSystemPrompt;
     state.codexCtfSkillsEnabled = config.codexCtfSkillsEnabled !== false;
     els.settingCodexCtfSkills.checked = state.codexCtfSkillsEnabled;
+    state.codexAutoResumeInterrupted = config.codexAutoResumeInterrupted === true;
+    els.settingCodexAutoResume.checked = state.codexAutoResumeInterrupted;
     state.modelApiKeyConfigured = Boolean(config.modelApiKeyConfigured);
     state.modelApiKeyMasked = config.modelApiKeyMasked || "";
     state.codexApiKeyConfigured = Boolean(config.codexApiKeyConfigured);
@@ -1153,6 +1184,7 @@
       codexMaxConcurrency: Number(els.settingCodexConcurrency.value || 5),
       codexSystemPrompt: els.settingCodexSystemPrompt.value.trim(),
       codexCtfSkillsEnabled: els.settingCodexCtfSkills.checked,
+      codexAutoResumeInterrupted: els.settingCodexAutoResume.checked,
     };
     const hasCodexKey = Boolean(els.settingCodexApiKey.value.trim() || state.codexApiKeyConfigured);
     if (!payload.codexBaseUrl || !payload.codexModel || !hasCodexKey) {
@@ -1279,16 +1311,85 @@
     }
   }
 
+  function activeExerciseFilter() {
+    return Boolean(state.exerciseSearch.trim()) || Object.values(state.exerciseFilters).some(Boolean);
+  }
+
+  function codexExerciseActivity(exerciseId) {
+    const tasks = state.codexTasks.filter((task) => Number(task.exerciseId) === Number(exerciseId));
+    if (!tasks.length) return null;
+    const priority = ["running", "queued", "interrupted", "failed", "completed", "canceled"];
+    const status = priority.find((candidate) => tasks.some((task) => task.status === candidate)) || tasks[0].status;
+    const counts = new Map();
+    tasks.forEach((task) => counts.set(task.status, (counts.get(task.status) || 0) + 1));
+    const detail = priority.filter((candidate) => counts.has(candidate)).map((candidate) => `${codexStatusLabel(candidate)} ${counts.get(candidate)}`).join("，");
+    return { status, count: tasks.length, title: `${tasks.length} 个 Codex 会话：${detail}` };
+  }
+
+  function exerciseMatchesFilters(exercise, group) {
+    const query = state.exerciseSearch.trim().toLocaleLowerCase("zh-CN");
+    const haystack = `${exercise.name || ""} ${exercise.id || ""} ${group.name || ""}`.toLocaleLowerCase("zh-CN");
+    if (query && !haystack.includes(query)) return false;
+    if (state.exerciseFilters.unsolved && exercise.hasSolved) return false;
+    if (state.exerciseFilters.attachment && !exercise.hasAttachment) return false;
+    if (state.exerciseFilters.environment && !exercise.hasEnvironment) return false;
+    return true;
+  }
+
+  function resetExerciseFilters() {
+    state.exerciseSearch = "";
+    state.exerciseFilters = { unsolved: false, attachment: false, environment: false };
+    els.exerciseSearch.value = "";
+    renderExercises();
+  }
+
   function renderExercises() {
     const fragment = document.createDocumentFragment();
-    els.exerciseCount.textContent = formatNumber(totalExercises(state.groups));
+    const total = totalExercises(state.groups);
+    const filterActive = activeExerciseFilter();
+    const groups = [...state.groups]
+      .sort((a, b) => (a.order || 0) - (b.order || 0))
+      .map((group) => ({
+        ...group,
+        corpus: [...(group.corpus || [])]
+          .sort((a, b) => (a.order || 0) - (b.order || 0))
+          .filter((exercise) => exerciseMatchesFilters(exercise, group)),
+      }))
+      .filter((group) => group.corpus.length);
+    const shown = groups.reduce((sum, group) => sum + group.corpus.length, 0);
+    els.exerciseCount.textContent = filterActive ? `${formatNumber(shown)}/${formatNumber(total)}` : formatNumber(total);
+    els.resetExerciseFilters.hidden = !filterActive;
+    const filterButtons = [
+      [els.filterUnsolved, "unsolved"],
+      [els.filterAttachment, "attachment"],
+      [els.filterEnvironment, "environment"],
+    ];
+    filterButtons.forEach(([button, key]) => {
+      const selected = Boolean(state.exerciseFilters[key]);
+      button.classList.toggle("is-selected", selected);
+      button.setAttribute("aria-pressed", selected ? "true" : "false");
+    });
     if (!state.groups.length) {
       els.exerciseList.replaceChildren(createElement("div", "empty-state compact", "暂无题目"));
       return;
     }
-    [...state.groups].sort((a, b) => (a.order || 0) - (b.order || 0)).forEach((group) => {
+    if (!shown) {
+      const empty = createElement("div", "empty-state compact exercise-filter-empty");
+      empty.append(
+        icon("search-x"),
+        createElement("p", "", "没有符合当前搜索和筛选条件的题目"),
+      );
+      const reset = createElement("button", "button button-ghost", "重置筛选");
+      reset.type = "button";
+      reset.addEventListener("click", resetExerciseFilters);
+      empty.append(reset);
+      els.exerciseList.replaceChildren(empty);
+      refreshIcons();
+      return;
+    }
+    groups.forEach((group) => {
       const groupKey = String(group.id ?? group.name ?? "uncategorized");
-      const collapsed = state.collapsedGroups.has(groupKey);
+      const collapsed = !filterActive && state.collapsedGroups.has(groupKey);
       const section = createElement("section", `exercise-group${collapsed ? " is-collapsed" : ""}`);
       const heading = createElement("button", "group-heading");
       const body = createElement("div", "exercise-group-body");
@@ -1298,7 +1399,7 @@
       heading.setAttribute("aria-controls", bodyId);
       const headingMain = createElement("span", "group-heading-main");
       headingMain.append(icon("chevron-down"), createElement("span", "", group.name || "未分类"));
-      const headingMeta = createElement("span", "group-heading-meta", String((group.corpus || []).length));
+      const headingMeta = createElement("span", "group-heading-meta", String(group.corpus.length));
       heading.append(headingMain, headingMeta);
       heading.addEventListener("click", () => {
         if (state.collapsedGroups.has(groupKey)) state.collapsedGroups.delete(groupKey);
@@ -1309,7 +1410,7 @@
       body.id = bodyId;
       body.hidden = collapsed;
       section.append(heading, body);
-      [...(group.corpus || [])].sort((a, b) => (a.order || 0) - (b.order || 0)).forEach((exercise) => {
+      group.corpus.forEach((exercise) => {
         const button = createElement("button", `exercise-item${state.selectedExerciseId === exercise.id ? " is-selected" : ""}`);
         button.type = "button";
         button.disabled = exercise.isOpen === false;
@@ -1317,6 +1418,14 @@
         const main = createElement("span", "exercise-item-main");
         const titleRow = createElement("span", "exercise-title-row");
         titleRow.append(createElement("span", "exercise-name", exercise.name || `题目 ${exercise.id}`));
+        const activity = codexExerciseActivity(exercise.id);
+        if (activity) {
+          const marker = createElement("span", `exercise-codex-state ${activity.status}`);
+          marker.title = activity.title;
+          marker.setAttribute("aria-label", activity.title);
+          marker.append(icon(activity.status === "running" ? "loader-circle" : activity.status === "queued" ? "clock-3" : activity.status === "interrupted" ? "circle-pause" : activity.status === "completed" ? "circle-check" : activity.status === "failed" ? "circle-x" : "circle-stop"));
+          titleRow.append(marker);
+        }
         const tags = exerciseTags(exercise);
         if (tags.length) {
           const tagList = createElement("span", "exercise-tags");
@@ -2550,6 +2659,7 @@
       completed: "已完成",
       failed: "失败",
       canceled: "已停止",
+      interrupted: "运行被中断",
     }[status] || "未知状态";
   }
 
@@ -2557,11 +2667,12 @@
     if (status === "completed") return "success";
     if (status === "failed") return "error";
     if (status === "canceled") return "muted";
+    if (status === "interrupted") return "interrupted";
     return "running";
   }
 
   function isCodexTerminal(status) {
-    return status === "completed" || status === "failed" || status === "canceled";
+    return ["completed", "failed", "canceled", "interrupted"].includes(status);
   }
 
   function codexTaskTime(value) {
@@ -2606,7 +2717,7 @@
   }
 
   function codexUsageSummary(usage) {
-    if (!usage) return "";
+    if (!usage) return "输入 0 · 缓存 0 · 输出 0";
     return [
       `输入 ${formatNumber(usage.inputTokens || 0)}`,
       `缓存 ${formatNumber(usage.cachedInputTokens || 0)}`,
@@ -2614,51 +2725,291 @@
     ].join(" · ");
   }
 
+  function codexModeLabel(mode) {
+    if (mode === "pure") return "纯解题";
+    if (mode === "side") return "Side 对话";
+    return "主对话";
+  }
+
+  function codexSummary(value, maximum = 150) {
+    const normalized = String(value || "").replace(/\s+/g, " ").trim();
+    if (!normalized) return "无详细内容";
+    return normalized.length > maximum ? `${normalized.slice(0, maximum)}…` : normalized;
+  }
+
+  function codexCommandSummary(event) {
+    const command = String(event.command || event.summary || "").trim();
+    const firstLine = command.split(/\r?\n/, 1)[0] || "命令";
+    return codexSummary(firstLine, 180);
+  }
+
   function codexEventPresentation(event) {
     const kind = event?.kind || "event";
     const presentations = {
       "thread.started": ["会话", "session", "Codex 会话已建立"],
-      "turn.started": ["开始", "progress", "开始处理新一轮请求"],
+      "turn.started": ["Codex 开始", "progress", "开始处理请求"],
+      "round.started": ["轮次开始", "progress", "开始处理本轮输入"],
+      "round.completed": ["轮次完成", "success", "本轮处理完成"],
+      "round.failed": ["轮次失败", "error", "本轮处理失败"],
+      "round.canceled": ["轮次停止", "muted", "本轮已停止"],
+      "round.interrupted": ["轮次切换", "interrupted", "本轮提前结束"],
+      "task.interrupted": ["任务中断", "interrupted", "程序退出导致运行中断"],
+      "task.resumed": ["恢复执行", "progress", "使用原会话恢复执行"],
+      "task.finished": ["标记结束", "muted", "中断任务已标记结束"],
+      "user.message": ["用户输入", "user", ""],
+      "user.followup_queued": ["用户追加消息", "user", ""],
+      "user.followup_updated": ["待处理消息已编辑", "user", ""],
+      "user.followup_canceled": ["待处理消息已取消", "muted", ""],
       reasoning: ["思考", "reasoning", ""],
-      agent_message: ["Codex", "message", ""],
+      agent_message: ["Codex 回复", "message", ""],
       command_execution: ["执行命令", "command", ""],
-      "turn.completed": ["完成", "success", "本轮处理完成"],
+      "process.started": ["进程", "progress", "Codex 子进程已启动"],
+      "process.completed": ["进程", "success", "Codex 子进程已结束"],
+      "turn.completed": ["Token 统计", "success", "本轮 Codex 处理完成"],
       stderr: ["错误输出", "error", ""],
       error: ["错误", "error", ""],
       stream_error: ["日志读取错误", "error", ""],
       stdout: ["输出", "output", ""],
     };
     const [label, tone, fallback] = presentations[kind] || [kind, "output", ""];
-    const usageSummary = kind === "turn.completed" ? codexUsageSummary(event.usage) : "";
-    return {
-      label,
-      tone,
-      summary: usageSummary || fallback || String(event?.summary || "").trim() || "无详细内容",
-    };
+    const summary = kind === "command_execution"
+      ? codexCommandSummary(event)
+      : kind === "turn.completed" && event.usage
+        ? codexUsageSummary(event.usage)
+        : codexSummary(event?.summary || fallback, 220);
+    return { label, tone, summary };
   }
 
-  function renderCodexEvents(events) {
-    const rows = Array.isArray(events) ? events : [];
+  function mergeCodexEventLists(current, incoming) {
+    const byKey = new Map();
+    [...(current || []), ...(incoming || [])].forEach((event, index) => {
+      const sequence = Number(event?.sequence || 0);
+      const key = sequence > 0
+        ? `sequence:${sequence}`
+        : `legacy:${event?.at || ""}:${event?.kind || ""}:${event?.itemId || ""}:${index}`;
+      byKey.set(key, event);
+    });
+    return [...byKey.values()].sort((a, b) => {
+      const left = Number(a.sequence || 0);
+      const right = Number(b.sequence || 0);
+      if (left && right) return left - right;
+      return new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime();
+    });
+  }
+
+  function normalizeCodexEvents(events) {
+    const normalized = [];
+    const commands = new Map();
+    (Array.isArray(events) ? events : []).forEach((source) => {
+      const event = { ...source, repeatCount: Number(source.repeatCount || 1), sourceSequences: [source.sequence || 0] };
+      if (event.kind === "command_execution") {
+        const commandText = String(event.command || event.summary || "").trim();
+        let key = event.itemId ? `item:${event.itemId}` : "";
+        if (!key) {
+          const previous = normalized.at(-1);
+          if (previous?.kind === "command_execution" && previous.roundNumber === event.roundNumber && String(previous.command || previous.summary || "").trim() === commandText) {
+            key = previous._commandKey;
+          } else {
+            key = `legacy:${event.roundNumber || 0}:${event.sequence || event.at || normalized.length}:${commandText}`;
+          }
+        }
+        const existing = commands.get(key);
+        if (existing) {
+          const sameEvent = existing.status === event.status
+            && String(existing.command || existing.summary || "") === String(event.command || event.summary || "")
+            && String(existing.output || "") === String(event.output || "")
+            && existing.exitCode === event.exitCode;
+          const lifecycleUpdate = ["in_progress", "running", "started"].includes(existing.status)
+            && ["completed", "failed", "canceled"].includes(event.status);
+          existing.status = event.status || existing.status;
+          existing.output = event.output || existing.output;
+          existing.exitCode = event.exitCode ?? existing.exitCode;
+          existing.startedAt = existing.startedAt || event.startedAt || existing.at;
+          existing.finishedAt = event.finishedAt || existing.finishedAt;
+          existing.durationSeconds = event.durationSeconds ?? existing.durationSeconds;
+          existing.sessionId = event.sessionId || existing.sessionId;
+          existing.sourceSequences.push(event.sequence || 0);
+          if (sameEvent && !lifecycleUpdate) {
+            existing.repeatCount = Number(existing.repeatCount || 1) + Number(event.repeatCount || 1);
+          } else {
+            existing.repeatCount = Math.max(existing.repeatCount || 1, event.repeatCount || 1);
+          }
+          return;
+        }
+        event._commandKey = key;
+        event.startedAt = event.startedAt || ((event.status === "in_progress" || event.status === "running") ? event.at : null);
+        commands.set(key, event);
+        normalized.push(event);
+        return;
+      }
+      const previous = normalized.at(-1);
+      const same = previous
+        && previous.kind !== "command_execution"
+        && previous.roundNumber === event.roundNumber
+        && previous.kind === event.kind
+        && previous.status === event.status
+        && String(previous.summary || "") === String(event.summary || "")
+        && String(previous.output || "") === String(event.output || "");
+      if (same) {
+        previous.repeatCount = Number(previous.repeatCount || 1) + Number(event.repeatCount || 1);
+        previous.sourceSequences.push(event.sequence || 0);
+        previous.finishedAt = event.finishedAt || previous.finishedAt;
+        return;
+      }
+      normalized.push(event);
+    });
+    return normalized;
+  }
+
+  function codexEventStateKey(taskId, event, index) {
+    const sequence = event.sourceSequences?.[0] || event.sequence || event.itemId || index;
+    return `${taskId}:${sequence}`;
+  }
+
+  function codexEventDefaultExpanded(event) {
+    if (["agent_message", "stderr", "error", "stream_error", "round.failed"].includes(event.kind)) return true;
+    if (event.kind === "stdout" && String(event.summary || "").length < 360) return true;
+    return false;
+  }
+
+  function codexEventExpanded(key, event) {
+    if (state.codexExpandedEvents.has(key)) return true;
+    if (state.codexCollapsedEvents.has(key)) return false;
+    return codexEventDefaultExpanded(event);
+  }
+
+  function setCodexEventExpanded(key, expanded) {
+    if (expanded) {
+      state.codexExpandedEvents.add(key);
+      state.codexCollapsedEvents.delete(key);
+    } else {
+      state.codexCollapsedEvents.add(key);
+      state.codexExpandedEvents.delete(key);
+    }
+  }
+
+  function commandStatusText(event) {
+    const running = ["in_progress", "running", "started"].includes(event.status) && !event.finishedAt;
+    if (running) return `正在执行 · ${codexTaskDuration(event.startedAt || event.at)}`;
+    const duration = event.durationSeconds !== undefined && event.durationSeconds !== null
+      ? formatDuration(Math.max(0, Number(event.durationSeconds)))
+      : event.startedAt ? codexTaskDuration(event.startedAt, event.finishedAt || event.at) : "耗时未知";
+    const successful = event.status === "completed" && (event.exitCode === undefined || Number(event.exitCode) === 0);
+    const result = successful ? "成功" : event.status === "failed" || Number(event.exitCode) !== 0 ? "失败" : codexStatusLabel(event.status);
+    const exit = event.exitCode === undefined || event.exitCode === null ? "" : ` · 退出码 ${event.exitCode}`;
+    return `${result}${exit} · ${duration}`;
+  }
+
+  function renderCodexEventCard(taskId, event, index) {
+    const presentation = codexEventPresentation(event);
+    const key = codexEventStateKey(taskId, event, index);
+    const expanded = codexEventExpanded(key, event);
+    const card = createElement("article", `codex-event ${presentation.tone}${expanded ? " is-expanded" : " is-collapsed"}`);
+    const toggle = createElement("button", "codex-event-toggle");
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    const header = createElement("span", "codex-event-header");
+    const time = createElement("time", "codex-event-time", codexTaskLogTime(event.at));
+    time.dateTime = event.at || "";
+    time.title = codexTaskFullTime(event.at);
+    const badges = createElement("span", "codex-event-badges");
+    if (Number(event.repeatCount || 1) > 1) badges.append(createElement("span", "codex-repeat-badge", `×${event.repeatCount}`));
+    if (event.kind === "reasoning") badges.append(createElement("span", "codex-character-count", `${String(event.summary || "").length} 字`));
+    if (event.kind === "command_execution") badges.append(createElement("span", `codex-command-state ${event.status || "running"}`, commandStatusText(event)));
+    header.append(createElement("span", "codex-event-label", presentation.label), badges, time, icon(expanded ? "chevron-up" : "chevron-down"));
+    toggle.append(header, createElement("span", "codex-event-summary", presentation.summary));
+    toggle.addEventListener("click", () => {
+      setCodexEventExpanded(key, !expanded);
+      const selected = state.codexTasks.find((task) => task.id === taskId);
+      renderCodexTaskDetail(selected || null);
+    });
+    card.append(toggle);
+    const full = createElement("div", "codex-event-full");
+    full.hidden = !expanded;
+    if (event.kind === "command_execution") {
+      const command = createElement("pre", "codex-command-full", String(event.command || event.summary || ""));
+      full.append(createElement("p", "codex-event-section-label", "完整命令"), command);
+      if (event.output) full.append(createElement("p", "codex-event-section-label", "命令输出"), createElement("pre", "codex-command-output", event.output));
+    } else {
+      full.append(createElement("pre", "codex-event-content", String(event.summary || presentation.summary || "")));
+      if (event.output && event.output !== event.summary) full.append(createElement("pre", "codex-command-output", event.output));
+    }
+    card.append(full);
+    return card;
+  }
+
+  function codexRoundData(events, task) {
+    const groups = new Map();
+    events.forEach((event) => {
+      const number = Number(event.roundNumber || 0);
+      if (!groups.has(number)) groups.set(number, []);
+      groups.get(number).push(event);
+    });
+    return [...groups.entries()].sort((a, b) => a[0] - b[0]).map(([number, rows]) => {
+      const user = rows.find((event) => event.kind === "user.message") || rows.find((event) => event.kind === "user.followup_queued");
+      const startEvent = rows.find((event) => event.kind === "round.started") || rows[0];
+      const endEvent = [...rows].reverse().find((event) => ["round.completed", "round.failed", "round.canceled", "round.interrupted"].includes(event.kind));
+      const usage = rows.reduce((total, event) => {
+        if (!event.usage) return total;
+        return {
+          inputTokens: total.inputTokens + Number(event.usage.inputTokens || 0),
+          cachedInputTokens: total.cachedInputTokens + Number(event.usage.cachedInputTokens || 0),
+          outputTokens: total.outputTokens + Number(event.usage.outputTokens || 0),
+        };
+      }, { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 });
+      const status = endEvent?.status || (number === Number(task.currentRound || 0) && task.status === "running" ? "running" : task.status);
+      return {
+        number,
+        rows,
+        input: user?.summary || (number ? "本轮输入未记录" : "会话与任务事件"),
+        startedAt: startEvent?.at,
+        finishedAt: endEvent?.at,
+        usage,
+        status,
+      };
+    });
+  }
+
+  function renderCodexEvents(task) {
+    const rows = normalizeCodexEvents(task?.events || []);
     if (!rows.length) {
       els.codexTaskEvents.replaceChildren(createElement("div", "codex-event-empty", "暂无运行日志"));
       return;
     }
     const fragment = document.createDocumentFragment();
-    rows.forEach((event) => {
-      const presentation = codexEventPresentation(event);
-      const card = createElement("article", `codex-event ${presentation.tone}`);
-      const header = createElement("header", "codex-event-header");
-      const time = createElement("time", "codex-event-time", codexTaskLogTime(event.at));
-      time.dateTime = event.at || "";
-      time.title = codexTaskFullTime(event.at);
-      header.append(
-        createElement("span", "codex-event-label", presentation.label),
-        time,
+    const rounds = codexRoundData(rows, task);
+    rounds.forEach((round) => {
+      const roundKey = `${task.id}:${round.number}`;
+      const collapsed = state.codexCollapsedRounds.has(roundKey);
+      const section = createElement("section", `codex-round${collapsed ? " is-collapsed" : ""}`);
+      section.dataset.round = String(round.number);
+      const heading = createElement("button", "codex-round-heading");
+      heading.type = "button";
+      heading.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      const main = createElement("span", "codex-round-main");
+      main.append(
+        icon(collapsed ? "chevron-right" : "chevron-down"),
+        createElement("strong", "", round.number ? `第 ${round.number} 轮` : "会话事件"),
+        createElement("span", `codex-round-status ${codexStatusClass(round.status)}`, codexStatusLabel(round.status)),
       );
-      const bodyTag = event.kind === "command_execution" ? "code" : "div";
-      const body = createElement(bodyTag, "codex-event-body", presentation.summary);
-      card.append(header, body);
-      fragment.append(card);
+      const metrics = createElement("span", "codex-round-metrics");
+      metrics.append(
+        createElement("span", "", codexSummary(round.input, 72)),
+        createElement("span", "", `${codexTaskLogTime(round.startedAt)} → ${round.finishedAt ? codexTaskLogTime(round.finishedAt) : "进行中"}`),
+        createElement("span", "", round.startedAt ? codexTaskDuration(round.startedAt, round.finishedAt) : "耗时未知"),
+        createElement("span", "", codexUsageSummary(round.usage)),
+      );
+      heading.append(main, metrics);
+      heading.addEventListener("click", () => {
+        if (collapsed) state.codexCollapsedRounds.delete(roundKey);
+        else state.codexCollapsedRounds.add(roundKey);
+        renderCodexTaskDetail(task);
+      });
+      const body = createElement("div", "codex-round-events");
+      body.hidden = collapsed;
+      round.rows.forEach((event, index) => body.append(renderCodexEventCard(task.id, event, index)));
+      section.append(heading, body);
+      fragment.append(section);
     });
     els.codexTaskEvents.replaceChildren(fragment);
   }
@@ -2669,10 +3020,7 @@
     const list = createElement("dl", "codex-task-details-list");
     rows.forEach(([label, value, monospace = false]) => {
       const row = createElement("div", "codex-task-details-row");
-      row.append(
-        createElement("dt", "", label),
-        createElement("dd", monospace ? "is-monospace" : "", String(value || "--")),
-      );
+      row.append(createElement("dt", "", label), createElement("dd", monospace ? "is-monospace" : "", String(value || "--")));
       list.append(row);
     });
     section.append(list);
@@ -2685,29 +3033,33 @@
       return;
     }
     const content = document.createDocumentFragment();
-    appendCodexDetailSection(content, "任务", [
+    appendCodexDetailSection(content, "任务与会话", [
       ["题目", `#${task.exerciseId} · ${codexTaskExerciseName(task)}`],
+      ["对话标题", codexTaskTitle(task)],
       ["运行模式", codexModeLabel(task.mode)],
       ["当前状态", codexStatusLabel(task.status)],
       ["任务 ID", task.id, true],
-      ["会话 ID", task.sessionId || "尚未建立", true],
+      ["Session ID", task.sessionId || "尚未建立", true],
       ["父任务 ID", task.parentTaskId || "无", true],
-      ["恢复命令", task.sessionId ? `codex resume ${task.sessionId}` : "尚不可恢复", true],
+      ["Side 来源", task.sourceMessage || "非 Side 对话"],
     ]);
-    const events = Array.isArray(task.events) ? task.events : [];
-    appendCodexDetailSection(content, "时间", [
+    appendCodexDetailSection(content, "完整时间线", [
       ["创建时间", codexTaskFullTime(task.createdAt)],
       ["开始时间", codexTaskFullTime(task.startedAt)],
       ["结束时间", codexTaskFullTime(task.finishedAt)],
-      ["首条日志", codexTaskFullTime(events[0]?.at)],
-      ["最近日志", codexTaskFullTime(events.at(-1)?.at)],
+      ["首条日志", codexTaskFullTime(task.firstEventAt)],
+      ["最近日志", codexTaskFullTime(task.lastEventAt)],
       ["排队耗时", task.startedAt ? codexTaskDuration(task.createdAt, task.startedAt) : codexTaskDuration(task.createdAt)],
       ["运行耗时", codexTaskDuration(task.startedAt, task.finishedAt)],
       ["总耗时", codexTaskDuration(task.createdAt, task.finishedAt)],
+      ["程序退出时间", codexTaskFullTime(task.interruptedAt)],
+      ["中断次数", formatNumber(task.interruptionCount || 0)],
+      ["最近恢复时间", codexTaskFullTime(task.lastResumedAt)],
     ]);
     const usage = task.usage;
-    appendCodexDetailSection(content, "Token 用量", usage ? [
+    appendCodexDetailSection(content, "Token 与日志", usage ? [
       ["完成轮次", formatNumber(task.completedTurns || 0)],
+      ["已开始轮次", formatNumber(task.roundsStarted || 0)],
       ["输入 Token", formatNumber(usage.inputTokens || 0)],
       ["缓存输入", formatNumber(usage.cachedInputTokens || 0)],
       ["非缓存输入", formatNumber(usage.uncachedInputTokens || 0)],
@@ -2715,17 +3067,33 @@
       ["输出 Token", formatNumber(usage.outputTokens || 0)],
       ["推理输出", formatNumber(usage.reasoningOutputTokens || 0)],
       ["合计 Token", formatNumber(usage.totalTokens || 0)],
-    ] : [["统计状态", "尚未收到本轮完成事件中的 Token 数据"]]);
+      ["完整日志数量", formatNumber(task.logCount || 0)],
+    ] : [["完整日志数量", formatNumber(task.logCount || 0)], ["Token 状态", "尚未收到统计"]]);
     appendCodexDetailSection(content, "文件", [
       ["题目目录", task.challengePath || "未记录", true],
       ["Writeup", task.writeupPath || "未生成", true],
+      ["Codex PID", task.processId ? `${task.processId}${task.processAlive ? "（仍存在）" : "（已退出）"}` : "无"],
     ]);
+    const actions = createElement("div", "codex-details-actions");
+    [
+      ["复制完整日志", () => copyCodexLog()],
+      ["下载纯文本", () => downloadCodexArtifact("logs.txt")],
+      ["导出 JSON", () => downloadCodexArtifact("logs.json")],
+      ["打开原始日志", () => openCodexRawLog()],
+    ].forEach(([label, action]) => {
+      const button = createElement("button", "button button-ghost", label);
+      button.type = "button";
+      button.addEventListener("click", action);
+      actions.append(button);
+    });
+    content.append(actions);
     els.codexTaskDetailsContent.replaceChildren(content);
   }
 
   function showCodexTaskDetails() {
-    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId) || null;
     if (!task) return;
+    closeCodexMoreMenu();
     renderCodexTaskDetails(task);
     els.codexTaskDetailsDialog.showModal();
   }
@@ -2733,6 +3101,12 @@
   function codexTaskExerciseName(task) {
     const exercise = state.groups.flatMap((group) => group.corpus || []).find((item) => item.id === task.exerciseId);
     return exercise ? exercise.name || `题目 ${task.exerciseId}` : `题目 ${task.exerciseId}`;
+  }
+
+  function codexTaskTitle(task) {
+    if (task.title) return task.title;
+    if (task.mode === "side") return codexSummary(task.sourceMessage || "Side 对话", 58);
+    return `${codexModeLabel(task.mode)} · ${codexTaskTime(task.createdAt)}`;
   }
 
   function codexEventsNearBottom() {
@@ -2744,10 +3118,26 @@
     if (state.codexEventsFollowTail) els.codexTaskEvents.scrollTop = els.codexTaskEvents.scrollHeight;
   }
 
-  function codexModeLabel(mode) {
-    if (mode === "pure") return "纯解题";
-    if (mode === "side") return "Side 对话";
-    return "完整模式";
+  function createCodexTreeItem(task, depth = 0) {
+    const row = createElement("div", `codex-tree-row depth-${depth}${task.id === state.codexSelectedTaskId ? " is-selected" : ""}${task.status === "running" ? " is-current-branch" : ""}`);
+    const button = createElement("button", "codex-tree-item");
+    button.type = "button";
+    button.setAttribute("aria-current", task.id === state.codexSelectedTaskId ? "true" : "false");
+    const iconWrap = createElement("span", `codex-tree-icon ${codexStatusClass(task.status)}`);
+    iconWrap.append(icon(task.mode === "side" ? "git-branch" : "messages-square"));
+    const copy = createElement("span", "codex-tree-copy");
+    copy.append(createElement("span", "codex-task-item-title", codexTaskTitle(task)));
+    copy.append(createElement("span", "codex-task-item-meta", `${codexModeLabel(task.mode)} · ${codexStatusLabel(task.status)}${task.mode === "side" && task.sourceMessage ? ` · 来源：${codexSummary(task.sourceMessage, 36)}` : ""}`));
+    const status = createElement("span", `codex-tree-status ${codexStatusClass(task.status)}`, task.status === "queued" ? `#${task.queuePosition || "—"}` : task.status === "running" ? "运行" : codexStatusLabel(task.status));
+    button.append(iconWrap, copy, status);
+    button.addEventListener("click", () => {
+      state.codexSelectedTaskId = task.id;
+      state.codexEventsFollowTail = true;
+      renderCodexTaskList();
+      void loadCodexTask(task.id);
+    });
+    row.append(button);
+    return row;
   }
 
   function renderCodexTaskList() {
@@ -2756,24 +3146,99 @@
       return;
     }
     const fragment = document.createDocumentFragment();
+    const byExercise = new Map();
     state.codexTasks.forEach((task) => {
-      const button = createElement("button", `codex-task-item${task.id === state.codexSelectedTaskId ? " is-selected" : ""}`);
-      button.type = "button";
-      button.setAttribute("aria-current", task.id === state.codexSelectedTaskId ? "true" : "false");
-      const title = createElement("span", "codex-task-item-title", codexTaskExerciseName(task));
-      const meta = createElement("span", "codex-task-item-meta", `#${task.exerciseId} · ${codexModeLabel(task.mode)} · ${codexStatusLabel(task.status)}`);
-      const status = createElement("span", `codex-task-item-status ${codexStatusClass(task.status)}`, task.status === "queued" ? `第 ${task.queuePosition || "—"} 位` : codexStatusLabel(task.status));
-      if (task.mode === "side") title.append(createElement("span", "codex-task-side-badge", "Side"));
-      button.append(title, meta, status);
-      button.addEventListener("click", () => {
-        state.codexSelectedTaskId = task.id;
+      const key = Number(task.exerciseId || 0);
+      if (!byExercise.has(key)) byExercise.set(key, []);
+      byExercise.get(key).push(task);
+    });
+    [...byExercise.entries()].forEach(([exerciseId, tasks]) => {
+      const groupKey = `exercise:${exerciseId}`;
+      const collapsed = state.codexCollapsedTaskGroups.has(groupKey);
+      const group = createElement("section", `codex-tree-group${collapsed ? " is-collapsed" : ""}`);
+      const heading = createElement("button", "codex-tree-group-heading");
+      heading.type = "button";
+      const active = tasks.filter((task) => ["running", "queued"].includes(task.status)).length;
+      heading.append(icon(collapsed ? "chevron-right" : "chevron-down"), createElement("strong", "", `#${exerciseId} ${codexTaskExerciseName(tasks[0])}`), createElement("span", "", `${tasks.length} 个会话${active ? ` · ${active} 活跃` : ""}`));
+      heading.addEventListener("click", () => {
+        if (collapsed) state.codexCollapsedTaskGroups.delete(groupKey);
+        else state.codexCollapsedTaskGroups.add(groupKey);
         renderCodexTaskList();
-        void loadCodexTask(task.id);
       });
-      fragment.append(button);
+      group.append(heading);
+      const body = createElement("div", "codex-tree-group-body");
+      body.hidden = collapsed;
+      const children = new Map();
+      tasks.forEach((task) => {
+        if (!task.parentTaskId) return;
+        if (!children.has(task.parentTaskId)) children.set(task.parentTaskId, []);
+        children.get(task.parentTaskId).push(task);
+      });
+      const roots = tasks.filter((task) => !task.parentTaskId || !tasks.some((candidate) => candidate.id === task.parentTaskId));
+      roots.forEach((root) => {
+        const sessionKey = `session:${root.id}`;
+        const sessionCollapsed = state.codexCollapsedSessions.has(sessionKey);
+        const session = createElement("div", `codex-tree-session${sessionCollapsed ? " is-collapsed" : ""}`);
+        const rootRow = createCodexTreeItem(root, 0);
+        const sides = children.get(root.id) || [];
+        if (sides.length) {
+          const toggle = createElement("button", "codex-tree-session-toggle");
+          toggle.type = "button";
+          toggle.title = sessionCollapsed ? "展开 Side 对话" : "折叠 Side 对话";
+          toggle.append(icon(sessionCollapsed ? "chevron-right" : "chevron-down"));
+          toggle.addEventListener("click", () => {
+            if (sessionCollapsed) state.codexCollapsedSessions.delete(sessionKey);
+            else state.codexCollapsedSessions.add(sessionKey);
+            renderCodexTaskList();
+          });
+          rootRow.prepend(toggle);
+        }
+        session.append(rootRow);
+        const sideBody = createElement("div", "codex-tree-children");
+        sideBody.hidden = sessionCollapsed;
+        sides.forEach((side) => sideBody.append(createCodexTreeItem(side, 1)));
+        session.append(sideBody);
+        body.append(session);
+      });
+      group.append(body);
+      fragment.append(group);
     });
     els.codexTaskList.replaceChildren(fragment);
     refreshIcons();
+  }
+
+  function closeCodexMoreMenu() {
+    els.codexMoreMenu.open = false;
+  }
+
+  function renderCodexPendingMessage(task) {
+    const pending = task?.pendingMessage;
+    if (!pending || !pending.message) {
+      els.codexPendingMessage.hidden = true;
+      els.codexPendingMessage.replaceChildren();
+      return;
+    }
+    const statusText = {
+      ending_previous: "正在结束上一轮，随后将处理这条消息",
+      waiting: "上一轮已结束，正在等待处理",
+      processing: "已经开始处理这条消息",
+    }[pending.status] || "等待处理";
+    const heading = createElement("div", "codex-pending-heading");
+    heading.append(icon(pending.status === "processing" ? "loader-circle" : "clock-3"), createElement("strong", "", "待处理消息"), createElement("span", `codex-pending-status ${pending.status || "waiting"}`, statusText));
+    const message = createElement("pre", "codex-pending-content", pending.message);
+    const actions = createElement("div", "codex-pending-actions");
+    const editable = pending.status !== "processing";
+    const edit = createElement("button", "button button-ghost button-compact", "编辑");
+    edit.type = "button";
+    edit.disabled = !editable;
+    edit.addEventListener("click", () => void editPendingCodexMessage(task));
+    const cancel = createElement("button", "button button-ghost button-compact", "取消消息");
+    cancel.type = "button";
+    cancel.disabled = !editable;
+    cancel.addEventListener("click", () => void cancelPendingCodexMessage(task));
+    actions.append(edit, cancel);
+    els.codexPendingMessage.replaceChildren(heading, message, actions);
+    els.codexPendingMessage.hidden = false;
   }
 
   function renderCodexTaskDetail(task) {
@@ -2781,43 +3246,53 @@
       els.codexTaskStatus.textContent = "选择一个任务";
       els.codexTaskMeta.textContent = "--";
       els.codexTaskResume.hidden = true;
-      els.codexTaskResume.textContent = "--";
       els.codexTaskEvents.replaceChildren(createElement("div", "codex-event-empty", "尚未选择任务"));
-      state.codexEventsFollowTail = true;
       els.codexTaskOutput.textContent = "尚未完成";
-      els.cancelCodexTask.disabled = true;
-      els.continueCodexTask.disabled = true;
-      els.deleteCodexTask.disabled = true;
-      els.openCodexTerminal.disabled = true;
-      els.openCodexFolder.disabled = true;
-      els.showCodexTaskDetails.disabled = true;
-      els.codexTaskMessage.value = "";
+      els.codexPrimaryAction.disabled = true;
+      els.codexTaskCompose.disabled = true;
       els.codexTaskFollowUp.disabled = true;
       els.codexTaskSide.disabled = true;
+      els.codexLoadEarlier.disabled = true;
+      renderCodexPendingMessage(null);
       return;
     }
     els.codexTaskStatus.className = `codex-task-status ${codexStatusClass(task.status)}`;
-    els.codexTaskStatus.textContent = `${codexModeLabel(task.mode)} · ${codexStatusLabel(task.status)} · ${codexTaskExerciseName(task)}`;
-    els.codexTaskMeta.textContent = `任务 ${task.id} · 创建 ${codexTaskTime(task.createdAt)}`;
+    els.codexTaskStatus.textContent = `${codexTaskTitle(task)} · ${codexStatusLabel(task.status)}`;
+    els.codexTaskMeta.textContent = `#${task.exerciseId} ${codexTaskExerciseName(task)} · 创建 ${codexTaskTime(task.createdAt)} · ${formatNumber(task.logCount || 0)} 条日志`;
     els.codexTaskResume.hidden = !task.sessionId;
-    els.codexTaskResume.textContent = task.sessionId ? `恢复会话：codex resume ${task.sessionId}` : "--";
+    els.codexTaskResume.textContent = task.sessionId ? `Session ${task.sessionId}` : "--";
     const shouldFollow = state.codexEventsFollowTail || codexEventsNearBottom();
-    renderCodexEvents(task.events);
+    renderCodexEvents(task);
     state.codexEventsFollowTail = shouldFollow;
     requestAnimationFrame(scrollCodexEventsToBottom);
-    els.codexTaskOutput.textContent = task.output || (task.error ? `任务失败：${task.error}` : "尚未完成");
-    const terminal = isCodexTerminal(task.status);
-    els.cancelCodexTask.disabled = terminal;
-    els.continueCodexTask.disabled = !terminal || !task.sessionId;
-    els.deleteCodexTask.disabled = !terminal;
-    els.openCodexTerminal.disabled = !terminal || !task.sessionId;
-    els.openCodexFolder.disabled = false;
-    els.showCodexTaskDetails.disabled = false;
-    const canFollowUp = Boolean(task.sessionId) && task.status !== "queued";
-    const canSide = canFollowUp && task.mode !== "side";
+    els.codexTaskOutput.textContent = task.output || (task.error ? `任务状态：${task.error}` : "尚未完成");
+    renderCodexPendingMessage(task);
+    const pending = Boolean(task.pendingMessage?.message);
+    const hasSession = Boolean(task.sessionId);
+    const primaryLabel = task.status === "running" || task.status === "queued" ? "停止" : task.status === "interrupted" ? "恢复执行" : "继续";
+    els.codexPrimaryAction.querySelector("span").textContent = primaryLabel;
+    els.codexPrimaryAction.className = `button ${task.status === "running" || task.status === "queued" ? "button-danger" : "button-primary"}`;
+    els.codexPrimaryAction.disabled = task.status === "interrupted" ? !hasSession || task.processAlive : (!isCodexTerminal(task.status) ? false : !hasSession);
+    els.codexTaskCompose.disabled = !hasSession || task.status === "queued" || pending;
+    const canFollowUp = hasSession && task.status !== "queued" && !pending;
+    const canSide = canFollowUp && task.mode !== "side" && task.status !== "interrupted";
     els.codexTaskFollowUp.disabled = !canFollowUp;
     els.codexTaskSide.disabled = !canSide;
-    els.codexTaskSide.title = task.mode === "side" ? "Side 对话不能继续创建 Side 对话" : "";
+    els.codexTaskSide.title = task.mode === "side" ? "Side 对话可以再次输入，但不能继续创建 Side 对话" : "从当前会话创建独立分析分支";
+    els.codexTaskMessage.disabled = pending;
+    els.codexLoadEarlier.disabled = !state.codexHasMoreEvents.get(task.id);
+    els.codexLoadEarlier.textContent = state.codexHasMoreEvents.get(task.id) ? "加载更早记录" : "已加载最早记录";
+    els.codexReturnParent.disabled = !task.parentTaskId;
+    els.openCodexTerminal.disabled = !hasSession || task.status === "running" || task.status === "queued";
+    els.openCodexFolder.disabled = false;
+    els.showCodexTaskDetails.disabled = false;
+    els.renameCodexTask.disabled = false;
+    els.copyCodexLog.disabled = false;
+    els.downloadCodexLog.disabled = false;
+    els.exportCodexJson.disabled = false;
+    els.openCodexLogFile.disabled = false;
+    els.finishCodexTask.hidden = task.status !== "interrupted";
+    els.deleteCodexTask.disabled = !isCodexTerminal(task.status);
   }
 
   function renderCodexTaskState() {
@@ -2833,12 +3308,11 @@
   async function openCodexTerminal() {
     const id = state.codexSelectedTaskId;
     if (!id) return;
+    closeCodexMoreMenu();
     await withButton(els.openCodexTerminal, async () => {
       try {
-        const result = await request(`/api/codex/tasks/${encodeURIComponent(id)}/terminal`, {
-          method: "POST",
-        });
-        showToast(`已打开系统终端，可继续 Codex 对话（${result.scriptPath || "本地恢复脚本"}）`, "success");
+        await request(`/api/codex/tasks/${encodeURIComponent(id)}/terminal`, { method: "POST" });
+        showToast("已在系统终端打开 Codex 对话", "success");
       } catch (error) {
         showToast(`打开 Codex 对话失败：${error.message}`, "error");
       }
@@ -2848,11 +3322,10 @@
   async function openCodexFolder() {
     const id = state.codexSelectedTaskId;
     if (!id) return;
+    closeCodexMoreMenu();
     await withButton(els.openCodexFolder, async () => {
       try {
-        await request(`/api/codex/tasks/${encodeURIComponent(id)}/folder`, {
-          method: "POST",
-        });
+        await request(`/api/codex/tasks/${encodeURIComponent(id)}/folder`, { method: "POST" });
         showToast("已打开题目目录", "success");
       } catch (error) {
         showToast(`打开题目目录失败：${error.message}`, "error");
@@ -2861,7 +3334,7 @@
   }
 
   function stopCodexPollingIfIdle() {
-    const active = state.codexTasks.some((task) => !isCodexTerminal(task.status));
+    const active = state.codexTasks.some((task) => ["running", "queued"].includes(task.status));
     if (!active && !els.codexTaskDialog.open && state.codexPollTimer) {
       window.clearInterval(state.codexPollTimer);
       state.codexPollTimer = null;
@@ -2872,17 +3345,22 @@
     if (!state.codexPollTimer) state.codexPollTimer = window.setInterval(() => loadCodexTasks(), 1000);
   }
 
-  async function loadCodexTask(id) {
+  async function loadCodexTask(id, options = {}) {
     try {
       const task = await request(`/api/codex/tasks/${encodeURIComponent(id)}`);
+      const mergedEvents = mergeCodexEventLists(state.codexLoadedEvents.get(id) || [], task.events || []);
+      state.codexLoadedEvents.set(id, mergedEvents);
+      task.events = mergedEvents;
+      const firstSequence = Number(mergedEvents[0]?.sequence || 0);
+      state.codexHasMoreEvents.set(id, Boolean(task.logCount > mergedEvents.length && (firstSequence > 1 || !firstSequence)));
       const index = state.codexTasks.findIndex((item) => item.id === id);
       if (index >= 0) state.codexTasks[index] = task;
       else state.codexTasks.unshift(task);
-      state.codexSelectedTaskId = id;
-      renderCodexTaskState();
+      if (options.select !== false) state.codexSelectedTaskId = id;
+      if (options.render !== false) renderCodexTaskState();
       return task;
     } catch (error) {
-      if (error.code !== "CODEX_TASK_NOT_FOUND") showToast(`Codex 任务读取失败：${error.message}`, "error");
+      if (!options.silent && error.code !== "CODEX_TASK_NOT_FOUND") showToast(`Codex 任务读取失败：${error.message}`, "error");
       return null;
     }
   }
@@ -2890,14 +3368,25 @@
   async function loadCodexTasks(options = {}) {
     try {
       const previous = new Map(state.codexTasks.map((task) => [task.id, task.status]));
+      const previousDetails = new Map(state.codexTasks.map((task) => [task.id, task]));
       const result = await request("/api/codex/tasks");
       state.codexAvailable = result.available === undefined ? true : Boolean(result.available);
-      state.codexTasks = Array.isArray(result.tasks) ? result.tasks : [];
-      els.codexActiveCount.textContent = result.available === false
-        ? "未配置"
-        : `${Number(result.active || 0)}/${Number(result.limit || 0)}`;
+      state.codexTasks = (Array.isArray(result.tasks) ? result.tasks : []).map((task) => ({
+        ...task,
+        events: state.codexLoadedEvents.get(task.id) || previousDetails.get(task.id)?.events || [],
+      }));
+      els.codexActiveCount.textContent = result.available === false ? "未配置" : `${Number(result.active || 0)}/${Number(result.limit || 0)}`;
       if (state.codexSelectedTaskId === null && state.codexTasks.length) state.codexSelectedTaskId = state.codexTasks[0].id;
+      if (state.codexSelectedTaskId && state.codexTasks.some((task) => task.id === state.codexSelectedTaskId)) {
+        await loadCodexTask(state.codexSelectedTaskId, { select: false, render: false, silent: true });
+      } else if (state.codexTasks.length) {
+        state.codexSelectedTaskId = state.codexTasks[0].id;
+        await loadCodexTask(state.codexSelectedTaskId, { select: false, render: false, silent: true });
+      } else {
+        state.codexSelectedTaskId = null;
+      }
       renderCodexTaskState();
+      renderExercises();
       for (const task of state.codexTasks) {
         if (isCodexTerminal(task.status) && previous.get(task.id) && previous.get(task.id) !== task.status && !state.codexTerminalSeen.has(task.id)) {
           state.codexTerminalSeen.add(task.id);
@@ -2905,7 +3394,7 @@
           await loadOverview({ refresh: true, silent: true });
         }
       }
-      const active = state.codexTasks.some((task) => !isCodexTerminal(task.status));
+      const active = state.codexTasks.some((task) => ["running", "queued"].includes(task.status));
       if (active || els.codexTaskDialog.open) ensureCodexPolling();
       else stopCodexPollingIfIdle();
       return result;
@@ -2922,6 +3411,27 @@
     }
   }
 
+  async function loadEarlierCodexEvents() {
+    const id = state.codexSelectedTaskId;
+    if (!id || !state.codexHasMoreEvents.get(id)) return;
+    const current = state.codexLoadedEvents.get(id) || [];
+    const before = Number(current[0]?.sequence || 0);
+    await withButton(els.codexLoadEarlier, async () => {
+      try {
+        const result = await request(`/api/codex/tasks/${encodeURIComponent(id)}/events?before=${encodeURIComponent(before)}&limit=64`);
+        const merged = mergeCodexEventLists(current, result.events || []);
+        state.codexLoadedEvents.set(id, merged);
+        state.codexHasMoreEvents.set(id, Boolean(result.hasMore));
+        const task = state.codexTasks.find((item) => item.id === id);
+        if (task) task.events = merged;
+        state.codexEventsFollowTail = false;
+        renderCodexTaskState();
+      } catch (error) {
+        showToast(`更早日志加载失败：${error.message}`, "error");
+      }
+    });
+  }
+
   function openCodexTaskDialog() {
     if (typeof els.codexTaskDialog.showModal === "function") els.codexTaskDialog.showModal();
     else els.codexTaskDialog.setAttribute("open", "open");
@@ -2934,16 +3444,15 @@
     const isPure = mode === "pure";
     els.codexStartPrompt.value = state.codexSystemPrompt;
     els.codexPromptMode.textContent = isPure
-      ? "题目的标准 AI 提示词（含题目详情、附件路径和接口说明）会自动作为任务正文发送；这里修改本次附加系统指令，纯解题安全约束会始终附加。"
-      : "题目的标准 AI 提示词（含题目详情、附件路径和接口说明）会自动作为任务正文发送；这里修改本次附加系统指令，不会改变全局配置。";
+      ? "题目的标准 AI 提示词会自动作为任务正文发送；这里修改本次附加系统指令，纯解题安全约束会始终附加。"
+      : "题目的标准 AI 提示词会自动作为任务正文发送；这里修改本次附加系统指令，不会改变全局配置。";
     if (typeof els.codexPromptDialog.showModal === "function") els.codexPromptDialog.showModal();
     else els.codexPromptDialog.setAttribute("open", "open");
     els.codexStartPrompt.focus();
   }
 
   async function startCodexTask(mode) {
-    const id = state.selectedExerciseId;
-    if (id === null || state.codexAvailable !== true) return;
+    if (state.selectedExerciseId === null || state.codexAvailable !== true) return;
     openCodexPromptDialog(mode);
   }
 
@@ -2974,24 +3483,52 @@
 
   async function sendCodexMessage(side) {
     const id = state.codexSelectedTaskId;
+    const task = state.codexTasks.find((item) => item.id === id);
     const message = els.codexTaskMessage.value.trim();
-    if (!id || !message) return;
+    if (!id || !message || task?.pendingMessage?.message) return;
     const button = side ? els.codexTaskSide : els.codexTaskFollowUp;
     await withButton(button, async () => {
       try {
-        const task = await request(`/api/codex/tasks/${encodeURIComponent(id)}/message`, {
+        const updated = await request(`/api/codex/tasks/${encodeURIComponent(id)}/message`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message, side }),
         });
         els.codexTaskMessage.value = "";
-        if (side && task.id) state.codexSelectedTaskId = task.id;
+        if (side && updated.id) state.codexSelectedTaskId = updated.id;
         await loadCodexTasks({ notify: true });
-        showToast(side ? "Side 提问已提交" : "追加消息已提交", "success");
+        showToast(side ? "Side 分支已创建" : (task?.status === "running" ? "消息已进入待处理队列" : "已开始新一轮对话"), "success");
       } catch (error) {
         showToast(`${side ? "Side 提问" : "追加消息"}失败：${error.message}`, "error");
       }
     });
+  }
+
+  async function editPendingCodexMessage(task) {
+    const message = window.prompt("编辑待处理消息", task.pendingMessage?.message || "");
+    if (message === null || !message.trim()) return;
+    try {
+      await request(`/api/codex/tasks/${encodeURIComponent(task.id)}/pending-message`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: message.trim() }),
+      });
+      await loadCodexTask(task.id);
+      showToast("待处理消息已更新", "success");
+    } catch (error) {
+      showToast(`待处理消息更新失败：${error.message}`, "error");
+    }
+  }
+
+  async function cancelPendingCodexMessage(task) {
+    if (!window.confirm("确认取消这条待处理消息？当前轮次会尽量继续恢复。")) return;
+    try {
+      await request(`/api/codex/tasks/${encodeURIComponent(task.id)}/pending-message`, { method: "DELETE" });
+      await loadCodexTask(task.id);
+      showToast("待处理消息已取消", "success");
+    } catch (error) {
+      showToast(`取消待处理消息失败：${error.message}`, "error");
+    }
   }
 
   async function runCodex() {
@@ -3005,7 +3542,7 @@
   async function cancelCodexTask() {
     const id = state.codexSelectedTaskId;
     if (!id || !window.confirm("确认停止当前 Codex 任务？")) return;
-    await withButton(els.cancelCodexTask, async () => {
+    await withButton(els.codexPrimaryAction, async () => {
       try {
         await request(`/api/codex/tasks/${encodeURIComponent(id)}/cancel`, { method: "POST" });
         showToast("Codex 任务停止请求已提交", "success");
@@ -3018,11 +3555,13 @@
 
   async function continueCodexTask() {
     const id = state.codexSelectedTaskId;
-    if (!id) return;
-    await withButton(els.continueCodexTask, async () => {
+    const task = state.codexTasks.find((item) => item.id === id);
+    if (!id || !task) return;
+    const endpoint = task.status === "interrupted" ? "resume" : "continue";
+    await withButton(els.codexPrimaryAction, async () => {
       try {
-        await request(`/api/codex/tasks/${encodeURIComponent(id)}/continue`, { method: "POST" });
-        showToast("已发送继续指令", "success");
+        await request(`/api/codex/tasks/${encodeURIComponent(id)}/${endpoint}`, { method: "POST" });
+        showToast(task.status === "interrupted" ? "正在使用原 Session 恢复执行" : "已发送继续指令", "success");
         await loadCodexTasks({ notify: true });
       } catch (error) {
         showToast(`继续任务失败：${error.message}`, "error");
@@ -3030,20 +3569,140 @@
     });
   }
 
+  async function handleCodexPrimaryAction() {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task) return;
+    if (["running", "queued"].includes(task.status)) await cancelCodexTask();
+    else await continueCodexTask();
+  }
+
+  function focusCodexMessage() {
+    els.codexTaskMessage.scrollIntoView({ behavior: "smooth", block: "center" });
+    els.codexTaskMessage.focus();
+  }
+
+  async function renameCodexTask() {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task) return;
+    closeCodexMoreMenu();
+    const title = window.prompt("输入新的对话标题", codexTaskTitle(task));
+    if (title === null || !title.trim()) return;
+    try {
+      await request(`/api/codex/tasks/${encodeURIComponent(task.id)}/rename`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: title.trim() }),
+      });
+      await loadCodexTasks({ notify: true });
+      showToast("对话已重命名", "success");
+    } catch (error) {
+      showToast(`重命名失败：${error.message}`, "error");
+    }
+  }
+
+  function returnToCodexParent() {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task?.parentTaskId) return;
+    closeCodexMoreMenu();
+    state.codexSelectedTaskId = task.parentTaskId;
+    void loadCodexTask(task.parentTaskId);
+  }
+
+  async function fetchCodexLogText(id) {
+    const response = await fetch(`/api/codex/tasks/${encodeURIComponent(id)}/logs.txt`, { cache: "no-store" });
+    if (!response.ok) throw new Error("日志接口返回错误");
+    return response.text();
+  }
+
+  async function copyCodexLog() {
+    const id = state.codexSelectedTaskId;
+    if (!id) return;
+    closeCodexMoreMenu();
+    try {
+      const text = await fetchCodexLogText(id);
+      await navigator.clipboard.writeText(text);
+      showToast(`已复制完整日志（${formatNumber(text.length)} 字符）`, "success");
+    } catch (error) {
+      showToast(`复制完整日志失败：${error.message}`, "error");
+    }
+  }
+
+  function downloadCodexArtifact(name) {
+    const id = state.codexSelectedTaskId;
+    if (!id) return;
+    closeCodexMoreMenu();
+    const link = document.createElement("a");
+    link.href = `/api/codex/tasks/${encodeURIComponent(id)}/${name}`;
+    link.download = "";
+    document.body.append(link);
+    link.click();
+    link.remove();
+  }
+
+  async function openCodexRawLog() {
+    const id = state.codexSelectedTaskId;
+    if (!id) return;
+    closeCodexMoreMenu();
+    try {
+      const result = await request(`/api/codex/tasks/${encodeURIComponent(id)}/log-file`, { method: "POST" });
+      showToast(`已打开原始日志文件：${result.path || "events.jsonl"}`, "success");
+    } catch (error) {
+      showToast(`打开原始日志失败：${error.message}`, "error");
+    }
+  }
+
+  async function finishInterruptedCodexTask() {
+    const id = state.codexSelectedTaskId;
+    if (!id || !window.confirm("确认将这个中断任务标记为结束？之后仍可保留和导出日志。")) return;
+    closeCodexMoreMenu();
+    try {
+      await request(`/api/codex/tasks/${encodeURIComponent(id)}/finish`, { method: "POST" });
+      await loadCodexTasks({ notify: true });
+      showToast("中断任务已标记结束", "success");
+    } catch (error) {
+      showToast(`标记结束失败：${error.message}`, "error");
+    }
+  }
+
   async function deleteCodexTask() {
     const id = state.codexSelectedTaskId;
-    if (!id || !window.confirm("确认删除当前 Codex 任务及其本地日志？")) return;
+    if (!id || !window.confirm("危险操作：确认删除当前 Codex 任务、完整日志及本地任务文件？此操作不可恢复。")) return;
+    closeCodexMoreMenu();
     await withButton(els.deleteCodexTask, async () => {
       try {
         await request(`/api/codex/tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
         state.codexTasks = state.codexTasks.filter((task) => task.id !== id);
+        state.codexLoadedEvents.delete(id);
+        state.codexHasMoreEvents.delete(id);
         state.codexSelectedTaskId = state.codexTasks[0]?.id || null;
         renderCodexTaskState();
+        renderExercises();
         showToast("Codex 任务已删除", "success");
       } catch (error) {
         showToast(`删除任务失败：${error.message}`, "error");
       }
     });
+  }
+
+  function setAllCodexEventsExpanded(expanded) {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task) return;
+    normalizeCodexEvents(task.events || []).forEach((event, index) => setCodexEventExpanded(codexEventStateKey(task.id, event, index), expanded));
+    renderCodexTaskDetail(task);
+  }
+
+  function navigateCodexRound(direction) {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task) return;
+    const rounds = [...els.codexTaskEvents.querySelectorAll(".codex-round")];
+    if (!rounds.length) return;
+    const values = rounds.map((node) => Number(node.dataset.round || 0));
+    const current = state.codexRoundCursor.get(task.id) ?? values.at(-1);
+    let index = values.indexOf(current);
+    if (index < 0) index = values.length - 1;
+    index = direction === "latest" ? values.length - 1 : Math.max(0, Math.min(values.length - 1, index + direction));
+    state.codexRoundCursor.set(task.id, values[index]);
+    rounds[index].scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
   function toggleScoreRefresh() {
@@ -3121,9 +3780,37 @@
       els.passwordCaptcha.removeAttribute("src");
       els.rotateCaptchaImage.removeAttribute("src");
     });
-    els.cancelCodexTask.addEventListener("click", cancelCodexTask);
-    els.continueCodexTask.addEventListener("click", continueCodexTask);
+    els.exerciseSearch.addEventListener("input", () => {
+      state.exerciseSearch = els.exerciseSearch.value;
+      renderExercises();
+    });
+    [
+      [els.filterUnsolved, "unsolved"],
+      [els.filterAttachment, "attachment"],
+      [els.filterEnvironment, "environment"],
+    ].forEach(([button, key]) => {
+      button.addEventListener("click", () => {
+        state.exerciseFilters[key] = !state.exerciseFilters[key];
+        renderExercises();
+      });
+    });
+    els.resetExerciseFilters.addEventListener("click", resetExerciseFilters);
+    els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
+    els.codexTaskCompose.addEventListener("click", focusCodexMessage);
     els.deleteCodexTask.addEventListener("click", deleteCodexTask);
+    els.renameCodexTask.addEventListener("click", renameCodexTask);
+    els.codexReturnParent.addEventListener("click", returnToCodexParent);
+    els.copyCodexLog.addEventListener("click", copyCodexLog);
+    els.downloadCodexLog.addEventListener("click", () => downloadCodexArtifact("logs.txt"));
+    els.exportCodexJson.addEventListener("click", () => downloadCodexArtifact("logs.json"));
+    els.openCodexLogFile.addEventListener("click", () => void openCodexRawLog());
+    els.finishCodexTask.addEventListener("click", () => void finishInterruptedCodexTask());
+    els.codexLoadEarlier.addEventListener("click", () => void loadEarlierCodexEvents());
+    els.codexCollapseAll.addEventListener("click", () => setAllCodexEventsExpanded(false));
+    els.codexExpandAll.addEventListener("click", () => setAllCodexEventsExpanded(true));
+    els.codexPrevRound.addEventListener("click", () => navigateCodexRound(-1));
+    els.codexNextRound.addEventListener("click", () => navigateCodexRound(1));
+    els.codexLatestRound.addEventListener("click", () => navigateCodexRound("latest"));
     const updateCodexEventsFollowState = () => {
       state.codexEventsFollowTail = codexEventsNearBottom();
     };

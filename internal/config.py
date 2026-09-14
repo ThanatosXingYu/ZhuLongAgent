@@ -51,6 +51,7 @@ class Config:
     codex_max_concurrency: int = DEFAULT_CODEX_MAX_CONCURRENCY
     codex_system_prompt: str = ""
     codex_ctf_skills_enabled: bool = True
+    codex_auto_resume_interrupted: bool = False
 
 
 def load(path: str | Path = ".env") -> Config:
@@ -115,6 +116,11 @@ class RuntimeConfigStore:
                 codex_ctf_skills_enabled=_bool_value(
                     values, "codex_ctf_skills_enabled", current.codex_ctf_skills_enabled
                 ),
+                codex_auto_resume_interrupted=_bool_value(
+                    values,
+                    "codex_auto_resume_interrupted",
+                    current.codex_auto_resume_interrupted,
+                ),
             )
             validate_runtime_config(candidate)
             self._persist(candidate)
@@ -147,6 +153,7 @@ class RuntimeConfigStore:
             "codexMaxConcurrency": config.codex_max_concurrency,
             "codexSystemPrompt": config.codex_system_prompt or DEFAULT_CODEX_SYSTEM_PROMPT,
             "codexCtfSkillsEnabled": config.codex_ctf_skills_enabled,
+            "codexAutoResumeInterrupted": config.codex_auto_resume_interrupted,
         }
 
     def _load_persisted(self) -> None:
@@ -194,6 +201,11 @@ class RuntimeConfigStore:
                 ),
                 codex_ctf_skills_enabled=_persisted_bool(
                     raw, "codex_ctf_skills_enabled", current.codex_ctf_skills_enabled
+                ),
+                codex_auto_resume_interrupted=_persisted_bool(
+                    raw,
+                    "codex_auto_resume_interrupted",
+                    current.codex_auto_resume_interrupted,
                 ),
             )
             validate_runtime_config(candidate)

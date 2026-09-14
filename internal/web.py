@@ -172,6 +172,24 @@ class CodexProtocol(Protocol):
 
     def open_challenge_folder(self, task_id: str) -> dict[str, Any]: ...
 
+    def events_page(self, task_id: str, before: int = 0, limit: int = 64) -> dict[str, Any]: ...
+
+    def log_text(self, task_id: str) -> str: ...
+
+    def log_json(self, task_id: str) -> Any: ...
+
+    def open_log_file(self, task_id: str) -> dict[str, Any]: ...
+
+    def rename(self, task_id: str, title: str) -> Any: ...
+
+    def update_pending_message(self, task_id: str, message: str) -> Any: ...
+
+    def cancel_pending_message(self, task_id: str) -> Any: ...
+
+    def resume_interrupted(self, task_id: str) -> Any: ...
+
+    def mark_finished(self, task_id: str) -> Any: ...
+
 
 class FlagRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -201,6 +219,9 @@ class RuntimeConfigPatch(BaseModel):
     codex_ctf_skills_enabled: bool | None = Field(
         default=None, alias="codexCtfSkillsEnabled"
     )
+    codex_auto_resume_interrupted: bool | None = Field(
+        default=None, alias="codexAutoResumeInterrupted"
+    )
 
 
 class ModelListRequest(BaseModel):
@@ -227,6 +248,16 @@ class CodexMessageRequest(BaseModel):
     )
     message: str = Field(min_length=1, max_length=16_000)
     side: bool = False
+
+
+class CodexRenameRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    title: str = Field(min_length=1, max_length=120)
+
+
+class CodexPendingMessageRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    message: str = Field(min_length=1, max_length=16_000)
 
 
 class MatchBindRequest(BaseModel):
@@ -1024,7 +1055,7 @@ def create_app(
         "/api/codex/tasks/{raw_path:path}",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
-    async def codex_task(request: Request, raw_path: str) -> JSONResponse:
+    async def codex_task(request: Request, raw_path: str) -> Response:
         parts = [part for part in raw_path.strip("/").split("/") if part]
         if not parts or len(parts) > 2:
             return _error_response(404, "NOT_FOUND", "请求的接口不存在")
@@ -1048,17 +1079,157 @@ def create_app(
                 )
             except Exception as exc:
                 return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "events":
+            if not _method(request, "GET"):
+                return _method_error("GET")
+            try:
+                before = int(request.query_params.get("before", "0") or 0)
+                limit = int(request.query_params.get("limit", "64") or 64)
+            except ValueError:
+                return _error_response(400, "INVALID_REQUEST", "日志分页参数无效")
+            try:
+                return _success_response(
+                    await asyncio.to_thread(
+                        services.codex.events_page, parts[0], before, limit
+                    )
+                )
+            except ValueError as exc:
+                return _error_response(400, "INVALID_REQUEST", str(exc))
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "logs.txt":
+            if not _method(request, "GET"):
+                return _method_error("GET")
+            try:
+                content = await asyncio.to_thread(services.codex.log_text, parts[0])
+                return Response(
+                    content=content,
+                    media_type="text/plain; charset=utf-8",
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Disposition": f'attachment; filename="codex-{parts[0]}.txt"',
+                    },
+                )
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "logs.json":
+            if not _method(request, "GET"):
+                return _method_error("GET")
+            try:
+                content = await asyncio.to_thread(services.codex.log_json, parts[0])
+                return Response(
+                    content=json.dumps(content, ensure_ascii=False, indent=2),
+                    media_type="application/json; charset=utf-8",
+                    headers={
+                        "Cache-Control": "no-store",
+                        "Content-Disposition": f'attachment; filename="codex-{parts[0]}.json"',
+                    },
+                )
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "log-file":
+            if not _method(request, "POST"):
+                return _method_error("POST")
+            body_error = await _empty_body_error(request)
+            if body_error is not None:
+                return body_error
+            try:
+                return _success_response(
+                    await asyncio.to_thread(services.codex.open_log_file, parts[0])
+                )
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "rename":
+            if not _method(request, "PATCH"):
+                return _method_error("PATCH")
+            rename_request, error = await _validated_request(
+                request, CodexRenameRequest
+            )
+            if error is not None:
+                return error
+            assert rename_request is not None
+            try:
+                return _success_response(
+                    await asyncio.to_thread(
+                        services.codex.rename, parts[0], rename_request.title
+                    )
+                )
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "pending-message":
+            if request.method == "PATCH":
+                pending_request, error = await _validated_request(
+                    request, CodexPendingMessageRequest
+                )
+                if error is not None:
+                    return error
+                assert pending_request is not None
+                try:
+                    return _success_response(
+                        await asyncio.to_thread(
+                            services.codex.update_pending_message,
+                            parts[0],
+                            pending_request.message,
+                        )
+                    )
+                except Exception as exc:
+                    return _codex_error(exc)
+            if request.method == "DELETE":
+                body_error = await _empty_body_error(request)
+                if body_error is not None:
+                    return body_error
+                try:
+                    return _success_response(
+                        await asyncio.to_thread(
+                            services.codex.cancel_pending_message, parts[0]
+                        )
+                    )
+                except Exception as exc:
+                    return _codex_error(exc)
+            return _method_error("PATCH, DELETE")
+        if len(parts) == 2 and parts[1] == "resume":
+            if not _method(request, "POST"):
+                return _method_error("POST")
+            body_error = await _empty_body_error(request)
+            if body_error is not None:
+                return body_error
+            try:
+                return _success_response(
+                    await asyncio.to_thread(services.codex.resume_interrupted, parts[0])
+                )
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "finish":
+            if not _method(request, "POST"):
+                return _method_error("POST")
+            body_error = await _empty_body_error(request)
+            if body_error is not None:
+                return body_error
+            try:
+                return _success_response(
+                    await asyncio.to_thread(services.codex.mark_finished, parts[0])
+                )
+            except Exception as exc:
+                return _codex_error(exc)
         if len(parts) == 2 and parts[1] == "message":
             if not _method(request, "POST"):
                 return _method_error("POST")
-            parsed, error = await _validated_request(request, CodexMessageRequest)
+            message_request, error = await _validated_request(
+                request, CodexMessageRequest
+            )
             if error is not None:
                 return error
-            assert parsed is not None
+            assert message_request is not None
             try:
-                operation = services.codex.side if parsed.side else services.codex.follow_up
+                operation = (
+                    services.codex.side
+                    if message_request.side
+                    else services.codex.follow_up
+                )
                 return _success_response(
-                    await asyncio.to_thread(operation, parts[0], parsed.message)
+                    await asyncio.to_thread(
+                        operation, parts[0], message_request.message
+                    )
                 )
             except Exception as exc:
                 return _codex_error(exc)

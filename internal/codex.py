@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import os
@@ -14,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -22,8 +24,9 @@ from typing import Any, Callable, Iterable, Mapping, Protocol, cast
 from .config import DEFAULT_CODEX_MAX_CONCURRENCY, DEFAULT_CODEX_SYSTEM_PROMPT
 from .solver import PromptResult, safe_writeup_segment
 
-MAX_EVENT_SUMMARY_BYTES = 4096
 MAX_TASK_EVENTS = 128
+DEFAULT_EVENT_PAGE_SIZE = 64
+MAX_EVENT_PAGE_SIZE = 256
 MAX_TASK_HISTORY = 100
 CONTINUE_MESSAGE = "刚才程序意外退出了，请你仔细思考，继续未完成的操作"
 API_KEY_ENVIRONMENT = "GCSIS_CODEX_API_KEY"
@@ -126,6 +129,19 @@ class Event:
     summary: str
     session_id: str = ""
     usage: TokenUsage | None = None
+    sequence: int = 0
+    round_number: int = 0
+    envelope_type: str = ""
+    item_id: str = ""
+    status: str = ""
+    command: str = ""
+    output: str = ""
+    exit_code: int | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_seconds: float | None = None
+    repeat_count: int = 1
+    metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -137,6 +153,32 @@ class Event:
             result["sessionId"] = self.session_id
         if self.usage is not None:
             result["usage"] = self.usage.to_dict()
+        if self.sequence > 0:
+            result["sequence"] = self.sequence
+        if self.round_number > 0:
+            result["roundNumber"] = self.round_number
+        if self.envelope_type:
+            result["envelopeType"] = self.envelope_type
+        if self.item_id:
+            result["itemId"] = self.item_id
+        if self.status:
+            result["status"] = self.status
+        if self.command:
+            result["command"] = self.command
+        if self.output:
+            result["output"] = self.output
+        if self.exit_code is not None:
+            result["exitCode"] = self.exit_code
+        if self.started_at is not None:
+            result["startedAt"] = _time_wire(self.started_at)
+        if self.finished_at is not None:
+            result["finishedAt"] = _time_wire(self.finished_at)
+        if self.duration_seconds is not None:
+            result["durationSeconds"] = max(0.0, self.duration_seconds)
+        if self.repeat_count > 1:
+            result["repeatCount"] = self.repeat_count
+        if self.metadata:
+            result["metadata"] = dict(self.metadata)
         return result
 
 
@@ -174,6 +216,15 @@ class ProcessRunner:
 
         redactor = Redactor(config.api_key)
         session_id = ""
+        callback(
+            Event(
+                datetime.now(timezone.utc),
+                "process.started",
+                f"Codex 子进程已启动（PID {process.pid}）",
+                status="running",
+                metadata={"pid": process.pid},
+            )
+        )
 
         def scan(stream: Any, kind_override: str = "") -> None:
             nonlocal session_id
@@ -183,21 +234,25 @@ class ProcessRunner:
                         continue
                     event = parse_event_line(line, datetime.now(timezone.utc), redactor)
                     if kind_override:
-                        event = Event(
-                            event.at,
-                            kind_override,
-                            event.summary,
-                            event.session_id,
-                            event.usage,
-                        )
+                        event = replace(event, kind=kind_override)
                     if event.session_id:
                         session_id = event.session_id
                     callback(event)
             except (OSError, ValueError) as exc:
-                callback(Event(datetime.now(timezone.utc), "stream_error", redactor.apply(str(exc))))
+                callback(
+                    Event(
+                        datetime.now(timezone.utc),
+                        "stream_error",
+                        redactor.apply(str(exc)),
+                    )
+                )
 
-        stdout_thread = threading.Thread(target=scan, args=(process.stdout,), daemon=True)
-        stderr_thread = threading.Thread(target=scan, args=(process.stderr, "stderr"), daemon=True)
+        stdout_thread = threading.Thread(
+            target=scan, args=(process.stdout,), daemon=True
+        )
+        stderr_thread = threading.Thread(
+            target=scan, args=(process.stderr, "stderr"), daemon=True
+        )
         stdout_thread.start()
         stderr_thread.start()
         if process.stdin is not None:
@@ -219,29 +274,53 @@ class ProcessRunner:
         exit_code = process.wait()
         stdout_thread.join(timeout=5)
         stderr_thread.join(timeout=5)
+        callback(
+            Event(
+                datetime.now(timezone.utc),
+                "process.completed",
+                f"Codex 子进程已退出（退出码 {exit_code}）",
+                status="completed" if exit_code == 0 else "failed",
+                exit_code=exit_code,
+                metadata={"pid": process.pid},
+            )
+        )
         if cancel_event is not None and cancel_event.is_set():
             return ProcessResult(exit_code, session_id=session_id, error="canceled")
         if exit_code != 0:
-            return ProcessResult(exit_code, session_id=session_id, error=f"Codex exited with status {exit_code}")
+            return ProcessResult(
+                exit_code,
+                session_id=session_id,
+                error=f"Codex exited with status {exit_code}",
+            )
         try:
             output = Path(config.output_path).read_text(encoding="utf-8").strip()
         except OSError:
-            return ProcessResult(exit_code, session_id=session_id, error="codex final output is missing")
+            return ProcessResult(
+                exit_code, session_id=session_id, error="codex final output is missing"
+            )
         output = redactor.apply(output)
         if not output:
-            return ProcessResult(exit_code, session_id=session_id, error="codex final output is missing")
+            return ProcessResult(
+                exit_code, session_id=session_id, error="codex final output is missing"
+            )
         return ProcessResult(exit_code, output, session_id)
 
 
-def build_command(config: ProcessConfig, prompt: str = "", binary: str | None = None) -> list[str]:
+def build_command(
+    config: ProcessConfig, prompt: str = "", binary: str | None = None
+) -> list[str]:
     del prompt
     selected_binary = binary or config.binary
+
     def quote(value: str) -> str:
         return json.dumps(value, ensure_ascii=False)
+
     command = [selected_binary, "exec"]
     resumed = bool(config.resume_session_id)
     if config.resume_session_id:
-        command.extend(["fork" if config.fork_session else "resume", config.resume_session_id])
+        command.extend(
+            ["fork" if config.fork_session else "resume", config.resume_session_id]
+        )
     command.extend(["--json", "--ignore-user-config"])
     if not resumed:
         command.extend(
@@ -333,7 +412,11 @@ def _launch_system_terminal(script_path: Path, workspace: Path) -> None:
                 text=True,
                 timeout=15,
             )
-        except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        except (
+            OSError,
+            subprocess.CalledProcessError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             raise CodexError("无法打开系统终端，请手动运行任务中的恢复脚本") from exc
         return
     else:
@@ -368,7 +451,7 @@ def _open_system_path(path: Path) -> None:
     try:
         subprocess.Popen(
             command,
-            cwd=str(path),
+            cwd=str(path if path.is_dir() else path.parent),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -491,17 +574,21 @@ def _token_usage_from_summary(summary: str) -> TokenUsage | None:
     return _event_token_usage(raw, item)
 
 
-def parse_event_line(line: str, at: datetime | None = None, redactor: Redactor | None = None) -> Event:
+def parse_event_line(
+    line: str, at: datetime | None = None, redactor: Redactor | None = None
+) -> Event:
     now = at or datetime.now(timezone.utc)
     redact = redactor or Redactor()
     try:
         envelope = json.loads(line)
     except json.JSONDecodeError:
-        return Event(now, "stdout", truncate_event_summary(redact.apply(line.strip())))
+        return Event(now, "stdout", redact.apply(line.strip()))
     if not isinstance(envelope, Mapping):
-        return Event(now, "stdout", truncate_event_summary(redact.apply(line.strip())))
+        return Event(now, "stdout", redact.apply(line.strip()))
     raw_item = envelope.get("item")
-    item: Mapping[str, Any] = cast(Mapping[str, Any], raw_item) if isinstance(raw_item, Mapping) else {}
+    item: Mapping[str, Any] = (
+        cast(Mapping[str, Any], raw_item) if isinstance(raw_item, Mapping) else {}
+    )
     session_id = _first_nonempty(
         envelope.get("session_id"),
         envelope.get("thread_id"),
@@ -509,14 +596,42 @@ def parse_event_line(line: str, at: datetime | None = None, redactor: Redactor |
         item.get("thread_id"),
         envelope.get("id") if envelope.get("type") == "thread.started" else "",
     )
-    kind = str(item.get("type") or envelope.get("type") or "stdout")
+    envelope_type = str(envelope.get("type") or "")
+    kind = str(item.get("type") or envelope_type or "stdout")
     usage = _event_token_usage(envelope, item)
+    item_id = _first_nonempty(item.get("id"), envelope.get("item_id"))
+    status = _first_nonempty(item.get("status"), envelope.get("status"))
+    if not status:
+        if envelope_type.endswith(".started"):
+            status = "in_progress"
+        elif envelope_type.endswith(".completed"):
+            status = "completed"
+        elif envelope_type.endswith(".failed"):
+            status = "failed"
+    command = redact.apply(
+        _first_nonempty(item.get("command"), envelope.get("command"))
+    )
+    output = redact.apply(
+        _first_nonempty(
+            item.get("aggregated_output"),
+            item.get("output"),
+            envelope.get("output"),
+        )
+    )
+    raw_exit_code = item.get(
+        "exit_code", item.get("exitCode", envelope.get("exit_code"))
+    )
+    exit_code: int | None = None
+    if raw_exit_code is not None and not isinstance(raw_exit_code, bool):
+        try:
+            exit_code = int(raw_exit_code)
+        except (TypeError, ValueError):
+            exit_code = None
     summary = _first_nonempty(
         item.get("text"),
-        item.get("command"),
+        command,
         item.get("message"),
-        item.get("aggregated_output"),
-        item.get("output"),
+        output,
         envelope.get("message"),
         line.strip(),
     )
@@ -529,15 +644,18 @@ def parse_event_line(line: str, at: datetime | None = None, redactor: Redactor |
     return Event(
         now,
         kind,
-        truncate_event_summary(redact.apply(str(summary))),
+        redact.apply(str(summary)),
         session_id,
         usage,
+        envelope_type=envelope_type,
+        item_id=item_id,
+        status=status,
+        command=command,
+        output=output if kind == "command_execution" else "",
+        exit_code=exit_code,
+        started_at=now if status in {"in_progress", "running", "started"} else None,
+        finished_at=now if status in {"completed", "failed", "canceled"} else None,
     )
-
-
-def truncate_event_summary(value: str) -> str:
-    encoded = value.encode("utf-8")
-    return encoded[:MAX_EVENT_SUMMARY_BYTES].decode("utf-8", errors="ignore")
 
 
 def _first_nonempty(*values: Any) -> str:
@@ -568,8 +686,26 @@ class Snapshot:
     parent_id: str = ""
     usage: TokenUsage = field(default_factory=TokenUsage)
     completed_turns: int = 0
+    title: str = ""
+    source_message: str = ""
+    log_count: int = 0
+    first_event_at: datetime | None = None
+    last_event_at: datetime | None = None
+    next_event_sequence: int = 1
+    current_round: int = 0
+    rounds_started: int = 0
+    pending_message: str = ""
+    pending_status: str = ""
+    pending_created_at: datetime | None = None
+    pending_started_at: datetime | None = None
+    interrupted_at: datetime | None = None
+    interruption_count: int = 0
+    last_resumed_at: datetime | None = None
+    process_id: int = 0
+    process_alive: bool = False
+    process_started_at: datetime | None = None
 
-    def to_dict(self) -> dict[str, Any]:
+    def to_dict(self, include_events: bool = True) -> dict[str, Any]:
         result: dict[str, Any] = {
             "id": self.id,
             "exerciseId": self.exercise_id,
@@ -590,7 +726,7 @@ class Snapshot:
             result["writeupPath"] = self.writeup_path
         if self.challenge_path:
             result["challengePath"] = self.challenge_path
-        if self.events:
+        if include_events and self.events:
             result["events"] = [event.to_dict() for event in self.events]
         if self.session_id:
             result["sessionId"] = self.session_id
@@ -600,6 +736,45 @@ class Snapshot:
             result["finishedAt"] = _time_wire(self.finished_at)
         if self.parent_id:
             result["parentTaskId"] = self.parent_id
+        if self.title:
+            result["title"] = self.title
+        if self.source_message:
+            result["sourceMessage"] = self.source_message
+        result["logCount"] = self.log_count or len(self.events)
+        result["nextEventSequence"] = self.next_event_sequence
+        if self.first_event_at:
+            result["firstEventAt"] = _time_wire(self.first_event_at)
+        elif self.events:
+            result["firstEventAt"] = _time_wire(self.events[0].at)
+        if self.last_event_at:
+            result["lastEventAt"] = _time_wire(self.last_event_at)
+        elif self.events:
+            result["lastEventAt"] = _time_wire(self.events[-1].at)
+        if self.current_round > 0:
+            result["currentRound"] = self.current_round
+        if self.rounds_started > 0:
+            result["roundsStarted"] = self.rounds_started
+        if self.pending_message:
+            pending: dict[str, Any] = {
+                "message": self.pending_message,
+                "status": self.pending_status or "waiting",
+            }
+            if self.pending_created_at:
+                pending["createdAt"] = _time_wire(self.pending_created_at)
+            if self.pending_started_at:
+                pending["startedAt"] = _time_wire(self.pending_started_at)
+            result["pendingMessage"] = pending
+        if self.interrupted_at:
+            result["interruptedAt"] = _time_wire(self.interrupted_at)
+        if self.interruption_count > 0:
+            result["interruptionCount"] = self.interruption_count
+        if self.last_resumed_at:
+            result["lastResumedAt"] = _time_wire(self.last_resumed_at)
+        if self.process_id > 0:
+            result["processId"] = self.process_id
+            result["processAlive"] = self.process_alive
+        if self.process_started_at:
+            result["processStartedAt"] = _time_wire(self.process_started_at)
         usage = self.usage
         completed_turns = self.completed_turns
         if completed_turns <= 0 and usage == TokenUsage():
@@ -628,7 +803,11 @@ class TaskList:
     limit: int
 
     def to_dict(self) -> dict[str, Any]:
-        return {"tasks": [task.to_dict() for task in self.tasks], "active": self.active, "limit": self.limit}
+        return {
+            "tasks": [task.to_dict(include_events=False) for task in self.tasks],
+            "active": self.active,
+            "limit": self.limit,
+        }
 
 
 @dataclass(frozen=True)
@@ -642,6 +821,7 @@ class ManagerConfig:
     workspace_root: str | Path = ""
     system_prompt: str = ""
     tasks_path: str | Path = ""
+    auto_resume_interrupted: bool = False
 
 
 @dataclass
@@ -651,6 +831,7 @@ class _Task:
     config: ProcessConfig
     cancel_event: threading.Event | None = None
     pending_followup: str = ""
+    stop_reason: str = ""
 
 
 class CodexManager:
@@ -661,10 +842,17 @@ class CodexManager:
             if config.max_concurrency > 0
             else DEFAULT_CODEX_MAX_CONCURRENCY
         )
-        self.runs_root = Path("codex-runs") if config.runs_root == "" else Path(config.runs_root)
-        self.writeup_root = Path("writeups") if config.writeup_root == "" else Path(config.writeup_root)
-        self.workspace_root = Path(config.workspace_root or config.process.workspace or Path.cwd())
+        self.runs_root = (
+            Path("codex-runs") if config.runs_root == "" else Path(config.runs_root)
+        )
+        self.writeup_root = (
+            Path("writeups") if config.writeup_root == "" else Path(config.writeup_root)
+        )
+        self.workspace_root = Path(
+            config.workspace_root or config.process.workspace or Path.cwd()
+        )
         self.system_prompt = config.system_prompt.strip() or DEFAULT_CODEX_SYSTEM_PROMPT
+        self.auto_resume_interrupted = config.auto_resume_interrupted
         self.tasks_path = (
             Path(config.tasks_path)
             if config.tasks_path
@@ -688,12 +876,14 @@ class CodexManager:
                 for task in self._tasks.values():
                     if task.snapshot.status == "queued":
                         self._queue.put(task.snapshot.id)
+                self._auto_resume_interrupted_locked()
 
     def configure(
         self,
         process: ProcessConfig,
         max_concurrency: int | None = None,
         system_prompt: str | None = None,
+        auto_resume_interrupted: bool | None = None,
     ) -> None:
         """Apply provider settings for tasks started after the update."""
 
@@ -702,9 +892,15 @@ class CodexManager:
             selected_limit = self.limit if max_concurrency is None else max_concurrency
             if not 1 <= selected_limit <= 16:
                 raise ValueError("codex concurrency must be between 1 and 16")
-            self.config = replace(self.config, process=process, max_concurrency=selected_limit)
+            self.config = replace(
+                self.config, process=process, max_concurrency=selected_limit
+            )
             if system_prompt is not None:
-                self.system_prompt = system_prompt.strip() or DEFAULT_CODEX_SYSTEM_PROMPT
+                self.system_prompt = (
+                    system_prompt.strip() or DEFAULT_CODEX_SYSTEM_PROMPT
+                )
+            if auto_resume_interrupted is not None:
+                self.auto_resume_interrupted = auto_resume_interrupted
             self.limit = selected_limit
             desired = selected_limit if self.enabled() else 0
             while len(self._workers) < desired:
@@ -721,7 +917,24 @@ class CodexManager:
                 for task in self._tasks.values():
                     if task.snapshot.status == "queued":
                         self._queue.put(task.snapshot.id)
+            self._auto_resume_interrupted_locked()
             self._condition.notify_all()
+
+    def _auto_resume_interrupted_locked(self) -> None:
+        if not self.auto_resume_interrupted or not self.enabled():
+            return
+        for task in self._tasks.values():
+            if task.snapshot.status != "interrupted" or not task.snapshot.session_id:
+                continue
+            process_alive = _pid_exists(task.snapshot.process_id)
+            if process_alive != task.snapshot.process_alive:
+                task.snapshot = _replace_snapshot(
+                    task.snapshot, process_alive=process_alive
+                )
+            if process_alive:
+                continue
+            self._resume_interrupted_locked(task, CONTINUE_MESSAGE)
+        self._persist_tasks_locked()
 
     def enabled(self) -> bool:
         return bool(
@@ -752,11 +965,35 @@ class CodexManager:
             if task.snapshot.status == "queued":
                 raise CodexError("任务尚未开始，请稍后再追加消息")
             if task.snapshot.status == "running":
-                if task.pending_followup:
+                if task.pending_followup or task.snapshot.pending_message:
                     raise CodexError("当前任务已经有一条待处理消息")
                 task.pending_followup = normalized
+                now = datetime.now(timezone.utc)
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    pending_message=normalized,
+                    pending_status="ending_previous",
+                    pending_created_at=now,
+                    pending_started_at=None,
+                )
+                self._append_event_locked(
+                    task,
+                    Event(
+                        now,
+                        "user.followup_queued",
+                        normalized,
+                        status="waiting",
+                        metadata={"reason": "switch_round"},
+                    ),
+                    round_number=max(1, task.snapshot.current_round),
+                )
+                task.stop_reason = "followup"
                 if task.cancel_event is not None:
                     task.cancel_event.set()
+                self._persist_tasks_locked()
+                return self._snapshot(task)
+            if task.snapshot.status == "interrupted":
+                self._resume_interrupted_locked(task, normalized)
                 self._persist_tasks_locked()
                 return self._snapshot(task)
             task.prompt = normalized
@@ -773,6 +1010,7 @@ class CodexManager:
                 error="",
                 output="",
                 finished_at=None,
+                last_resumed_at=datetime.now(timezone.utc),
             )
             self._refresh_queue_positions()
             self._queue.put(task_id)
@@ -782,6 +1020,118 @@ class CodexManager:
     def continue_task(self, task_id: str) -> Snapshot:
         """Resume a task with the standard recovery instruction."""
         return self.follow_up(task_id, CONTINUE_MESSAGE)
+
+    def resume_interrupted(self, task_id: str) -> Snapshot:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            if task.snapshot.status != "interrupted":
+                raise CodexError("只有运行被中断的任务可以恢复执行")
+            self._resume_interrupted_locked(task, CONTINUE_MESSAGE)
+            self._persist_tasks_locked()
+            return self._snapshot(task)
+
+    def _resume_interrupted_locked(self, task: _Task, message: str) -> None:
+        session_id = task.snapshot.session_id.strip()
+        if not session_id:
+            raise CodexError("中断任务没有可恢复的 Codex Session ID")
+        if _pid_exists(task.snapshot.process_id):
+            task.snapshot = _replace_snapshot(task.snapshot, process_alive=True)
+            raise CodexError("原 Codex 子进程仍在运行，请先打开终端处理")
+        now = datetime.now(timezone.utc)
+        task.prompt = message
+        task.config = replace(
+            task.config,
+            resume_session_id=session_id,
+            fork_session=False,
+        )
+        task.stop_reason = ""
+        task.pending_followup = ""
+        task.snapshot = _replace_snapshot(
+            task.snapshot,
+            status="queued",
+            queue_position=0,
+            active=0,
+            error="",
+            output="",
+            finished_at=None,
+            last_resumed_at=now,
+            pending_message="",
+            pending_status="",
+            pending_created_at=None,
+            pending_started_at=None,
+            process_id=0,
+            process_alive=False,
+        )
+        self._append_event_locked(
+            task,
+            Event(now, "task.resumed", "正在使用原会话恢复中断任务", status="queued"),
+            round_number=max(1, task.snapshot.current_round),
+        )
+        self._refresh_queue_positions()
+        self._queue.put(task.snapshot.id)
+
+    def update_pending_message(self, task_id: str, message: str) -> Snapshot:
+        normalized = _task_message(message)
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            if not task.pending_followup or task.snapshot.pending_status not in {
+                "ending_previous",
+                "waiting",
+            }:
+                raise CodexError("当前没有可编辑的待处理消息")
+            task.pending_followup = normalized
+            task.snapshot = _replace_snapshot(task.snapshot, pending_message=normalized)
+            self._append_event_locked(
+                task,
+                Event(
+                    datetime.now(timezone.utc),
+                    "user.followup_updated",
+                    normalized,
+                    status="waiting",
+                ),
+                round_number=max(1, task.snapshot.current_round),
+            )
+            self._persist_tasks_locked()
+            return self._snapshot(task)
+
+    def cancel_pending_message(self, task_id: str) -> Snapshot:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            if not task.pending_followup or task.snapshot.pending_status not in {
+                "ending_previous",
+                "waiting",
+            }:
+                raise CodexError("当前没有可取消的待处理消息")
+            message = task.pending_followup
+            task.pending_followup = ""
+            task.stop_reason = "followup_canceled"
+            if task.cancel_event is not None:
+                task.cancel_event.clear()
+            task.snapshot = _replace_snapshot(
+                task.snapshot,
+                pending_message="",
+                pending_status="",
+                pending_created_at=None,
+                pending_started_at=None,
+            )
+            self._append_event_locked(
+                task,
+                Event(
+                    datetime.now(timezone.utc),
+                    "user.followup_canceled",
+                    message,
+                    status="canceled",
+                ),
+                round_number=max(1, task.snapshot.current_round),
+            )
+            self._persist_tasks_locked()
+            return self._snapshot(task)
 
     def open_terminal(self, task_id: str) -> dict[str, Any]:
         """Open the saved Codex session in the user's system terminal."""
@@ -921,6 +1271,8 @@ class CodexManager:
                 created_at=now,
                 parent_id=parent.snapshot.id,
                 challenge_path=self._challenge_path_locked(parent),
+                title=_message_summary(normalized),
+                source_message=normalized,
             )
             task = _Task(
                 snapshot,
@@ -940,7 +1292,9 @@ class CodexManager:
             self._persist_tasks_locked()
             return self._snapshot(task)
 
-    def _start(self, exercise_id: int, mode: str, prompt_override: str = "") -> Snapshot:
+    def _start(
+        self, exercise_id: int, mode: str, prompt_override: str = ""
+    ) -> Snapshot:
         if exercise_id <= 0:
             raise ValueError("invalid exercise ID")
         if not self.enabled():
@@ -971,7 +1325,14 @@ class CodexManager:
         task_id = secrets.token_hex(12)
         now = datetime.now(timezone.utc)
         output_path = self.runs_root / task_id / "final.md"
-        writeup_path = writeup_path_for(self.workspace_root, self.writeup_root, prompt_result, exercise_id, task_id, mode)
+        writeup_path = writeup_path_for(
+            self.workspace_root,
+            self.writeup_root,
+            prompt_result,
+            exercise_id,
+            task_id,
+            mode,
+        )
         challenge_path = challenge_path_for(
             self.workspace_root, prompt_result, exercise_id
         )
@@ -984,6 +1345,8 @@ class CodexManager:
             writeup_path=writeup_path,
             challenge_path=challenge_path,
             created_at=now,
+            title=prompt_result.exercise_name or f"题目 {exercise_id}",
+            source_message=("启动纯解题模式" if mode == "pure" else "启动完整解题模式"),
         )
         with self._condition:
             process = self.config.process
@@ -1008,13 +1371,18 @@ class CodexManager:
             self._trim_history()
             self._refresh_queue_positions()
             self._queue.put(task_id)
+            self._persist_tasks_locked()
             return self._snapshot(task)
 
     def list(self) -> TaskList:
         with self._condition:
             self._refresh_queue_positions()
             active = self._active_count()
-            snapshots = tuple(self._snapshot(self._tasks[task_id], active) for task_id in reversed(self._order) if task_id in self._tasks)
+            snapshots = tuple(
+                self._snapshot(self._tasks[task_id], active)
+                for task_id in reversed(self._order)
+                if task_id in self._tasks
+            )
             return TaskList(snapshots, active, self.limit)
 
     def get(self, task_id: str) -> Snapshot:
@@ -1025,15 +1393,159 @@ class CodexManager:
                 raise TaskNotFound("codex task not found")
             return self._snapshot(task)
 
+    def events_page(
+        self, task_id: str, before: int = 0, limit: int = DEFAULT_EVENT_PAGE_SIZE
+    ) -> dict[str, Any]:
+        if before < 0:
+            raise ValueError("before must be non-negative")
+        if not 1 <= limit <= MAX_EVENT_PAGE_SIZE:
+            raise ValueError(f"limit must be between 1 and {MAX_EVENT_PAGE_SIZE}")
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            path = self._events_path(task.snapshot.id)
+            expected_count = task.snapshot.log_count
+        records: deque[Event] = deque(maxlen=limit)
+        eligible_count = 0
+        for event in read_events(path):
+            if before > 0 and event.sequence >= before:
+                continue
+            eligible_count += 1
+            records.append(event)
+        rows = [*records]
+        return {
+            "events": [event.to_dict() for event in rows],
+            "hasMore": eligible_count > len(rows),
+            "nextBefore": rows[0].sequence if rows else 0,
+            "total": expected_count,
+        }
+
+    def log_text(self, task_id: str) -> str:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            title = task.snapshot.title or f"题目 {task.snapshot.exercise_id}"
+            path = self._events_path(task_id)
+        lines = [f"Codex 任务：{title}", f"任务 ID：{task_id}", ""]
+        for event in read_events(path):
+            prefix = f"[{_time_wire(event.at)}]"
+            if event.round_number:
+                prefix += f" [轮次 {event.round_number}]"
+            prefix += f" [{event.kind}]"
+            if event.status:
+                prefix += f" [{event.status}]"
+            lines.append(f"{prefix} {event.summary}")
+            if event.command and event.command != event.summary:
+                lines.append(f"命令：{event.command}")
+            if event.output:
+                lines.append("输出：")
+                lines.append(event.output)
+            if event.exit_code is not None:
+                lines.append(f"退出码：{event.exit_code}")
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def log_json(self, task_id: str) -> builtins.list[dict[str, Any]]:
+        with self._condition:
+            if task_id not in self._tasks:
+                raise TaskNotFound("codex task not found")
+            path = self._events_path(task_id)
+        return [event.to_dict() for event in read_events(path)]
+
+    def raw_log_path(self, task_id: str) -> Path:
+        with self._condition:
+            if task_id not in self._tasks:
+                raise TaskNotFound("codex task not found")
+            path = self._events_path(task_id).resolve()
+        try:
+            path.relative_to(self.workspace_root.resolve())
+        except ValueError as exc:
+            raise CodexError("日志文件必须位于工作区内") from exc
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        path.touch(exist_ok=True, mode=0o600)
+        return path
+
+    def open_log_file(self, task_id: str) -> dict[str, Any]:
+        path = self.raw_log_path(task_id)
+        _open_system_path(path)
+        try:
+            display_path = path.relative_to(self.workspace_root.resolve()).as_posix()
+        except ValueError:
+            display_path = str(path)
+        return {"opened": True, "path": display_path}
+
+    def rename(self, task_id: str, title: str) -> Snapshot:
+        normalized = title.strip()
+        if not normalized:
+            raise ValueError("对话标题不能为空")
+        if len(normalized) > 120:
+            raise ValueError("对话标题不能超过 120 个字符")
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            task.snapshot = _replace_snapshot(task.snapshot, title=normalized)
+            self._persist_tasks_locked()
+            return self._snapshot(task)
+
+    def mark_finished(self, task_id: str) -> Snapshot:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            if task.snapshot.status != "interrupted":
+                raise CodexError("只有运行被中断的任务可以标记结束")
+            if _pid_exists(task.snapshot.process_id):
+                task.snapshot = _replace_snapshot(task.snapshot, process_alive=True)
+                raise CodexError("原 Codex 子进程仍在运行，请先在终端中结束该进程")
+            now = datetime.now(timezone.utc)
+            task.snapshot = _replace_snapshot(
+                task.snapshot,
+                status="canceled",
+                finished_at=now,
+                error="已手动标记结束",
+                process_id=0,
+                process_alive=False,
+            )
+            self._append_event_locked(
+                task,
+                Event(
+                    now, "task.finished", "中断任务已手动标记结束", status="canceled"
+                ),
+                round_number=max(1, task.snapshot.current_round),
+            )
+            self._persist_tasks_locked()
+            return self._snapshot(task)
+
     def cancel(self, task_id: str) -> Snapshot:
         with self._condition:
             task = self._tasks.get(task_id)
             if task is None:
                 raise TaskNotFound("codex task not found")
+            now = datetime.now(timezone.utc)
             if task.snapshot.status == "queued":
-                task.snapshot = _replace_snapshot(task.snapshot, status="canceled", finished_at=datetime.now(timezone.utc), queue_position=0)
+                task.stop_reason = "user"
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    status="canceled",
+                    finished_at=now,
+                    queue_position=0,
+                    error="已由用户停止",
+                )
+                self._append_event_locked(
+                    task,
+                    Event(
+                        now, "task.canceled", "排队任务已由用户停止", status="canceled"
+                    ),
+                    round_number=max(1, task.snapshot.current_round),
+                )
             elif task.snapshot.status == "running" and task.cancel_event is not None:
+                task.stop_reason = "user"
                 task.cancel_event.set()
+            else:
+                raise CodexError("当前任务不在可停止状态")
             self._persist_tasks_locked()
             return self._snapshot(task)
 
@@ -1052,9 +1564,11 @@ class CodexManager:
             self._persist_tasks_locked()
         self._remove_artifacts(task_id, writeup_path, output_path)
 
-    def _remove_artifacts(self, task_id: str, writeup_path: str, output_path: str) -> None:
+    def _remove_artifacts(
+        self, task_id: str, writeup_path: str, output_path: str
+    ) -> None:
         workspace = self.workspace_root.resolve()
-        run_root = (self.runs_root / task_id).resolve()
+        run_root = self._events_path(task_id).parent.resolve()
         try:
             run_root.relative_to(workspace)
         except ValueError as exc:
@@ -1078,13 +1592,42 @@ class CodexManager:
                 resolved.unlink()
 
     def close(self) -> None:
+        """Persist running tasks as interrupted before stopping local workers."""
         with self._condition:
             if self._closed:
                 return
             self._closed = True
+            now = datetime.now(timezone.utc)
             for task in self._tasks.values():
-                if task.snapshot.status == "queued":
-                    task.snapshot = _replace_snapshot(task.snapshot, status="canceled", finished_at=datetime.now(timezone.utc), queue_position=0)
+                if task.snapshot.status != "running":
+                    continue
+                task.stop_reason = "shutdown"
+                process_alive = _pid_exists(task.snapshot.process_id)
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    status="interrupted",
+                    active=0,
+                    queue_position=0,
+                    interrupted_at=now,
+                    interruption_count=task.snapshot.interruption_count + 1,
+                    process_alive=process_alive,
+                    error=(
+                        "程序退出，Codex 子进程仍存在但日志连接已断开"
+                        if process_alive
+                        else "程序退出导致任务运行被中断"
+                    ),
+                )
+                self._append_event_locked(
+                    task,
+                    Event(
+                        now,
+                        "task.interrupted",
+                        "程序退出，当前运行轮次已中断",
+                        status="interrupted",
+                        metadata={"reason": "shutdown"},
+                    ),
+                    round_number=max(1, task.snapshot.current_round),
+                )
                 if task.cancel_event is not None:
                     task.cancel_event.set()
             self._persist_tasks_locked()
@@ -1097,9 +1640,8 @@ class CodexManager:
     def _worker(self, worker_index: int) -> None:
         while True:
             with self._condition:
-                while (
-                    not self._closed
-                    and (worker_index >= self.limit or not self.enabled())
+                while not self._closed and (
+                    worker_index >= self.limit or not self.enabled()
                 ):
                     self._condition.wait()
                 if self._closed:
@@ -1117,39 +1659,82 @@ class CodexManager:
                 if task is None or task.snapshot.status != "queued":
                     continue
                 task.cancel_event = threading.Event()
-                task.snapshot = _replace_snapshot(task.snapshot, status="running", started_at=datetime.now(timezone.utc), queue_position=0)
+                task.stop_reason = ""
+                now = datetime.now(timezone.utc)
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    status="running",
+                    started_at=task.snapshot.started_at or now,
+                    queue_position=0,
+                )
                 self._refresh_queue_positions()
                 self._persist_tasks_locked()
             self._run_task(task)
-            task.cancel_event = None
+            with self._condition:
+                task.cancel_event = None
 
     def _run_task(self, task: _Task) -> None:
         try:
-            Path(task.config.output_path).parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-            events: list[Event] = list(task.snapshot.events)
-
-            def on_event(event: Event) -> None:
-                nonlocal events
-                event = Event(
-                    event.at,
-                    event.kind,
-                    truncate_event_summary(Redactor(self.config.process.api_key).apply(event.summary)),
-                    event.session_id,
-                    event.usage,
-                )
+            Path(task.config.output_path).parent.mkdir(
+                parents=True, exist_ok=True, mode=0o700
+            )
+            redactor = Redactor(self.config.process.api_key)
+            while True:
                 with self._condition:
-                    events = (events + [event])[-MAX_TASK_EVENTS:]
-                    changes: dict[str, Any] = {
-                        "events": tuple(events),
-                        "session_id": event.session_id or task.snapshot.session_id,
-                    }
-                    if event.kind == "turn.completed" and event.usage is not None:
-                        changes["usage"] = task.snapshot.usage + event.usage
-                        changes["completed_turns"] = task.snapshot.completed_turns + 1
-                    task.snapshot = _replace_snapshot(task.snapshot, **changes)
+                    round_number = task.snapshot.rounds_started + 1
+                    now = datetime.now(timezone.utc)
+                    pending_processing = bool(task.snapshot.pending_message)
+                    task.snapshot = _replace_snapshot(
+                        task.snapshot,
+                        status="running",
+                        current_round=round_number,
+                        rounds_started=round_number,
+                        pending_status=(
+                            "processing"
+                            if pending_processing
+                            else task.snapshot.pending_status
+                        ),
+                        pending_started_at=(
+                            now
+                            if pending_processing
+                            else task.snapshot.pending_started_at
+                        ),
+                    )
+                    self._append_event_locked(
+                        task,
+                        Event(
+                            now,
+                            "user.message",
+                            redactor.apply(task.prompt),
+                            status="submitted",
+                        ),
+                        round_number=round_number,
+                    )
+                    self._append_event_locked(
+                        task,
+                        Event(
+                            now,
+                            "round.started",
+                            f"第 {round_number} 轮开始处理",
+                            status="running",
+                        ),
+                        round_number=round_number,
+                    )
                     self._persist_tasks_locked()
 
-            while True:
+                def on_event(event: Event) -> None:
+                    redacted = replace(
+                        event,
+                        summary=redactor.apply(event.summary),
+                        command=redactor.apply(event.command),
+                        output=redactor.apply(event.output),
+                    )
+                    with self._condition:
+                        self._append_event_locked(
+                            task, redacted, round_number=round_number
+                        )
+                        self._persist_tasks_locked()
+
                 current_cancel = task.cancel_event
                 result = _invoke_runner(
                     self.config.runner,
@@ -1165,10 +1750,31 @@ class CodexManager:
                             task.snapshot, session_id=session_id
                         )
                     pending = task.pending_followup
-                    task.pending_followup = ""
+                    reason = task.stop_reason
+                    if pending:
+                        task.pending_followup = ""
+
                 if pending:
+                    now = datetime.now(timezone.utc)
+                    with self._condition:
+                        self._append_event_locked(
+                            task,
+                            Event(
+                                now,
+                                "round.interrupted",
+                                "收到用户追加消息，当前轮次已结束并切换到下一轮",
+                                status="interrupted",
+                                metadata={"reason": "followup"},
+                            ),
+                            round_number=round_number,
+                        )
                     if not session_id:
-                        self._finish(task, "failed", "Codex 会话未返回 ID，无法继续对话", result.output)
+                        self._finish(
+                            task,
+                            "failed",
+                            "Codex 会话未返回 ID，无法继续对话",
+                            result.output,
+                        )
                         return
                     with self._condition:
                         task.prompt = pending
@@ -1178,19 +1784,99 @@ class CodexManager:
                             fork_session=False,
                         )
                         task.cancel_event = threading.Event()
+                        task.stop_reason = ""
                         task.snapshot = _replace_snapshot(
                             task.snapshot,
                             status="running",
                             error="",
                             output="",
                             finished_at=None,
+                            pending_status="processing",
+                            pending_started_at=datetime.now(timezone.utc),
+                            process_id=0,
+                            process_alive=False,
                         )
                         self._persist_tasks_locked()
                     continue
-                if current_cancel is not None and current_cancel.is_set():
+
+                if reason == "shutdown":
+                    return
+
+                if reason == "followup_canceled" and (
+                    result.error
+                    or result.exit_code != 0
+                    or (current_cancel is not None and current_cancel.is_set())
+                ):
+                    if not session_id:
+                        self._finish(
+                            task,
+                            "failed",
+                            "待处理消息取消时当前轮次已停止，且会话 ID 不可用",
+                            result.output,
+                        )
+                        return
+                    with self._condition:
+                        self._append_event_locked(
+                            task,
+                            Event(
+                                datetime.now(timezone.utc),
+                                "round.interrupted",
+                                "待处理消息已取消；正在恢复被提前结束的原轮次",
+                                status="interrupted",
+                                metadata={"reason": "followup_canceled"},
+                            ),
+                            round_number=round_number,
+                        )
+                        task.prompt = CONTINUE_MESSAGE
+                        task.config = replace(
+                            task.config,
+                            resume_session_id=session_id,
+                            fork_session=False,
+                        )
+                        task.cancel_event = threading.Event()
+                        task.stop_reason = ""
+                        task.snapshot = _replace_snapshot(
+                            task.snapshot,
+                            status="running",
+                            error="",
+                            output="",
+                            finished_at=None,
+                            process_id=0,
+                            process_alive=False,
+                        )
+                        self._persist_tasks_locked()
+                    continue
+
+                if reason == "user" or (
+                    current_cancel is not None and current_cancel.is_set()
+                ):
+                    with self._condition:
+                        self._append_event_locked(
+                            task,
+                            Event(
+                                datetime.now(timezone.utc),
+                                "round.canceled",
+                                "本轮已由用户停止",
+                                status="canceled",
+                            ),
+                            round_number=round_number,
+                        )
                     self._finish(task, "canceled", "canceled", result.output)
                     return
                 if result.error or result.exit_code != 0:
+                    with self._condition:
+                        self._append_event_locked(
+                            task,
+                            Event(
+                                datetime.now(timezone.utc),
+                                "round.failed",
+                                result.error
+                                or f"Codex exited with status {result.exit_code}",
+                                status="failed",
+                                exit_code=result.exit_code,
+                            ),
+                            round_number=round_number,
+                        )
                     self._finish(
                         task,
                         "failed",
@@ -1198,6 +1884,17 @@ class CodexManager:
                         result.output,
                     )
                     return
+                with self._condition:
+                    self._append_event_locked(
+                        task,
+                        Event(
+                            datetime.now(timezone.utc),
+                            "round.completed",
+                            f"第 {round_number} 轮处理完成",
+                            status="completed",
+                        ),
+                        round_number=round_number,
+                    )
                 self._write_completed(task, result.output)
                 self._finish(task, "completed", "", result.output)
                 return
@@ -1209,28 +1906,178 @@ class CodexManager:
         if not output:
             raise CodexOutputMissing("codex final output is missing")
         if task.snapshot.writeup_path:
-            write_atomic(task.snapshot.writeup_path, self.workspace_root, output.encode("utf-8"), 0o600)
-        write_events(Path(task.config.output_path).parent / "events.jsonl", task.snapshot.events)
+            write_atomic(
+                task.snapshot.writeup_path,
+                self.workspace_root,
+                output.encode("utf-8"),
+                0o600,
+            )
 
     def _finish(self, task: _Task, status: str, error: str, output: str) -> None:
         with self._condition:
+            if task.stop_reason == "shutdown":
+                self._persist_tasks_locked()
+                self._condition.notify_all()
+                return
+            now = datetime.now(timezone.utc)
             task.snapshot = _replace_snapshot(
                 task.snapshot,
                 status=status,
-                finished_at=datetime.now(timezone.utc),
+                finished_at=now,
                 output=Redactor(self.config.process.api_key).apply(output.strip()),
-                error=Redactor(self.config.process.api_key).apply(error) if error else "",
+                error=(
+                    Redactor(self.config.process.api_key).apply(error) if error else ""
+                ),
+                pending_message="",
+                pending_status="",
+                pending_created_at=None,
+                pending_started_at=None,
+                process_id=0,
+                process_alive=False,
             )
-            if status != "completed":
-                try:
-                    write_events(Path(task.config.output_path).parent / "events.jsonl", task.snapshot.events)
-                except OSError:
-                    pass
+            task.pending_followup = ""
+            task.stop_reason = ""
             self._persist_tasks_locked()
             self._condition.notify_all()
 
+    def _events_path(self, task_id: str) -> Path:
+        root = self.runs_root
+        if not root.is_absolute():
+            root = self.workspace_root / root
+        return root / task_id / "events.jsonl"
+
+    def _append_event_locked(
+        self, task: _Task, event: Event, round_number: int = 0
+    ) -> Event:
+        now = event.at.astimezone(timezone.utc)
+        status = event.status
+        started_at = event.started_at
+        finished_at = event.finished_at
+        duration_seconds = event.duration_seconds
+        if event.kind == "command_execution" and status in {
+            "completed",
+            "failed",
+            "canceled",
+        }:
+            matching = next(
+                (
+                    previous
+                    for previous in reversed(task.snapshot.events)
+                    if previous.kind == "command_execution"
+                    and (
+                        (event.item_id and previous.item_id == event.item_id)
+                        or (
+                            not event.item_id
+                            and previous.command == event.command
+                            and previous.status in {"in_progress", "running", "started"}
+                        )
+                    )
+                    and previous.status in {"in_progress", "running", "started"}
+                ),
+                None,
+            )
+            if matching is not None:
+                started_at = matching.started_at or matching.at
+                finished_at = finished_at or now
+                duration_seconds = max(0.0, (finished_at - started_at).total_seconds())
+        sequence = max(1, task.snapshot.next_event_sequence)
+        normalized = replace(
+            event,
+            at=now,
+            sequence=sequence,
+            round_number=round_number or event.round_number,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_seconds=duration_seconds,
+        )
+        path = self._events_path(task.snapshot.id)
+        persisted = False
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    json.dumps(
+                        normalized.to_dict(),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+                handle.flush()
+                os.fsync(handle.fileno())
+            persisted = True
+            try:
+                path.chmod(0o600)
+            except OSError:
+                pass
+        except OSError:
+            LOGGER.warning(
+                "无法追加 Codex 任务日志：%s", task.snapshot.id, exc_info=True
+            )
+        events = (*task.snapshot.events, normalized)[-MAX_TASK_EVENTS:]
+        changes: dict[str, Any] = {
+            "events": tuple(events),
+            "next_event_sequence": sequence + 1,
+            "session_id": normalized.session_id or task.snapshot.session_id,
+        }
+        if persisted:
+            changes.update(
+                log_count=task.snapshot.log_count + 1,
+                first_event_at=task.snapshot.first_event_at or normalized.at,
+                last_event_at=normalized.at,
+            )
+        if normalized.kind == "turn.completed" and normalized.usage is not None:
+            changes["usage"] = task.snapshot.usage + normalized.usage
+            changes["completed_turns"] = task.snapshot.completed_turns + 1
+        if normalized.kind == "process.started":
+            raw_pid = normalized.metadata.get("pid", 0)
+            pid = raw_pid if isinstance(raw_pid, int) and raw_pid > 0 else 0
+            changes.update(
+                process_id=pid,
+                process_alive=pid > 0,
+                process_started_at=normalized.at,
+            )
+        elif normalized.kind == "process.completed":
+            changes.update(process_alive=False, process_id=0)
+        task.snapshot = _replace_snapshot(task.snapshot, **changes)
+        return normalized
+
+    def _hydrate_task_events(self, task: _Task) -> None:
+        path = self._events_path(task.snapshot.id)
+        persisted = list(read_events(path))
+        if not persisted:
+            persisted = list(task.snapshot.events)
+        normalized: list[Event] = []
+        next_sequence = 1
+        rewrite = not path.exists()
+        for event in persisted:
+            sequence = event.sequence
+            if sequence < next_sequence:
+                sequence = next_sequence
+                rewrite = True
+            normalized.append(replace(event, sequence=sequence))
+            next_sequence = sequence + 1
+        if normalized and rewrite:
+            write_events(path, normalized)
+        recent = tuple(normalized[-MAX_TASK_EVENTS:])
+        aggregate_usage, completed_turns = _aggregate_event_usage(normalized)
+        task.snapshot = _replace_snapshot(
+            task.snapshot,
+            events=recent,
+            log_count=len(normalized),
+            first_event_at=normalized[0].at if normalized else None,
+            last_event_at=normalized[-1].at if normalized else None,
+            next_event_sequence=next_sequence,
+            usage=(aggregate_usage if completed_turns > 0 else task.snapshot.usage),
+            completed_turns=(
+                completed_turns
+                if completed_turns > 0
+                else task.snapshot.completed_turns
+            ),
+        )
+
     def _load_tasks(self) -> None:
-        """Restore task metadata without restoring stale running processes."""
+        """Restore task metadata and convert stale running tasks to interrupted."""
         try:
             raw = json.loads(self.tasks_path.read_text(encoding="utf-8"))
         except (FileNotFoundError, OSError, json.JSONDecodeError):
@@ -1246,7 +2093,9 @@ class CodexManager:
                 continue
             try:
                 task = self._task_from_dict(entry)
+                self._hydrate_task_events(task)
             except (TypeError, ValueError, OSError):
+                LOGGER.warning("忽略无法恢复的 Codex 任务元数据", exc_info=True)
                 continue
             restored.append(task)
         restored = restored[-MAX_TASK_HISTORY:]
@@ -1255,22 +2104,47 @@ class CodexManager:
                 task_id = task.snapshot.id
                 self._tasks[task_id] = task
                 self._order.append(task_id)
+                if task.stop_reason == "startup_interrupted":
+                    self._append_event_locked(
+                        task,
+                        Event(
+                            task.snapshot.interrupted_at or datetime.now(timezone.utc),
+                            "task.interrupted",
+                            task.snapshot.error,
+                            status="interrupted",
+                            metadata={
+                                "reason": "startup",
+                                "processAlive": task.snapshot.process_alive,
+                            },
+                        ),
+                        round_number=max(1, task.snapshot.current_round),
+                    )
+                    task.stop_reason = ""
             self._refresh_queue_positions()
+            self._persist_tasks_locked()
 
     def _task_from_dict(self, entry: Mapping[str, Any]) -> _Task:
         raw_snapshot = entry.get("snapshot")
         if not isinstance(raw_snapshot, Mapping):
             raw_snapshot = entry
         snapshot = _snapshot_from_dict(raw_snapshot)
-        status = snapshot.status
-        if status == "running":
+        startup_interrupted = snapshot.status == "running"
+        if startup_interrupted:
+            now = datetime.now(timezone.utc)
+            process_alive = _pid_exists(snapshot.process_id)
             snapshot = _replace_snapshot(
                 snapshot,
-                status="failed",
-                error="程序重启时任务中断，可点击继续恢复",
-                finished_at=datetime.now(timezone.utc),
+                status="interrupted",
+                error=(
+                    "程序重启后无法继续接管仍在运行的 Codex 子进程"
+                    if process_alive
+                    else "程序异常退出，原 Codex 子进程已经消失"
+                ),
+                interrupted_at=now,
+                interruption_count=snapshot.interruption_count + 1,
                 active=0,
                 queue_position=0,
+                process_alive=process_alive,
             )
         raw_prompt = entry.get("prompt", "")
         prompt = str(raw_prompt) if raw_prompt is not None else ""
@@ -1288,17 +2162,34 @@ class CodexManager:
             model=str(config_data.get("model", "") or current.model),
             output_path=output_path,
             home=current.home,
-            resume_session_id=str(config_data.get("resumeSessionId", "") or snapshot.session_id),
+            resume_session_id=str(
+                config_data.get("resumeSessionId", "") or snapshot.session_id
+            ),
             fork_session=bool(config_data.get("forkSession", False)),
         )
         pending_followup = str(entry.get("pendingFollowup", "") or "")
-        return _Task(snapshot, prompt, restored_config, pending_followup=pending_followup)
+        stop_reason = (
+            "startup_interrupted"
+            if startup_interrupted
+            else str(entry.get("stopReason", "") or "")
+        )
+        return _Task(
+            snapshot,
+            prompt,
+            restored_config,
+            pending_followup=pending_followup,
+            stop_reason=stop_reason,
+        )
 
     def _persist_tasks_locked(self) -> None:
-        """Atomically persist metadata; API keys are deliberately omitted."""
+        """Atomically persist metadata; API keys and full events are omitted."""
         payload = {
-            "version": 1,
-            "tasks": [self._task_to_dict(self._tasks[task_id]) for task_id in self._order if task_id in self._tasks],
+            "version": 2,
+            "tasks": [
+                self._task_to_dict(self._tasks[task_id])
+                for task_id in self._order
+                if task_id in self._tasks
+            ],
         }
         try:
             self.tasks_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -1308,23 +2199,28 @@ class CodexManager:
             temporary = Path(temporary_name)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                    json.dump(payload, handle, ensure_ascii=False, separators=(",", ":"))
+                    json.dump(
+                        payload,
+                        handle,
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
                     handle.write("\n")
                 os.chmod(temporary, 0o600)
                 os.replace(temporary, self.tasks_path)
             finally:
                 temporary.unlink(missing_ok=True)
         except OSError:
-            # Task execution must continue even if diagnostics storage is unavailable.
             LOGGER.warning("无法保存 Codex 任务元数据", exc_info=True)
 
     @staticmethod
     def _task_to_dict(task: _Task) -> dict[str, Any]:
         config = task.config
         return {
-            "snapshot": task.snapshot.to_dict(),
+            "snapshot": task.snapshot.to_dict(include_events=False),
             "prompt": task.prompt,
             "pendingFollowup": task.pending_followup,
+            "stopReason": task.stop_reason,
             "config": {
                 "workspace": config.workspace,
                 "baseUrl": config.base_url,
@@ -1337,32 +2233,60 @@ class CodexManager:
         }
 
     def _snapshot(self, task: _Task, active: int | None = None) -> Snapshot:
-        current_active = active if active is not None else (self._active_count() if task.snapshot.status == "running" else 0)
-        return _replace_snapshot(task.snapshot, active=current_active, events=tuple(task.snapshot.events))
+        current_active = (
+            active
+            if active is not None
+            else (self._active_count() if task.snapshot.status == "running" else 0)
+        )
+        process_alive = (
+            _pid_exists(task.snapshot.process_id)
+            if task.snapshot.process_id > 0
+            else False
+        )
+        if process_alive != task.snapshot.process_alive:
+            task.snapshot = _replace_snapshot(
+                task.snapshot, process_alive=process_alive
+            )
+        return _replace_snapshot(
+            task.snapshot,
+            active=current_active,
+            events=tuple(task.snapshot.events),
+        )
 
     def _active_count(self) -> int:
         return sum(task.snapshot.status == "running" for task in self._tasks.values())
 
     def _refresh_queue_positions(self) -> None:
-        # queue.Queue has no stable iteration API; derive ordering from _order.
         position = 0
         for task_id in self._order:
             task = self._tasks.get(task_id)
             if task is not None and task.snapshot.status == "queued":
                 position += 1
-                task.snapshot = _replace_snapshot(task.snapshot, queue_position=position)
+                task.snapshot = _replace_snapshot(
+                    task.snapshot, queue_position=position
+                )
 
     def _trim_history(self) -> None:
         while len(self._order) > MAX_TASK_HISTORY:
             oldest = self._order[0]
             task = self._tasks.get(oldest)
-            if task is not None and task.snapshot.status in {"queued", "running"}:
+            if task is not None and task.snapshot.status in {
+                "queued",
+                "running",
+                "interrupted",
+            }:
                 return
             self._tasks.pop(oldest, None)
             self._order.pop(0)
 
 
-def _invoke_runner(runner: object, config: ProcessConfig, prompt: str, on_event: Callable[[Event], None], cancel_event: threading.Event | None) -> ProcessResult:
+def _invoke_runner(
+    runner: object,
+    config: ProcessConfig,
+    prompt: str,
+    on_event: Callable[[Event], None],
+    cancel_event: threading.Event | None,
+) -> ProcessResult:
     method = getattr(runner, "run")
     try:
         result = method(config, prompt, on_event, cancel_event)
@@ -1374,13 +2298,28 @@ def _invoke_runner(runner: object, config: ProcessConfig, prompt: str, on_event:
     if isinstance(result, tuple) and len(result) == 2:
         result, runner_error = result
         if isinstance(result, ProcessResult):
-            return ProcessResult(result.exit_code, result.output, result.session_id, str(runner_error or result.error or ""))
+            return ProcessResult(
+                result.exit_code,
+                result.output,
+                result.session_id,
+                str(runner_error or result.error or ""),
+            )
         if runner_error:
             return ProcessResult(-1, error=str(runner_error))
     if isinstance(result, ProcessResult):
-        return ProcessResult(result.exit_code, result.output, result.session_id, str(result.error) if result.error else "")
+        return ProcessResult(
+            result.exit_code,
+            result.output,
+            result.session_id,
+            str(result.error) if result.error else "",
+        )
     if isinstance(result, Mapping):
-        return ProcessResult(int(result.get("exit_code", 0)), str(result.get("output", "")), str(result.get("session_id", "")), str(result.get("error", "")))
+        return ProcessResult(
+            int(result.get("exit_code", 0)),
+            str(result.get("output", "")),
+            str(result.get("session_id", "")),
+            str(result.get("error", "")),
+        )
     return ProcessResult(0, str(result or ""))
 
 
@@ -1400,32 +2339,13 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         for item in raw_events[-MAX_TASK_EVENTS:]:
             if not isinstance(item, Mapping):
                 continue
-            at = _parse_time(item.get("at"))
-            if at is None:
-                continue
-            raw_usage = item.get("usage")
-            usage = (
-                _token_usage_from_mapping(raw_usage)
-                if isinstance(raw_usage, Mapping)
-                else None
-            )
-            kind = str(item.get("kind", "event") or "event")
-            summary = truncate_event_summary(str(item.get("summary", "") or ""))
-            session_id = str(item.get("sessionId", "") or "")
-            legacy_event = parse_event_line(summary, at)
-            if legacy_event.kind == kind and legacy_event.summary != summary:
-                summary = legacy_event.summary
-                session_id = session_id or legacy_event.session_id
-                usage = usage or legacy_event.usage
-            if usage is None:
-                usage = _token_usage_from_summary(summary)
-            events.append(Event(at, kind, summary, session_id, usage))
+            event = _event_from_dict(item)
+            if event is not None:
+                events.append(event)
     event_usage, event_completed_turns = _aggregate_event_usage(events)
     raw_usage = raw.get("usage")
     persisted_usage = (
-        _token_usage_from_mapping(raw_usage)
-        if isinstance(raw_usage, Mapping)
-        else None
+        _token_usage_from_mapping(raw_usage) if isinstance(raw_usage, Mapping) else None
     )
     usage = persisted_usage or event_usage
     completed_turns = _nonnegative_int(raw.get("completedTurns"))
@@ -1433,9 +2353,23 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         completed_turns = event_completed_turns
     created_at = _parse_time(raw.get("createdAt")) or datetime.now(timezone.utc)
     status = str(raw.get("status", "failed") or "failed")
-    allowed_statuses = {"queued", "running", "completed", "failed", "canceled"}
+    allowed_statuses = {
+        "queued",
+        "running",
+        "completed",
+        "failed",
+        "canceled",
+        "interrupted",
+    }
     if status not in allowed_statuses:
         status = "failed"
+    raw_pending = raw.get("pendingMessage")
+    pending = raw_pending if isinstance(raw_pending, Mapping) else {}
+    process_id = _nonnegative_int(raw.get("processId"))
+    log_count = _nonnegative_int(raw.get("logCount")) or len(events)
+    next_sequence = _nonnegative_int(raw.get("nextEventSequence"))
+    if next_sequence <= 0:
+        next_sequence = max((event.sequence for event in events), default=0) + 1
     return Snapshot(
         id=task_id,
         exercise_id=int(raw.get("exerciseId", 0) or 0),
@@ -1456,6 +2390,24 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         parent_id=str(raw.get("parentTaskId", "") or ""),
         usage=usage,
         completed_turns=completed_turns,
+        title=str(raw.get("title", "") or ""),
+        source_message=str(raw.get("sourceMessage", "") or ""),
+        log_count=log_count,
+        first_event_at=_parse_time(raw.get("firstEventAt")),
+        last_event_at=_parse_time(raw.get("lastEventAt")),
+        next_event_sequence=next_sequence,
+        current_round=_nonnegative_int(raw.get("currentRound")),
+        rounds_started=_nonnegative_int(raw.get("roundsStarted")),
+        pending_message=str(pending.get("message", "") or ""),
+        pending_status=str(pending.get("status", "") or ""),
+        pending_created_at=_parse_time(pending.get("createdAt")),
+        pending_started_at=_parse_time(pending.get("startedAt")),
+        interrupted_at=_parse_time(raw.get("interruptedAt")),
+        interruption_count=_nonnegative_int(raw.get("interruptionCount")),
+        last_resumed_at=_parse_time(raw.get("lastResumedAt")),
+        process_id=process_id,
+        process_alive=bool(raw.get("processAlive", False)),
+        process_started_at=_parse_time(raw.get("processStartedAt")),
     )
 
 
@@ -1469,7 +2421,14 @@ def _parse_time(value: Any) -> datetime | None:
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
-def writeup_path_for(workspace_root: Path, root: Path, prompt: PromptResult, exercise_id: int, task_id: str, mode: str) -> str:
+def writeup_path_for(
+    workspace_root: Path,
+    root: Path,
+    prompt: PromptResult,
+    exercise_id: int,
+    task_id: str,
+    mode: str,
+) -> str:
     category = safe_path_part(prompt.category, "Uncategorized")
     name = safe_path_part(prompt.exercise_name, f"exercise-{exercise_id}")
     marker = "codex-pure" if mode == "pure" else "codex"
@@ -1518,7 +2477,10 @@ def challenge_path_from_writeup(writeup_path: str, task_id: str, mode: str) -> s
 
 def safe_path_part(value: str, fallback: str) -> str:
     value = value.strip()
-    chars = [char if (char.isascii() and (char.isalnum() or char in "-_.")) else "_" for char in value]
+    chars = [
+        char if (char.isascii() and (char.isalnum() or char in "-_.")) else "_"
+        for char in value
+    ]
     result = "".join(chars).strip("._")
     return result or fallback
 
@@ -1532,7 +2494,9 @@ def _task_message(value: str) -> str:
     return message
 
 
-def write_atomic(relative_or_absolute: str, workspace_root: Path, data: bytes, mode: int = 0o600) -> None:
+def write_atomic(
+    relative_or_absolute: str, workspace_root: Path, data: bytes, mode: int = 0o600
+) -> None:
     path = Path(relative_or_absolute)
     if not path.is_absolute():
         path = workspace_root / path
@@ -1548,6 +2512,108 @@ def write_atomic(relative_or_absolute: str, workspace_root: Path, data: bytes, m
         temporary.unlink(missing_ok=True)
 
 
+def _event_from_dict(raw: Mapping[str, Any]) -> Event | None:
+    at = _parse_time(raw.get("at"))
+    if at is None:
+        return None
+    raw_usage = raw.get("usage")
+    usage = (
+        _token_usage_from_mapping(raw_usage) if isinstance(raw_usage, Mapping) else None
+    )
+    kind = str(raw.get("kind", "event") or "event")
+    summary = str(raw.get("summary", "") or "")
+    session_id = str(raw.get("sessionId", "") or "")
+    legacy_event = parse_event_line(summary, at)
+    if legacy_event.kind == kind and legacy_event.summary != summary:
+        summary = legacy_event.summary
+        session_id = session_id or legacy_event.session_id
+        usage = usage or legacy_event.usage
+    if usage is None:
+        usage = _token_usage_from_summary(summary)
+    raw_exit_code = raw.get("exitCode")
+    exit_code: int | None = None
+    if raw_exit_code is not None and not isinstance(raw_exit_code, bool):
+        try:
+            exit_code = int(raw_exit_code)
+        except (TypeError, ValueError):
+            exit_code = None
+    raw_metadata = raw.get("metadata")
+    metadata: Mapping[str, Any] = (
+        dict(raw_metadata) if isinstance(raw_metadata, Mapping) else {}
+    )
+    repeat_count = max(1, _nonnegative_int(raw.get("repeatCount")))
+    raw_duration = raw.get("durationSeconds")
+    duration_seconds: float | None = None
+    if raw_duration is not None and not isinstance(raw_duration, bool):
+        try:
+            duration_seconds = max(0.0, float(raw_duration))
+        except (TypeError, ValueError):
+            duration_seconds = None
+    return Event(
+        at=at,
+        kind=kind,
+        summary=summary,
+        session_id=session_id,
+        usage=usage,
+        sequence=_nonnegative_int(raw.get("sequence")),
+        round_number=_nonnegative_int(raw.get("roundNumber")),
+        envelope_type=str(raw.get("envelopeType", "") or ""),
+        item_id=str(raw.get("itemId", "") or ""),
+        status=str(raw.get("status", "") or ""),
+        command=str(raw.get("command", "") or ""),
+        output=str(raw.get("output", "") or ""),
+        exit_code=exit_code,
+        started_at=_parse_time(raw.get("startedAt")),
+        finished_at=_parse_time(raw.get("finishedAt")),
+        duration_seconds=duration_seconds,
+        repeat_count=repeat_count,
+        metadata=metadata,
+    )
+
+
+def read_events(path: Path) -> Iterable[Event]:
+    try:
+        handle = path.open("r", encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        return ()
+
+    def iterator() -> Iterable[Event]:
+        with handle:
+            for line in handle:
+                try:
+                    raw = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(raw, Mapping):
+                    continue
+                event = _event_from_dict(raw)
+                if event is not None:
+                    yield event
+
+    return iterator()
+
+
+def _message_summary(message: str, max_length: int = 80) -> str:
+    collapsed = " ".join(message.strip().split())
+    if len(collapsed) <= max_length:
+        return collapsed
+    return collapsed[: max(1, max_length - 1)].rstrip() + "…"
+
+
+def _pid_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
 def write_events(path: Path, events: Iterable[Event]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd, temporary_name = tempfile.mkstemp(prefix=".events-part-", dir=str(path.parent))
@@ -1555,7 +2621,12 @@ def write_events(path: Path, events: Iterable[Event]) -> None:
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             for event in events:
-                handle.write(json.dumps(event.to_dict(), ensure_ascii=False, separators=(",", ":")) + "\n")
+                handle.write(
+                    json.dumps(
+                        event.to_dict(), ensure_ascii=False, separators=(",", ":")
+                    )
+                    + "\n"
+                )
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

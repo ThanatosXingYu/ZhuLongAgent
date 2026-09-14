@@ -84,6 +84,7 @@ def build_application(config: Config | None = None) -> FastAPI:
             workspace_root=workspace,
             system_prompt=runtime.codex_system_prompt,
             tasks_path=runtime_root / "codex" / "tasks.json",
+            auto_resume_interrupted=runtime.codex_auto_resume_interrupted,
         )
     )
     app = create_app(
@@ -118,6 +119,7 @@ def build_application(config: Config | None = None) -> FastAPI:
             ),
             updated.codex_max_concurrency,
             updated.codex_system_prompt,
+            updated.codex_auto_resume_interrupted,
         )
 
     config_store.subscribe(apply_runtime_config)

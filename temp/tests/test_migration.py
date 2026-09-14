@@ -1640,7 +1640,7 @@ def test_codex_task_metadata_survives_restart_without_api_key(tmp_path: Path) ->
     recovered = restored.get(task.id)
     assert recovered.status == "completed"
     assert recovered.session_id == "session-persisted"
-    assert recovered.events[0].summary == "persisted"
+    assert any(event.summary == "persisted" for event in recovered.events)
     restored.close()
 
 
@@ -2086,3 +2086,367 @@ def test_codex_process_rejects_home_outside_workspace(tmp_path: Path) -> None:
 
     with pytest.raises(CodexError, match="inside the workspace"):
         _prepare_codex_home(config)
+
+
+def test_codex_command_events_preserve_lifecycle_metadata() -> None:
+    started_at = datetime.now(timezone.utc)
+    started = parse_event_line(
+        json.dumps(
+            {
+                "type": "item.started",
+                "item": {
+                    "id": "command-1",
+                    "type": "command_execution",
+                    "command": "python solve.py\n--verbose",
+                    "status": "in_progress",
+                },
+            }
+        ),
+        started_at,
+    )
+    completed = parse_event_line(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "command-1",
+                    "type": "command_execution",
+                    "command": "python solve.py\n--verbose",
+                    "aggregated_output": "flag{done}\n",
+                    "status": "completed",
+                    "exit_code": 0,
+                },
+            }
+        )
+    )
+
+    assert started.item_id == completed.item_id == "command-1"
+    assert started.envelope_type == "item.started"
+    assert started.started_at == started_at
+    assert completed.envelope_type == "item.completed"
+    assert completed.output == "flag{done}\n"
+    assert completed.exit_code == 0
+    assert completed.finished_at is not None
+
+
+def test_codex_full_log_persistence_pagination_and_exports(tmp_path: Path) -> None:
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult("prompt", False, "", exercise_id, "Web", "logging")
+
+    class Runner:
+        def run(
+            self, config: ProcessConfig, _prompt: str, on_event, _cancel
+        ) -> ProcessResult:
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("done", encoding="utf-8")
+            for index in range(140):
+                on_event(
+                    Event(
+                        datetime.now(timezone.utc),
+                        "stdout",
+                        f"persistent-event-{index}",
+                    )
+                )
+            on_event(
+                Event(
+                    datetime.now(timezone.utc),
+                    "command_execution",
+                    "python large-output.py",
+                    item_id="large-command",
+                    status="completed",
+                    command="python large-output.py",
+                    output="x" * 1_100_000,
+                    exit_code=0,
+                )
+            )
+            return ProcessResult(0, "done", "session-logs")
+
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            Runner(),
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    task = manager.start(7)
+    for _ in range(200):
+        if manager.get(task.id).status == "completed":
+            break
+        time.sleep(0.01)
+
+    completed = manager.get(task.id)
+    complete_json = manager.log_json(task.id)
+    assert completed.status == "completed"
+    assert len(completed.events) == 128
+    assert completed.log_count == len(complete_json) == 144
+    assert completed.first_event_at is not None
+    assert completed.first_event_at == datetime.fromisoformat(
+        complete_json[0]["at"].replace("Z", "+00:00")
+    )
+    assert complete_json[-2]["output"] == "x" * 1_100_000
+    assert "persistent-event-0" in manager.log_text(task.id)
+    assert "persistent-event-139" in manager.log_text(task.id)
+
+    newest = manager.events_page(task.id, limit=20)
+    older = manager.events_page(task.id, before=newest["nextBefore"], limit=20)
+    assert len(newest["events"]) == len(older["events"]) == 20
+    assert newest["hasMore"] is True
+    assert older["events"][-1]["sequence"] < newest["events"][0]["sequence"]
+    assert newest["total"] == completed.log_count
+    list_wire = manager.list().to_dict()["tasks"][0]
+    detail_wire = completed.to_dict()
+    assert "events" not in list_wire
+    assert len(detail_wire["events"]) == 128
+    assert len((tmp_path / "runs" / task.id / "events.jsonl").read_text(encoding="utf-8").splitlines()) == completed.log_count
+    manager.close()
+
+
+def test_codex_pending_message_can_be_edited_and_canceled(tmp_path: Path) -> None:
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult("prompt", False, "", exercise_id, "Web", "pending")
+
+    class Runner:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def run(
+            self, config: ProcessConfig, _prompt: str, on_event, _cancel
+        ) -> ProcessResult:
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("done", encoding="utf-8")
+            on_event(
+                Event(
+                    datetime.now(timezone.utc),
+                    "thread.started",
+                    "session",
+                    session_id="session-pending",
+                )
+            )
+            self.started.set()
+            assert self.release.wait(timeout=5)
+            return ProcessResult(0, "done", "session-pending")
+
+    runner = Runner()
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            runner,
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    task = manager.start(7)
+    assert runner.started.wait(timeout=2)
+    queued = manager.follow_up(task.id, "first pending")
+    assert queued.pending_message == "first pending"
+    assert queued.pending_status == "ending_previous"
+    with pytest.raises(CodexError, match="已经有一条待处理消息"):
+        manager.follow_up(task.id, "duplicate pending")
+
+    updated = manager.update_pending_message(task.id, "edited pending")
+    assert updated.pending_message == "edited pending"
+    canceled = manager.cancel_pending_message(task.id)
+    assert canceled.pending_message == ""
+    assert canceled.pending_status == ""
+    runner.release.set()
+    for _ in range(100):
+        if manager.get(task.id).status == "completed":
+            break
+        time.sleep(0.01)
+    kinds = [event["kind"] for event in manager.log_json(task.id)]
+    assert "user.followup_queued" in kinds
+    assert "user.followup_updated" in kinds
+    assert "user.followup_canceled" in kinds
+    manager.close()
+
+
+def test_codex_interrupted_task_recovers_in_place_and_auto_resume_is_persisted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task_id = "b" * 24
+    tasks_path = tmp_path / "runtime" / "codex" / "tasks.json"
+    tasks_path.parent.mkdir(parents=True)
+    snapshot = Snapshot(
+        task_id,
+        7,
+        "full",
+        "running",
+        session_id="session-interrupted",
+        title="Cold Forge",
+        process_id=424242,
+        process_alive=True,
+        current_round=1,
+        rounds_started=1,
+    )
+    tasks_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "tasks": [
+                    {
+                        "snapshot": snapshot.to_dict(include_events=False),
+                        "prompt": "original",
+                        "config": {
+                            "outputPath": str(tmp_path / "runs" / task_id / "final.md"),
+                            "resumeSessionId": "session-interrupted",
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("internal.codex._pid_exists", lambda _pid: False)
+
+    class Prompt:
+        def prompt(self, _exercise_id: int):
+            raise AssertionError("restored tasks must not rebuild the challenge prompt")
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[ProcessConfig] = []
+
+        def run(
+            self, config: ProcessConfig, _prompt: str, _on_event, _cancel
+        ) -> ProcessResult:
+            self.calls.append(config)
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("resumed", encoding="utf-8")
+            return ProcessResult(0, "resumed", "session-interrupted")
+
+    runner = Runner()
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            runner,
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+            tasks_path=tasks_path,
+        )
+    )
+    interrupted = manager.get(task_id)
+    assert interrupted.status == "interrupted"
+    assert interrupted.interruption_count == 1
+    assert interrupted.interrupted_at is not None
+    assert interrupted.process_alive is False
+
+    resumed = manager.resume_interrupted(task_id)
+    assert resumed.id == task_id
+    assert resumed.status == "queued"
+    for _ in range(100):
+        if manager.get(task_id).status == "completed":
+            break
+        time.sleep(0.01)
+    completed = manager.get(task_id)
+    assert completed.id == task_id
+    assert completed.session_id == "session-interrupted"
+    assert completed.last_resumed_at is not None
+    assert runner.calls[0].resume_session_id == "session-interrupted"
+    manager.close()
+
+    config_path = tmp_path / ".runtime-config.json"
+    store = RuntimeConfigStore(Config(), config_path)
+    updated = store.update({"codex_auto_resume_interrupted": True})
+    assert updated.codex_auto_resume_interrupted is True
+    assert store.public()["codexAutoResumeInterrupted"] is True
+    assert RuntimeConfigStore(Config(), config_path).get().codex_auto_resume_interrupted is True
+
+
+def test_codex_side_conversation_uses_question_summary_and_source(tmp_path: Path) -> None:
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult("prompt", False, "", exercise_id, "Web", "Cold Forge")
+
+    class Runner:
+        def run(
+            self, config: ProcessConfig, prompt: str, _on_event, _cancel
+        ) -> ProcessResult:
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("done", encoding="utf-8")
+            return ProcessResult(0, prompt, "session-side")
+
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            Runner(),
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    parent = manager.start(7)
+    for _ in range(100):
+        if manager.get(parent.id).status == "completed":
+            break
+        time.sleep(0.01)
+    question = "请只分析 Cold Forge 的密钥派生逻辑，并列出下一步验证方案"
+    side = manager.side(parent.id, question)
+    assert side.parent_id == parent.id
+    assert side.title == question
+    assert side.source_message == question
+    for _ in range(100):
+        if manager.get(side.id).status == "completed":
+            break
+        time.sleep(0.01)
+    assert manager.follow_up(side.id, "继续验证").id == side.id
+    with pytest.raises(CodexError, match="不能继续创建 Side"):
+        manager.side(side.id, "再次分支")
+    manager.close()
+
+
+def test_codex_frontend_contains_tree_round_log_and_filter_controls() -> None:
+    root = Path(__file__).parents[2]
+    script = (root / "static" / "app.js").read_text(encoding="utf-8")
+    page = (root / "static" / "index.html").read_text(encoding="utf-8")
+
+    for marker in (
+        "normalizeCodexEvents",
+        "mergeCodexEventLists",
+        "renderCodexTaskList",
+        "renderCodexPendingMessage",
+        "loadEarlierCodexEvents",
+        "codexCollapsedRounds",
+        "codexExpandedEvents",
+        "codexExerciseActivity",
+        "exerciseMatchesFilters",
+    ):
+        assert marker in script
+    for element_id in (
+        "codex-load-earlier",
+        "codex-collapse-all",
+        "codex-expand-all",
+        "codex-prev-round",
+        "codex-next-round",
+        "codex-latest-round",
+        "codex-pending-message",
+        "codex-more-menu",
+        "rename-codex-task",
+        "copy-codex-log",
+        "export-codex-json",
+        "exercise-search",
+        "filter-unsolved",
+        "filter-attachment",
+        "filter-environment",
+    ):
+        assert f'id="{element_id}"' in page

@@ -73,15 +73,25 @@
 
   <main class="workspace">
     <aside class="panel exercise-panel" aria-labelledby="exercise-heading">
-      <header class="panel-header">
+      <header class="panel-header exercise-panel-header">
         <div class="heading-group">
           <h2 id="exercise-heading">题目</h2>
           <span id="exercise-count" class="count-badge">0</span>
+        </div>
+        <div class="exercise-quick-filters" role="group" aria-label="题目快捷筛选">
+          <button id="filter-unsolved" class="filter-chip" type="button" aria-pressed="false">未解决</button>
+          <button id="filter-attachment" class="filter-chip" type="button" aria-pressed="false">附件题</button>
+          <button id="filter-environment" class="filter-chip" type="button" aria-pressed="false">容器题</button>
         </div>
         <button id="refresh-exercises" class="icon-button" type="button" title="刷新题目列表" aria-label="刷新题目列表">
           <i data-lucide="refresh-cw" aria-hidden="true"></i>
         </button>
       </header>
+      <div class="exercise-search-bar">
+        <i data-lucide="search" aria-hidden="true"></i>
+        <input id="exercise-search" type="search" autocomplete="off" placeholder="搜索名称、编号或分类" aria-label="搜索题目">
+        <button id="reset-exercise-filters" class="icon-button" type="button" title="重置搜索和筛选" aria-label="重置搜索和筛选" hidden><i data-lucide="x"></i></button>
+      </div>
       <div id="exercise-list" class="exercise-list" aria-live="polite">
         <div class="list-skeleton" aria-label="正在加载题目">
           <span></span><span></span><span></span><span></span>
@@ -400,6 +410,11 @@
             <span>启用 CTF 技能包（默认开启）</span>
           </label>
           <p class="settings-section-note">技能源位于当前项目的 tools/skills，启动任务时会复制到本项目专用的 runtime/codex；关闭后新任务不会加载。</p>
+          <label class="settings-checkbox" for="setting-codex-auto-resume">
+            <input id="setting-codex-auto-resume" name="codexAutoResumeInterrupted" type="checkbox">
+            <span>程序启动后自动恢复被中断的 Codex 任务</span>
+          </label>
+          <p class="settings-section-note">默认关闭。开启后仅恢复仍有 Session ID 且原 Codex 子进程已经消失的任务，并继续沿用原任务与会话记录。</p>
         </section>
         <section class="settings-section settings-section-optional">
           <h3>快捷 AI 调用 <span class="optional-badge">可选</span></h3>
@@ -590,60 +605,76 @@
     <header class="dialog-header">
       <div>
         <p class="eyebrow">Local Codex Runner</p>
-        <h2 id="codex-task-title">Codex 任务</h2>
+        <h2 id="codex-task-title">Codex 会话树</h2>
       </div>
       <button id="close-codex-tasks" class="icon-button" type="button" title="关闭" aria-label="关闭 Codex 任务">
         <i data-lucide="x" aria-hidden="true"></i>
       </button>
     </header>
     <div class="codex-task-layout">
-      <aside id="codex-task-list" class="codex-task-list" aria-label="Codex 任务列表" aria-live="polite">
+      <aside id="codex-task-list" class="codex-task-list" aria-label="Codex 会话树" aria-live="polite">
         <div class="empty-state compact">暂无 Codex 任务</div>
       </aside>
       <section class="codex-task-detail" aria-live="polite">
         <div class="codex-task-detail-header">
-          <div>
+          <div class="codex-task-heading-copy">
             <p id="codex-task-status" class="codex-task-status">选择一个任务</p>
             <p id="codex-task-meta" class="codex-task-meta">--</p>
             <p id="codex-task-resume" class="codex-task-resume" hidden>--</p>
           </div>
           <div class="codex-task-detail-actions">
-            <button id="continue-codex-task" class="button button-primary" type="button" disabled>
+            <button id="codex-primary-action" class="button button-primary" type="button" disabled>
               <i data-lucide="play" aria-hidden="true"></i>
               <span>继续</span>
             </button>
-            <button id="cancel-codex-task" class="button button-danger" type="button" disabled>
-              <i data-lucide="square" aria-hidden="true"></i>
-              <span>停止任务</span>
+            <button id="codex-task-compose" class="button button-ghost" type="button" disabled>
+              <i data-lucide="message-square-plus" aria-hidden="true"></i>
+              <span>再次输入</span>
             </button>
-            <button id="delete-codex-task" class="button button-ghost" type="button" disabled>
-              <i data-lucide="trash-2" aria-hidden="true"></i>
-              <span>删除任务</span>
-            </button>
-            <button id="open-codex-terminal" class="button button-ghost" type="button" disabled title="在系统终端中恢复此 Codex 对话">
-              <i data-lucide="external-link" aria-hidden="true"></i>
-              <span>打开对话</span>
-            </button>
-            <button id="open-codex-folder" class="button button-ghost" type="button" disabled title="在文件管理器中打开当前题目的工作目录">
-              <i data-lucide="folder-open" aria-hidden="true"></i>
-              <span>题目目录</span>
-            </button>
-            <button id="show-codex-task-details" class="button button-ghost" type="button" disabled title="查看当前 Codex 任务的完整运行详情">
-              <i data-lucide="info" aria-hidden="true"></i>
-              <span>详情</span>
-            </button>
+            <details id="codex-more-menu" class="codex-more-menu">
+              <summary class="button button-ghost" aria-label="更多 Codex 操作">
+                <i data-lucide="more-horizontal" aria-hidden="true"></i>
+                <span>更多</span>
+              </summary>
+              <div class="codex-more-menu-popover">
+                <button id="codex-return-parent" type="button"><i data-lucide="corner-up-left"></i><span>返回父对话</span></button>
+                <button id="open-codex-terminal" type="button"><i data-lucide="external-link"></i><span>打开对话</span></button>
+                <button id="open-codex-folder" type="button"><i data-lucide="folder-open"></i><span>题目目录</span></button>
+                <button id="show-codex-task-details" type="button"><i data-lucide="info"></i><span>查看详情</span></button>
+                <button id="rename-codex-task" type="button"><i data-lucide="pencil"></i><span>重命名对话</span></button>
+                <div class="codex-menu-separator"></div>
+                <button id="copy-codex-log" type="button"><i data-lucide="copy"></i><span>复制完整日志</span></button>
+                <button id="download-codex-log" type="button"><i data-lucide="download"></i><span>下载纯文本日志</span></button>
+                <button id="export-codex-json" type="button"><i data-lucide="braces"></i><span>导出 JSON 日志</span></button>
+                <button id="open-codex-log-file" type="button"><i data-lucide="file-output"></i><span>打开原始日志文件</span></button>
+                <button id="finish-codex-task" type="button"><i data-lucide="circle-stop"></i><span>标记结束</span></button>
+                <div class="codex-menu-separator"></div>
+                <button id="delete-codex-task" class="is-danger" type="button"><i data-lucide="trash-2"></i><span>删除任务</span></button>
+              </div>
+            </details>
           </div>
         </div>
-        <div class="codex-task-output-group">
-          <h3>运行日志</h3>
+        <div class="codex-task-output-group codex-log-group">
+          <div class="codex-log-heading">
+            <h3>运行日志</h3>
+            <div class="codex-log-actions">
+              <button id="codex-load-earlier" class="button button-ghost button-compact" type="button" disabled>加载更早记录</button>
+              <button id="codex-collapse-all" class="icon-button" type="button" title="全部折叠" aria-label="全部折叠"><i data-lucide="fold-vertical"></i></button>
+              <button id="codex-expand-all" class="icon-button" type="button" title="全部展开" aria-label="全部展开"><i data-lucide="unfold-vertical"></i></button>
+              <button id="codex-prev-round" class="icon-button" type="button" title="上一轮" aria-label="上一轮"><i data-lucide="chevron-up"></i></button>
+              <button id="codex-next-round" class="icon-button" type="button" title="下一轮" aria-label="下一轮"><i data-lucide="chevron-down"></i></button>
+              <button id="codex-latest-round" class="button button-ghost button-compact" type="button">最新一轮</button>
+            </div>
+          </div>
           <div id="codex-task-events" class="codex-task-events">尚未选择任务</div>
         </div>
-        <div class="codex-task-output-group">
-          <h3>最终输出</h3>
+        <details class="codex-task-output-group codex-final-output">
+          <summary>最终输出</summary>
           <pre id="codex-task-output" class="codex-task-output">尚未完成</pre>
-        </div>
+        </details>
         <div class="codex-task-message-box">
-          <label for="codex-task-message">继续对话 / Side 提问</label>
+          <div id="codex-pending-message" class="codex-pending-message" hidden></div>
+          <label for="codex-task-message">继续当前会话 / 创建 Side 分支</label>
           <textarea id="codex-task-message" rows="3" maxlength="16000" placeholder="输入要发送给当前 Codex 会话的内容"></textarea>
           <div class="codex-task-message-actions">
             <button id="codex-task-follow-up" class="button button-primary" type="button" disabled>再次输入</button>
@@ -653,6 +684,7 @@
       </section>
     </div>
   </dialog>
+
 
   <dialog id="codex-task-details-dialog" class="codex-task-details-dialog" aria-labelledby="codex-task-details-title">
     <header class="dialog-header">
