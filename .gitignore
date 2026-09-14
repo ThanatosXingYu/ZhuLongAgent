@@ -1,0 +1,53 @@
+# Keep the original Go project as a local reference only.
+/gcsisTools/
+
+# Local environments, dependency caches, and build output.
+/.venv/
+/.python-env/
+/pip-cache/
+**/__pycache__/
+*.py[cod]
+/.pytest_cache/
+/.ruff_cache/
+/.mypy_cache/
+/.local-inspect/
+/.coverage
+/coverage.xml
+/htmlcov/
+/build/
+/dist/
+/*.egg-info/
+
+# Workspace-local configuration and generated runtime data.
+/.env
+/.runtime-config.json
+/.runtime-config.json.*
+/runtime/
+/cache/
+/temp/*
+!/temp/tests/
+!/temp/tests/**
+/temp/tests/**/__pycache__/
+/temp/tests/**/*.py[cod]
+/download/
+/writeups/
+/codex-runs/
+/.codex-home/
+/.tools/
+# Tools are installed locally and remain untracked, except for the bundled
+# skill sources required to prepare a workspace-local Codex environment.
+/tools/*
+!/tools/skills/
+!/tools/skills/ctf-skills/
+!/tools/skills/ctf-skills/**
+!/tools/dictionaries/
+!/tools/dictionaries/**
+/pip-cache/
+*.log
+*.pid
+*.part-*
+
+# Editor and operating-system noise.
+.DS_Store
+/.idea/
+/.vscode/

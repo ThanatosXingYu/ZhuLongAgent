@@ -1,0 +1,14 @@
+[project]
+name = "gcsis-tools-python"
+version = "0.1.0"
+description = "Python rewrite of the CTF competition workbench"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi==0.141.1",
+  "uvicorn==0.52.0",
+  "pydantic==2.13.4",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["temp/tests"]
+pythonpath = ["."]

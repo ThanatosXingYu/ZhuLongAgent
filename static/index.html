@@ -1,0 +1,678 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>CTF 比赛工作台</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand-block">
+        <span class="brand-mark" aria-hidden="true"><i data-lucide="terminal"></i></span>
+        <div>
+          <h1>赛场控制台</h1>
+          <div id="connection-status" class="connection-status is-connecting" role="status">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span class="connection-label">正在连接</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="topbar-overview">
+        <dl class="scoreboard" aria-label="比赛成绩">
+          <div class="metric">
+            <dt>得分</dt>
+            <dd id="score-value">--</dd>
+          </div>
+          <div class="metric">
+            <dt>排名</dt>
+            <dd><span class="rank-prefix">#</span><span id="rank-value">--</span></dd>
+          </div>
+        </dl>
+        <div class="overview-status" aria-live="polite">
+          <span id="team-summary" class="team-summary" hidden></span>
+          <span id="overview-updated-at" class="updated-at">尚未更新</span>
+        </div>
+      </div>
+
+      <div class="topbar-actions">
+        <button id="open-match-info" class="button button-ghost" type="button" title="查看比赛规则" aria-label="查看比赛规则">
+          <i data-lucide="book-open" aria-hidden="true"></i>
+          <span>比赛规则</span>
+        </button>
+        <button id="open-attachment-manager" class="button button-ghost" type="button" title="打开附件管理" aria-label="打开附件管理">
+          <i data-lucide="folder-down" aria-hidden="true"></i>
+          <span>附件管理</span>
+        </button>
+        <button id="open-tool-manager" class="button button-ghost" type="button" title="打开工具管理" aria-label="打开工具管理">
+          <i data-lucide="wrench" aria-hidden="true"></i>
+          <span>工具管理</span>
+        </button>
+        <button id="open-codex-tasks" class="button button-ghost" type="button" title="查看 Codex 任务" aria-label="查看 Codex 任务">
+          <i data-lucide="terminal-square" aria-hidden="true"></i>
+          <span>Codex</span>
+          <span id="codex-active-count" class="codex-active-count">0/5</span>
+        </button>
+        <button id="open-settings" class="icon-button" type="button" title="配置平台与模型" aria-label="配置平台与模型">
+          <i data-lucide="settings-2" aria-hidden="true"></i>
+        </button>
+        <button id="refresh-overview" class="icon-button" type="button" title="刷新得分与排名" aria-label="刷新得分与排名">
+          <i data-lucide="refresh-cw" aria-hidden="true"></i>
+        </button>
+        <label class="switch-row" title="得分与排名自动刷新：每 5 秒">
+          <span>得分/排名每 5 秒刷新</span>
+          <input id="score-auto-refresh" type="checkbox" role="switch" aria-label="得分与排名自动刷新，每 5 秒" checked>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </label>
+      </div>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="panel exercise-panel" aria-labelledby="exercise-heading">
+      <header class="panel-header">
+        <div class="heading-group">
+          <h2 id="exercise-heading">题目</h2>
+          <span id="exercise-count" class="count-badge">0</span>
+        </div>
+        <button id="refresh-exercises" class="icon-button" type="button" title="刷新题目列表" aria-label="刷新题目列表">
+          <i data-lucide="refresh-cw" aria-hidden="true"></i>
+        </button>
+      </header>
+      <div id="exercise-list" class="exercise-list" aria-live="polite">
+        <div class="list-skeleton" aria-label="正在加载题目">
+          <span></span><span></span><span></span><span></span>
+        </div>
+      </div>
+    </aside>
+
+    <section class="panel detail-panel" aria-labelledby="selected-exercise-name">
+      <header class="panel-header detail-header">
+        <div class="detail-title-group">
+          <p class="eyebrow">题目详情</p>
+          <h2 id="selected-exercise-name">暂无已选题目</h2>
+          <div id="exercise-meta" class="meta-row" aria-live="polite"></div>
+        </div>
+        <div class="detail-actions">
+          <button id="open-ai-prompt" class="button button-ghost" type="button" title="生成 AI 解题提示词" disabled>
+            <i data-lucide="bot" aria-hidden="true"></i>
+            <span>AI 提示词</span>
+          </button>
+          <button id="run-codex" class="button button-primary" type="button" title="使用本机 Codex 解题" disabled>
+            <i data-lucide="terminal-square" aria-hidden="true"></i>
+            <span>交给 Codex</span>
+          </button>
+          <button id="run-codex-pure" class="button button-ghost" type="button" title="使用本机 Codex 纯解题（不启动容器、不读文档）" disabled>
+            <i data-lucide="file-search" aria-hidden="true"></i>
+            <span>交给 Codex（纯解题）</span>
+          </button>
+          <button id="refresh-selected-exercise" class="icon-button" type="button" title="刷新当前题目" aria-label="刷新当前题目" disabled>
+            <i data-lucide="refresh-cw" aria-hidden="true"></i>
+          </button>
+          <div id="environment-action" class="environment-action"></div>
+        </div>
+      </header>
+
+      <div id="exercise-detail" class="detail-body" aria-live="polite">
+        <div class="empty-state">
+          <i data-lucide="panel-top-open" aria-hidden="true"></i>
+          <p>暂无题目详情</p>
+        </div>
+      </div>
+
+      <form id="flag-form" class="flag-bar" novalidate>
+        <div class="flag-field">
+          <i data-lucide="flag" aria-hidden="true"></i>
+          <input id="flag-input" name="flag" type="text" maxlength="256" autocomplete="off" spellcheck="false" placeholder="flag{...}" aria-label="Flag" disabled>
+          <span id="flag-length" class="flag-length">0/256</span>
+        </div>
+        <button id="flag-submit" class="button button-primary" type="submit" disabled>
+          <i data-lucide="send" aria-hidden="true"></i>
+          <span>提交</span>
+        </button>
+      </form>
+    </section>
+
+    <aside class="right-rail" aria-label="容器与公告">
+      <section id="active-environment-panel" class="panel active-environment-panel" aria-labelledby="active-environment-heading">
+        <header class="panel-header active-environment-header">
+          <div class="heading-group">
+            <h2 id="active-environment-heading">开启的容器</h2>
+            <span id="active-environment-count" class="count-badge">0</span>
+          </div>
+          <div class="panel-actions">
+            <button id="stop-all-environments" class="button button-danger button-compact" type="button" title="关闭全部容器" aria-label="关闭全部容器" disabled>
+              <i data-lucide="square" aria-hidden="true"></i>
+              <span>全部关闭</span>
+            </button>
+            <button id="refresh-active-environments" class="icon-button" type="button" title="刷新容器状态" aria-label="刷新容器状态">
+              <i data-lucide="refresh-cw" aria-hidden="true"></i>
+            </button>
+          </div>
+        </header>
+        <div id="active-environment-list" class="active-environment-list" aria-live="polite">
+          <div class="empty-state compact">暂无开启的容器</div>
+        </div>
+      </section>
+
+      <section class="panel notice-panel" aria-labelledby="notice-heading">
+        <header class="panel-header notice-header">
+          <div class="heading-group">
+            <h2 id="notice-heading">公告</h2>
+            <span id="notice-count" class="count-badge">0</span>
+          </div>
+          <div class="panel-actions">
+            <label class="compact-switch" title="公告内容自动刷新：每 10 秒；每 10 秒自动刷新公告">
+              <span class="compact-switch-label">公告每 10 秒自动刷新</span>
+              <input id="notice-auto-refresh" type="checkbox" role="switch" aria-label="公告内容自动刷新，每 10 秒" checked>
+              <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+            </label>
+            <button id="refresh-notices" class="icon-button" type="button" title="刷新公告" aria-label="刷新公告">
+              <i data-lucide="refresh-cw" aria-hidden="true"></i>
+            </button>
+          </div>
+        </header>
+        <div id="notice-list" class="notice-list" aria-live="polite">
+          <div class="list-skeleton compact" aria-label="正在加载公告">
+            <span></span><span></span><span></span>
+          </div>
+        </div>
+        <article id="notice-detail" class="notice-detail" aria-live="polite">
+          <div class="empty-state compact">
+            <i data-lucide="megaphone" aria-hidden="true"></i>
+            <p>暂无公告详情</p>
+          </div>
+        </article>
+      </section>
+    </aside>
+  </main>
+
+  <dialog id="match-info-dialog" class="match-dialog" aria-labelledby="match-info-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Competition Info</p>
+        <h2 id="match-info-title">比赛说明</h2>
+      </div>
+      <div class="dialog-actions">
+        <button id="refresh-match-info" class="icon-button" type="button" title="刷新比赛说明" aria-label="刷新比赛说明">
+          <i data-lucide="refresh-cw" aria-hidden="true"></i>
+        </button>
+        <button id="close-match-info" class="icon-button" type="button" title="关闭" aria-label="关闭比赛说明">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+    <div class="dialog-body">
+      <section>
+        <h3>注意事项</h3>
+        <p id="match-note">暂无内容</p>
+      </section>
+      <section>
+        <h3>比赛规则</h3>
+        <p id="match-rule">暂无内容</p>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="settings-dialog" class="settings-dialog" aria-labelledby="settings-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Runtime Configuration</p>
+        <h2 id="settings-title">平台与模型配置</h2>
+      </div>
+      <button id="close-settings" class="icon-button" type="button" title="关闭" aria-label="关闭配置">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="settings-form">
+      <p class="settings-hint">配置仅保存在当前目录。登录 Token 不会在页面回显，账号、密码与验证码不会保存。</p>
+      <section class="settings-section">
+        <div class="settings-section-heading">
+          <h3>i春秋比赛</h3>
+          <div class="platform-auth-actions">
+            <span id="platform-auth-status" class="platform-auth-status">尚未绑定</span>
+            <button id="platform-logout" class="button button-danger button-compact" type="button" hidden>
+              <i data-lucide="log-out" aria-hidden="true"></i>
+              <span>退出账号</span>
+            </button>
+          </div>
+        </div>
+        <form id="match-bind-form" class="platform-binding" novalidate>
+          <label class="settings-field" for="setting-match-url">
+            <span>比赛地址</span>
+            <input id="setting-match-url" name="matchUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://match.ichunqiu.com/wanqubei">
+          </label>
+          <label class="settings-field" for="setting-platform-token">
+            <span>已有登录 Token</span>
+            <input id="setting-platform-token" name="platformToken" type="password" autocomplete="off" placeholder="可选，绑定后不会回显">
+          </label>
+          <div class="platform-bind-row">
+            <span id="platform-bind-status" class="settings-status" role="status"></span>
+            <button id="bind-match" class="button button-primary" type="submit">
+              <i data-lucide="link" aria-hidden="true"></i>
+              <span>绑定比赛</span>
+            </button>
+          </div>
+        </form>
+
+        <dl id="platform-team-info" class="platform-team-info" aria-label="当前参赛信息" hidden>
+          <div data-team-field="teamName">
+            <dt>队伍</dt>
+            <dd id="platform-team-name">--</dd>
+          </div>
+          <div data-team-field="userName">
+            <dt>当前成员</dt>
+            <dd id="platform-user-name">--</dd>
+          </div>
+          <div data-team-field="score">
+            <dt>队伍得分</dt>
+            <dd id="platform-team-score">--</dd>
+          </div>
+          <div data-team-field="rank">
+            <dt>队伍排名</dt>
+            <dd id="platform-team-rank">--</dd>
+          </div>
+          <div data-team-field="memberCount">
+            <dt>成员数</dt>
+            <dd id="platform-member-count">--</dd>
+          </div>
+          <div data-team-field="organization">
+            <dt>学校 / 单位</dt>
+            <dd id="platform-organization">--</dd>
+          </div>
+        </dl>
+
+        <div id="platform-login" class="platform-login" hidden>
+          <div class="login-mode" role="group" aria-label="登录方式">
+            <button id="login-mode-password" class="login-mode-button is-active" type="button" aria-pressed="true">密码登录</button>
+            <button id="login-mode-sms" class="login-mode-button" type="button" aria-pressed="false">短信验证码</button>
+          </div>
+
+          <form id="password-login-form" class="login-panel" novalidate>
+            <label class="settings-field" for="password-account">
+              <span>账号</span>
+              <input id="password-account" name="account" type="text" autocomplete="username" maxlength="128">
+            </label>
+            <label class="settings-field" for="password-value">
+              <span>密码</span>
+              <input id="password-value" name="password" type="password" autocomplete="current-password" maxlength="256">
+            </label>
+            <div id="password-captcha-wrap" class="captcha-row" hidden>
+              <img id="password-captcha" class="password-captcha" alt="i春秋图形验证码">
+              <label class="settings-field compact-field" for="password-image-code">
+                <span>图形验证码</span>
+                <input id="password-image-code" name="imageCode" type="text" autocomplete="off" maxlength="4" pattern="[A-Za-z0-9_]{4}">
+              </label>
+              <button id="refresh-password-captcha" class="icon-button" type="button" title="刷新图形验证码" aria-label="刷新图形验证码">
+                <i data-lucide="refresh-cw" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div class="login-actions">
+              <span id="password-login-status" class="settings-status" role="status"></span>
+              <button id="password-login" class="button button-primary" type="submit">
+                <i data-lucide="log-in" aria-hidden="true"></i>
+                <span>登录</span>
+              </button>
+            </div>
+          </form>
+
+          <form id="sms-login-form" class="login-panel" novalidate hidden>
+            <div class="sms-phone-row">
+              <label class="settings-field compact-field" for="sms-area-id">
+                <span>平台区域标识（自动）</span>
+                <input id="sms-area-id" name="areaId" type="text" autocomplete="off" value="" maxlength="64" readonly>
+              </label>
+              <label class="settings-field compact-field" for="sms-phone">
+                <span>手机号</span>
+                <input id="sms-phone" name="phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="20">
+              </label>
+            </div>
+            <div class="rotate-captcha">
+              <div class="rotate-captcha-stage">
+                <img id="rotate-captcha-image" alt="i春秋旋转验证码">
+              </div>
+              <label class="rotation-control" for="rotate-captcha-angle">
+                <span>旋转角度</span>
+                <input id="rotate-captcha-angle" type="range" min="0" max="360" step="1" value="0">
+                <output id="rotate-captcha-output" for="rotate-captcha-angle">0°</output>
+              </label>
+              <button id="refresh-rotate-captcha" class="icon-button" type="button" title="刷新旋转验证码" aria-label="刷新旋转验证码">
+                <i data-lucide="refresh-cw" aria-hidden="true"></i>
+              </button>
+            </div>
+            <p class="captcha-help">拖动滑块，将左侧图片旋转到自然竖直方向（人物或文字正立），再发送短信验证码。</p>
+            <label class="settings-field" for="sms-code">
+              <span>短信验证码</span>
+              <span class="inline-input-action">
+                <input id="sms-code" name="smsCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8">
+                <button id="send-sms-code" class="button button-ghost" type="button">发送验证码</button>
+              </span>
+            </label>
+            <div class="login-actions">
+              <span id="sms-login-status" class="settings-status" role="status"></span>
+              <button id="sms-login" class="button button-primary" type="submit">
+                <i data-lucide="log-in" aria-hidden="true"></i>
+                <span>登录</span>
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+      <form id="settings-form" novalidate>
+        <section class="settings-section settings-section-codex">
+          <div class="settings-section-heading">
+            <div>
+              <h3>Codex CLI 任务 <span class="required-badge">必填</span></h3>
+              <p class="settings-section-note">用于启动本机 Codex 任务。请填写地址、模型和 Key；已保存的 Key 留空即可保留。</p>
+            </div>
+          </div>
+          <label class="settings-field" for="setting-codex-base-url">
+            <span>Codex 地址 <em class="required-mark">必填</em></span>
+            <input id="setting-codex-base-url" name="codexBaseUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1">
+          </label>
+          <label class="settings-field" for="setting-codex-model">
+            <span>Codex 模型 <em class="required-mark">必填</em></span>
+            <span class="model-picker">
+              <input id="setting-codex-model" name="codexModel" type="text" autocomplete="off" placeholder="先填写地址和 Key，再点击获取模型">
+              <button id="fetch-codex-models" class="button button-ghost button-compact" type="button">获取模型</button>
+              <div id="codex-model-options" class="model-options-menu" role="listbox" hidden aria-label="可用 Codex 模型"></div>
+            </span>
+          </label>
+          <label class="settings-field" for="setting-codex-api-key">
+            <span>Codex API Key <em class="required-mark">必填</em></span>
+            <input id="setting-codex-api-key" name="codexApiKey" type="password" autocomplete="new-password" placeholder="未配置">
+          </label>
+          <label class="settings-field" for="setting-codex-concurrency">
+            <span>并发任务数</span>
+            <input id="setting-codex-concurrency" name="codexMaxConcurrency" type="number" min="1" max="16" step="1" inputmode="numeric">
+          </label>
+          <p class="settings-section-note">同时运行的 Codex 任务上限；超过上限的任务会排队等待，不会暂停或取消正在运行的任务。</p>
+          <label class="settings-field" for="setting-codex-system-prompt">
+            <span>Codex 默认系统提示词</span>
+            <textarea id="setting-codex-system-prompt" name="codexSystemPrompt" rows="9" maxlength="20000" spellcheck="false"></textarea>
+          </label>
+          <p class="settings-section-note">这是新建 Codex 任务默认使用的指令。启动某一道题时还可以单独修改；纯解题模式仍会附加禁止调用竞赛接口的安全约束。</p>
+          <label class="settings-checkbox" for="setting-codex-ctf-skills">
+            <input id="setting-codex-ctf-skills" name="codexCtfSkillsEnabled" type="checkbox" checked>
+            <span>启用 CTF 技能包（默认开启）</span>
+          </label>
+          <p class="settings-section-note">技能源位于当前项目的 tools/skills，启动任务时会复制到本项目专用的 runtime/codex；关闭后新任务不会加载。</p>
+        </section>
+        <section class="settings-section settings-section-optional">
+          <h3>快捷 AI 调用 <span class="optional-badge">可选</span></h3>
+          <p class="settings-section-note">用于“AI 提示词”窗口中的一次性分析，和 Codex CLI 配置相互独立。</p>
+          <label class="settings-field" for="setting-model-base-url">
+            <span>模型地址</span>
+            <input id="setting-model-base-url" name="modelBaseUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1">
+          </label>
+          <label class="settings-field" for="setting-model-name">
+            <span>模型名称</span>
+            <span class="model-picker">
+              <input id="setting-model-name" name="modelName" type="text" autocomplete="off" placeholder="先填写地址和 Key，再点击获取模型">
+              <button id="fetch-models" class="button button-ghost button-compact" type="button">获取模型</button>
+              <div id="model-options" class="model-options-menu" role="listbox" hidden aria-label="可用模型"></div>
+            </span>
+          </label>
+          <label class="settings-field" for="setting-model-api-key">
+            <span>模型 API Key</span>
+            <input id="setting-model-api-key" name="modelApiKey" type="password" autocomplete="new-password" placeholder="未配置">
+          </label>
+        </section>
+        <footer class="settings-actions">
+          <span id="settings-status" class="settings-status" role="status"></span>
+          <button id="save-settings" class="button button-primary" type="submit">
+            <i data-lucide="save" aria-hidden="true"></i>
+            <span>保存配置</span>
+          </button>
+        </footer>
+      </form>
+    </div>
+  </dialog>
+
+  <dialog id="attachment-manager-dialog" class="attachment-manager-dialog" aria-labelledby="attachment-manager-title">
+    <header class="dialog-header attachment-manager-header">
+      <div class="attachment-manager-title-group">
+        <p class="eyebrow">Local Attachments</p>
+        <h2 id="attachment-manager-title">附件管理</h2>
+      </div>
+      <div class="attachment-manager-actions">
+        <span id="attachment-summary" class="attachment-summary" role="status">本地 0 / 0</span>
+        <button id="check-attachments" class="button button-ghost" type="button" title="检查本地文件" aria-label="检查本地附件文件">
+          <i data-lucide="scan-search" aria-hidden="true"></i>
+          <span>检查本地文件</span>
+        </button>
+        <button id="download-all-attachments" class="button button-primary" type="button" title="下载全部缺失附件" disabled>
+          <i data-lucide="folder-down" aria-hidden="true"></i>
+          <span>一键下载全部</span>
+        </button>
+        <button id="close-attachment-manager" class="icon-button" type="button" title="关闭" aria-label="关闭附件管理">
+          <i data-lucide="x" aria-hidden="true"></i>
+        </button>
+      </div>
+    </header>
+    <div class="attachment-manager-body">
+      <section id="attachment-progress" class="attachment-progress" aria-live="polite" hidden>
+        <div class="attachment-progress-heading">
+          <div>
+            <strong id="attachment-progress-title">准备下载</strong>
+            <span id="attachment-progress-count">0 / 0 个附件</span>
+          </div>
+          <div class="attachment-progress-status">
+            <span id="attachment-progress-percent">0%</span>
+            <div class="attachment-progress-controls" aria-label="附件下载控制">
+              <button id="pause-attachment-download" class="icon-button" type="button" title="暂停下载" aria-label="暂停下载" hidden>
+                <i data-lucide="pause" aria-hidden="true"></i>
+              </button>
+              <button id="resume-attachment-download" class="icon-button" type="button" title="继续下载" aria-label="继续下载" hidden>
+                <i data-lucide="play" aria-hidden="true"></i>
+              </button>
+              <button id="cancel-attachment-download" class="icon-button button-danger" type="button" title="取消下载" aria-label="取消下载" hidden>
+                <i data-lucide="square" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+        <progress id="attachment-progress-bar" max="100" value="0">0%</progress>
+        <div class="attachment-progress-current">
+          <span id="attachment-progress-file">正在整理附件列表</span>
+          <span id="attachment-progress-file-size">--</span>
+        </div>
+        <dl class="attachment-progress-metrics">
+          <div><dt>已传输</dt><dd id="attachment-progress-bytes">0 B</dd></div>
+          <div><dt>速度</dt><dd id="attachment-progress-speed">--</dd></div>
+          <div><dt>预计剩余</dt><dd id="attachment-progress-eta">--</dd></div>
+          <div><dt>失败</dt><dd id="attachment-progress-failed">0</dd></div>
+        </dl>
+      </section>
+      <div id="attachment-manager-list" class="attachment-manager-list" aria-live="polite">
+        <div class="empty-state">
+          <i data-lucide="folder-search" aria-hidden="true"></i>
+          <p>正在检查本地附件</p>
+        </div>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="tool-manager-dialog" class="tool-manager-dialog" aria-labelledby="tool-manager-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Workspace Utilities</p>
+        <h2 id="tool-manager-title">CTF 工具管理</h2>
+      </div>
+      <button id="close-tool-manager" class="icon-button" type="button" title="关闭" aria-label="关闭工具管理">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="tool-manager-body">
+      <p class="settings-section-note">安装位置：<code>tools/</code>；Python 环境：<code>tools/venv</code>；Go 工具与缓存：<code>tools/go</code>；工具清单：<code>tools/installed-tools.txt</code>。首次安装 Python 或 Go 工具时会自动测试官方源和国内镜像，选择延迟最低的源。</p>
+      <section class="tool-manager-environment" aria-labelledby="tool-manager-environment-title">
+        <div class="tool-manager-section-heading">
+          <div>
+            <h3 id="tool-manager-environment-title">本地运行环境</h3>
+            <p class="tool-manager-section-note">检测工具运行所需的编译器、解释器和调试器；检测只读，不会安装或修改系统环境。</p>
+          </div>
+          <div class="tool-manager-environment-actions">
+            <span id="environment-status-summary" class="tool-manager-environment-summary">正在检测…</span>
+            <button id="refresh-environment-status" class="icon-button" type="button" title="重新检测本地环境" aria-label="重新检测本地环境">
+              <i data-lucide="refresh-cw" aria-hidden="true"></i>
+            </button>
+          </div>
+        </div>
+        <div id="environment-status-items" class="environment-status-grid" aria-live="polite">
+          <span class="environment-status-card is-checking">正在检测本地环境…</span>
+        </div>
+      </section>
+      <div class="tool-manager-toolbar">
+        <div id="tool-manager-status" class="tool-manager-status" role="status">正在读取工具状态…</div>
+        <span class="tool-manager-toolbar-hint">勾选待安装工具；已安装工具可单独卸载</span>
+      </div>
+      <section id="tool-manager-progress" class="tool-manager-progress" aria-live="polite" hidden>
+        <div class="tool-manager-progress-heading">
+          <strong id="tool-manager-progress-title">准备安装</strong>
+          <span id="tool-manager-progress-count">0 / 0</span>
+          <button id="cancel-tool-install" class="button button-danger button-compact" type="button">取消</button>
+        </div>
+        <progress id="tool-manager-progress-bar" max="100" value="0">0%</progress>
+        <div class="tool-manager-progress-current">
+          <span id="tool-manager-progress-file">等待开始</span>
+          <span id="tool-manager-progress-size">--</span>
+        </div>
+        <div class="tool-manager-progress-metrics">
+          <span>速度 <strong id="tool-manager-progress-speed">--</strong></span>
+          <span>预计剩余 <strong id="tool-manager-progress-eta">--</strong></span>
+        </div>
+      </section>
+      <div id="tool-manager-list" class="tool-manager-list"></div>
+      <div class="tool-manager-actions">
+        <button id="install-selected-tools" class="button button-ghost" type="button">安装选中工具</button>
+        <button id="install-all-tools" class="button button-primary" type="button">一键安装全部</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="ai-prompt-dialog" class="ai-prompt-dialog" aria-labelledby="ai-prompt-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">AI Solver</p>
+        <h2 id="ai-prompt-title">解题提示词</h2>
+      </div>
+      <button id="close-ai-prompt" class="icon-button" type="button" title="关闭" aria-label="关闭 AI 提示词">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="ai-dialog-body">
+      <div id="ai-model-status" class="ai-model-status" role="status">选择题目后生成提示词</div>
+      <label class="ai-field" for="ai-prompt-text">
+        <span>标准提示词</span>
+        <textarea id="ai-prompt-text" class="ai-prompt-text" readonly spellcheck="false" aria-label="标准 AI 解题提示词"></textarea>
+      </label>
+      <section class="ai-output-section" aria-labelledby="ai-output-heading">
+        <h3 id="ai-output-heading">模型输出</h3>
+        <pre id="ai-run-output" class="ai-run-output">尚未运行</pre>
+      </section>
+    </div>
+    <footer class="ai-dialog-footer">
+      <button id="copy-ai-prompt" class="button button-ghost" type="button" disabled>
+        <i data-lucide="copy" aria-hidden="true"></i>
+        <span>复制提示词</span>
+      </button>
+      <button id="run-ai-solver" class="button button-primary" type="button" disabled>
+        <i data-lucide="sparkles" aria-hidden="true"></i>
+        <span>交给模型</span>
+      </button>
+    </footer>
+  </dialog>
+
+  <dialog id="codex-task-dialog" class="codex-task-dialog" aria-labelledby="codex-task-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Local Codex Runner</p>
+        <h2 id="codex-task-title">Codex 任务</h2>
+      </div>
+      <button id="close-codex-tasks" class="icon-button" type="button" title="关闭" aria-label="关闭 Codex 任务">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="codex-task-layout">
+      <aside id="codex-task-list" class="codex-task-list" aria-label="Codex 任务列表" aria-live="polite">
+        <div class="empty-state compact">暂无 Codex 任务</div>
+      </aside>
+      <section class="codex-task-detail" aria-live="polite">
+        <div class="codex-task-detail-header">
+          <div>
+            <p id="codex-task-status" class="codex-task-status">选择一个任务</p>
+            <p id="codex-task-meta" class="codex-task-meta">--</p>
+          </div>
+          <div class="codex-task-detail-actions">
+            <button id="continue-codex-task" class="button button-primary" type="button" disabled>
+              <i data-lucide="play" aria-hidden="true"></i>
+              <span>继续</span>
+            </button>
+            <button id="cancel-codex-task" class="button button-danger" type="button" disabled>
+              <i data-lucide="square" aria-hidden="true"></i>
+              <span>停止任务</span>
+            </button>
+            <button id="delete-codex-task" class="button button-ghost" type="button" disabled>
+              <i data-lucide="trash-2" aria-hidden="true"></i>
+              <span>删除任务</span>
+            </button>
+            <button id="open-codex-terminal" class="button button-ghost" type="button" disabled title="在系统终端中恢复此 Codex 对话">
+              <i data-lucide="external-link" aria-hidden="true"></i>
+              <span>打开对话</span>
+            </button>
+          </div>
+        </div>
+        <div class="codex-task-output-group">
+          <h3>运行日志</h3>
+          <pre id="codex-task-events" class="codex-task-events">尚未选择任务</pre>
+        </div>
+        <div class="codex-task-output-group">
+          <h3>最终输出</h3>
+          <pre id="codex-task-output" class="codex-task-output">尚未完成</pre>
+        </div>
+        <div id="codex-task-resume" class="codex-task-resume" hidden></div>
+        <div class="codex-task-message-box">
+          <label for="codex-task-message">继续对话 / Side 提问</label>
+          <textarea id="codex-task-message" rows="3" maxlength="16000" placeholder="输入要发送给当前 Codex 会话的内容"></textarea>
+          <div class="codex-task-message-actions">
+            <button id="codex-task-follow-up" class="button button-primary" type="button" disabled>再次输入</button>
+            <button id="codex-task-side" class="button button-ghost" type="button" disabled>Side 提问</button>
+          </div>
+        </div>
+        <p id="codex-task-writeup" class="codex-task-writeup"></p>
+      </section>
+    </div>
+  </dialog>
+
+  <dialog id="codex-prompt-dialog" class="codex-prompt-dialog" aria-labelledby="codex-prompt-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Codex Prompt</p>
+        <h2 id="codex-prompt-title">启动 Codex</h2>
+      </div>
+      <button id="close-codex-prompt" class="icon-button" type="button" title="关闭" aria-label="关闭 Codex 提示词编辑器">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="codex-prompt-body">
+      <p id="codex-prompt-mode" class="settings-section-note">题目的标准 AI 提示词（含题目详情、附件路径和接口说明）会由后端自动生成并随任务发送；这里编辑的是本次任务附加的系统指令，不会改变全局配置。</p>
+      <label class="codex-prompt-field" for="codex-start-prompt">
+        <span>本次附加系统指令</span>
+        <textarea id="codex-start-prompt" rows="16" maxlength="20000" spellcheck="false"></textarea>
+      </label>
+    </div>
+    <footer class="settings-actions">
+      <button id="cancel-codex-start" class="button button-ghost" type="button">取消</button>
+      <button id="confirm-codex-start" class="button button-primary" type="button">确认启动</button>
+    </footer>
+  </dialog>
+
+  <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false"></div>
+
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
+  <script src="/app.js" defer></script>
+</body>
+</html>
