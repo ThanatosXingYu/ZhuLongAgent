@@ -99,6 +99,8 @@ X-GCSIS-Action: tools-manager
 | `POST` | `/api/codex/tasks/{task_id}/message` | 在当前会话继续输入或创建 Side 对话 |
 | `POST` | `/api/codex/tasks/{task_id}/continue` | 发送标准故障恢复提示并继续任务 |
 | `POST` | `/api/codex/tasks/{task_id}/cancel` | 取消 Codex 任务 |
+| `POST` | `/api/codex/tasks/{task_id}/terminal` | 在系统终端中恢复 Codex 对话 |
+| `POST` | `/api/codex/tasks/{task_id}/folder` | 在文件管理器中打开题目工作目录 |
 | `DELETE` | `/api/codex/tasks/{task_id}` | 删除已结束任务及本地日志 |
 
 ## 页面配置

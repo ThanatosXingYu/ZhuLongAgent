@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, cast
 
 from .config import DEFAULT_CODEX_MAX_CONCURRENCY, DEFAULT_CODEX_SYSTEM_PROMPT
-from .solver import PromptResult
+from .solver import PromptResult, safe_writeup_segment
 
 MAX_EVENT_SUMMARY_BYTES = 4096
 MAX_TASK_EVENTS = 128
@@ -272,8 +272,6 @@ def build_interactive_command(
             f"model_providers.gcsis-codex.wire_api={quote('responses')}",
             "resume",
             session_id,
-            "--ignore-user-config",
-            "--skip-git-repo-check",
         ]
     )
     return command
@@ -281,18 +279,12 @@ def build_interactive_command(
 
 def _launch_system_terminal(script_path: Path, workspace: Path) -> None:
     """Start a terminal emulator without invoking a shell through Python."""
-    command = f"/bin/zsh {shlex.quote(str(script_path))}"
     if os.name == "nt":
         candidates = [["cmd.exe", "/K", str(script_path)]]
     elif sys.platform == "darwin":
-        osa = (
-            "tell application \"Terminal\" to do script "
-            f"{json.dumps(command, ensure_ascii=False)}\n"
-            "tell application \"Terminal\" to activate"
-        )
         try:
             subprocess.run(
-                ["/usr/bin/osascript", "-e", osa],
+                ["/usr/bin/open", "-a", "Terminal", str(script_path)],
                 cwd=str(workspace),
                 check=True,
                 capture_output=True,
@@ -318,6 +310,28 @@ def _launch_system_terminal(script_path: Path, workspace: Path) -> None:
             continue
         return
     raise CodexError("未找到可用的系统终端，请手动运行任务中的恢复脚本")
+
+
+def _open_system_path(path: Path) -> None:
+    """Open a trusted local directory in the platform file manager."""
+    if os.name == "nt":
+        command = ["explorer.exe", str(path)]
+    elif sys.platform == "darwin":
+        command = ["/usr/bin/open", str(path)]
+    else:
+        executable = shutil.which("xdg-open")
+        if not executable:
+            raise CodexError("未找到可用的文件管理器")
+        command = [executable, str(path)]
+    try:
+        subprocess.Popen(
+            command,
+            cwd=str(path),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise CodexError("无法打开题目目录") from exc
 
 
 def _prepare_codex_home(config: ProcessConfig) -> str:
@@ -404,6 +418,7 @@ class Snapshot:
     error: str = ""
     output: str = ""
     writeup_path: str = ""
+    challenge_path: str = ""
     events: tuple[Event, ...] = ()
     session_id: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
@@ -430,6 +445,8 @@ class Snapshot:
             result["output"] = self.output
         if self.writeup_path:
             result["writeupPath"] = self.writeup_path
+        if self.challenge_path:
+            result["challengePath"] = self.challenge_path
         if self.events:
             result["events"] = [event.to_dict() for event in self.events]
         if self.session_id:
@@ -626,7 +643,10 @@ class CodexManager:
             if self.runs_root.is_absolute()
             else workspace / self.runs_root
         )
-        script_path = (runs_root / task_id / "open-terminal.zsh").resolve()
+        script_name = (
+            "open-terminal.command" if sys.platform == "darwin" else "open-terminal.zsh"
+        )
+        script_path = (runs_root / task_id / script_name).resolve()
         try:
             script_path.relative_to(workspace)
         except ValueError as exc:
@@ -644,6 +664,54 @@ class CodexManager:
             "scriptPath": display_path,
             "command": f"/bin/zsh {shlex.quote(str(script_path))}",
         }
+
+    def open_challenge_folder(self, task_id: str) -> dict[str, Any]:
+        """Open the task's workspace-local challenge directory."""
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            relative_path = self._challenge_path_locked(task)
+
+        workspace = self.workspace_root.resolve()
+        download_root = (workspace / "download").resolve()
+        candidate = Path(relative_path)
+        directory = (
+            candidate if candidate.is_absolute() else workspace / candidate
+        ).resolve()
+        try:
+            relative = directory.relative_to(download_root)
+        except ValueError as exc:
+            raise CodexError("题目目录必须位于项目 download 目录内") from exc
+        if relative == Path("."):
+            raise CodexError("题目目录无效")
+        try:
+            directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError as exc:
+            raise CodexError("无法创建题目目录") from exc
+        if directory.resolve() != download_root / relative:
+            raise CodexError("题目目录包含不受信任的符号链接")
+        _open_system_path(directory)
+        return {
+            "opened": True,
+            "path": directory.relative_to(workspace).as_posix(),
+        }
+
+    def _challenge_path_locked(self, task: _Task) -> str:
+        if task.snapshot.challenge_path:
+            return task.snapshot.challenge_path
+        if task.snapshot.parent_id:
+            parent = self._tasks.get(task.snapshot.parent_id)
+            if parent is not None and parent is not task:
+                return self._challenge_path_locked(parent)
+        legacy_path = challenge_path_from_writeup(
+            task.snapshot.writeup_path,
+            task.snapshot.id,
+            task.snapshot.mode,
+        )
+        if legacy_path:
+            return legacy_path
+        raise CodexError("该任务没有可用的题目目录信息")
 
     @staticmethod
     def _write_terminal_script(
@@ -689,6 +757,7 @@ class CodexManager:
                 limit=self.limit,
                 created_at=now,
                 parent_id=parent.snapshot.id,
+                challenge_path=self._challenge_path_locked(parent),
             )
             task = _Task(
                 snapshot,
@@ -740,7 +809,19 @@ class CodexManager:
         now = datetime.now(timezone.utc)
         output_path = self.runs_root / task_id / "final.md"
         writeup_path = writeup_path_for(self.workspace_root, self.writeup_root, prompt_result, exercise_id, task_id, mode)
-        snapshot = Snapshot(task_id, exercise_id, mode, "queued", limit=self.limit, writeup_path=writeup_path, created_at=now)
+        challenge_path = challenge_path_for(
+            self.workspace_root, prompt_result, exercise_id
+        )
+        snapshot = Snapshot(
+            task_id,
+            exercise_id,
+            mode,
+            "queued",
+            limit=self.limit,
+            writeup_path=writeup_path,
+            challenge_path=challenge_path,
+            created_at=now,
+        )
         with self._condition:
             process = self.config.process
         task = _Task(
@@ -1170,6 +1251,7 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         error=str(raw.get("error", "") or ""),
         output=str(raw.get("output", "") or ""),
         writeup_path=str(raw.get("writeupPath", "") or ""),
+        challenge_path=str(raw.get("challengePath", "") or ""),
         events=tuple(events),
         session_id=str(raw.get("sessionId", "") or ""),
         created_at=created_at,
@@ -1198,6 +1280,42 @@ def writeup_path_for(workspace_root: Path, root: Path, prompt: PromptResult, exe
         return absolute.relative_to(workspace_root).as_posix()
     except ValueError:
         return absolute.as_posix()
+
+
+def challenge_path_for(
+    workspace_root: Path, prompt: PromptResult, exercise_id: int
+) -> str:
+    if prompt.attachments:
+        attachment_path = Path(prompt.attachments[0].path)
+        directory = attachment_path.parent
+        absolute = directory if directory.is_absolute() else workspace_root / directory
+    else:
+        category = safe_writeup_segment(prompt.category, "Uncategorized")
+        name = safe_writeup_segment(prompt.exercise_name, "exercise")
+        absolute = workspace_root / "download" / category / f"{exercise_id}-{name}"
+    try:
+        return (
+            absolute.resolve(strict=False)
+            .relative_to(workspace_root.resolve())
+            .as_posix()
+        )
+    except ValueError:
+        return absolute.resolve(strict=False).as_posix()
+
+
+def challenge_path_from_writeup(writeup_path: str, task_id: str, mode: str) -> str:
+    """Recover pre-migration task folders from their trusted writeup names."""
+    path = Path(writeup_path)
+    if len(path.parts) < 3 or path.parts[0] != "writeups":
+        return ""
+    marker = "codex-pure" if mode == "pure" else "codex"
+    suffix = f"-{marker}-{task_id}.md"
+    if not path.name.endswith(suffix):
+        return ""
+    exercise_directory = path.name[: -len(suffix)]
+    if not exercise_directory:
+        return ""
+    return (Path("download") / path.parts[1] / exercise_directory).as_posix()
 
 
 def safe_path_part(value: str, fallback: str) -> str:

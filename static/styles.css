@@ -552,9 +552,9 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .ai-dialog-footer { min-height: 68px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; padding: 14px 18px; border-top: 1px solid var(--line); }
 
 .codex-active-count { min-width: 33px; padding: 2px 5px; color: var(--blue); background: var(--blue-soft); border-radius: 4px; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
-.codex-task-dialog { width: min(1040px, calc(100% - 32px)); height: min(720px, calc(100vh - 32px)); max-height: calc(100vh - 32px); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 70px rgba(27, 44, 52, 0.22); }
+.codex-task-dialog { width: min(1180px, calc(100% - 32px)); height: min(820px, calc(100vh - 32px)); max-height: calc(100vh - 32px); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 70px rgba(27, 44, 52, 0.22); }
 .codex-task-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr); }
-.codex-task-layout { min-height: 0; display: grid; grid-template-columns: minmax(220px, 280px) minmax(0, 1fr); }
+.codex-task-layout { min-height: 0; display: grid; grid-template-columns: minmax(220px, 260px) minmax(0, 1fr); }
 .codex-task-list { min-height: 0; overflow: auto; padding: 8px; background: var(--surface-muted); border-right: 1px solid var(--line); }
 .codex-task-list .empty-state { min-height: 170px; }
 .codex-task-item { width: 100%; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 3px 8px; padding: 10px; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 6px; text-align: left; }
@@ -568,7 +568,7 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .codex-task-item-status.success, .codex-task-status.success { color: #247554; background: var(--brand-soft); border-color: #bfe0d1; }
 .codex-task-item-status.error, .codex-task-status.error { color: var(--red); background: var(--red-soft); border-color: #f2c8c5; }
 .codex-task-item-status.muted, .codex-task-status.muted { color: var(--text-faint); background: var(--surface-muted); }
-.codex-task-detail { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(130px, 1fr) minmax(120px, 0.8fr) auto auto; gap: 12px; overflow: auto; padding: 16px 18px 18px; }
+.codex-task-detail { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(180px, 1.3fr) minmax(150px, 0.9fr) auto; gap: 12px; overflow: auto; padding: 16px 18px 18px; }
 .codex-task-detail-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .codex-task-detail-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 .codex-task-status { min-height: 24px; display: inline-flex; align-items: center; margin: 0; padding: 3px 7px; color: var(--text-muted); border: 1px solid var(--line); border-radius: 5px; font-size: 12px; font-weight: 700; }
@@ -576,15 +576,11 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .codex-task-output-group { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 6px; }
 .codex-task-output-group h3 { margin: 0; font-size: 12px; }
 .codex-task-events, .codex-task-output { min-height: 0; height: 100%; margin: 0; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; padding: 11px 12px; color: #26343b; background: #f5f7f8; border: 1px solid var(--line); border-radius: 6px; white-space: pre-wrap; overflow-wrap: anywhere; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.55; }
-.codex-task-resume { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 10px; color: #26343b; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; }
-.codex-task-resume code { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
-.codex-task-resume-note { color: var(--text-faint); font-size: 10px; white-space: nowrap; }
 .codex-task-message-box { min-width: 0; display: grid; gap: 7px; padding: 11px 12px; background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; }
 .codex-task-message-box > label { color: var(--text-muted); font-size: 12px; font-weight: 700; }
 .codex-task-message-box textarea, #codex-start-prompt { width: 100%; min-width: 0; resize: vertical; padding: 9px 10px; color: #26343b; background: var(--surface); border: 1px solid var(--line); border-radius: 5px; outline: 0; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
 .codex-task-message-box textarea:focus, #codex-start-prompt:focus { border-color: #83bca8; box-shadow: 0 0 0 3px rgba(18, 97, 73, 0.1); }
 .codex-task-message-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.codex-task-writeup { min-height: 16px; margin: 0; color: var(--text-muted); font-size: 12px; overflow-wrap: anywhere; }
 .codex-prompt-dialog { width: min(760px, calc(100% - 32px)); max-height: calc(100vh - 32px); padding: 0; color: var(--text); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 24px 70px rgba(27, 44, 52, 0.22); }
 .codex-prompt-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
 .codex-prompt-dialog::backdrop { background: rgba(27, 44, 52, 0.34); backdrop-filter: blur(2px); }

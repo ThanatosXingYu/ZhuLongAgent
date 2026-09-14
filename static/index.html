@@ -623,6 +623,14 @@
               <i data-lucide="external-link" aria-hidden="true"></i>
               <span>打开对话</span>
             </button>
+            <button id="open-codex-folder" class="button button-ghost" type="button" disabled title="在文件管理器中打开当前题目的工作目录">
+              <i data-lucide="folder-open" aria-hidden="true"></i>
+              <span>题目目录</span>
+            </button>
+            <button id="copy-codex-resume" class="button button-ghost" type="button" disabled title="复制 Codex 会话恢复命令">
+              <i data-lucide="copy" aria-hidden="true"></i>
+              <span>复制命令</span>
+            </button>
           </div>
         </div>
         <div class="codex-task-output-group">
@@ -633,7 +641,6 @@
           <h3>最终输出</h3>
           <pre id="codex-task-output" class="codex-task-output">尚未完成</pre>
         </div>
-        <div id="codex-task-resume" class="codex-task-resume" hidden></div>
         <div class="codex-task-message-box">
           <label for="codex-task-message">继续对话 / Side 提问</label>
           <textarea id="codex-task-message" rows="3" maxlength="16000" placeholder="输入要发送给当前 Codex 会话的内容"></textarea>
@@ -642,7 +649,6 @@
             <button id="codex-task-side" class="button button-ghost" type="button" disabled>Side 提问</button>
           </div>
         </div>
-        <p id="codex-task-writeup" class="codex-task-writeup"></p>
       </section>
     </div>
   </dialog>

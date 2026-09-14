@@ -35,9 +35,11 @@ from internal.codex import (
     ManagerConfig,
     ProcessConfig,
     ProcessResult,
+    _launch_system_terminal,
     _prepare_codex_home,
     _process_environment,
     build_command,
+    build_interactive_command,
 )
 from internal.codex_skills import CTF_SKILL_NAMES, prepare_codex_skills
 from internal.config import (
@@ -97,6 +99,10 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert "Codex CLI 任务" in page
     assert 'id="model-options"' in page and 'class="model-options-menu"' in page
     assert 'id="codex-model-options"' in page and 'role="listbox"' in page
+    assert 'id="open-codex-folder"' in page
+    assert 'id="copy-codex-resume"' in page
+    assert 'id="codex-task-resume"' not in page
+    assert 'id="codex-task-writeup"' not in page
     assert "<datalist" not in page
 
 
@@ -1638,6 +1644,45 @@ def test_codex_command_supports_resume_and_fork(tmp_path: Path) -> None:
         assert 'sandbox_mode="danger-full-access"' in command
 
 
+def test_codex_interactive_resume_uses_only_supported_options(tmp_path: Path) -> None:
+    command = build_interactive_command(
+        ProcessConfig(
+            "codex",
+            str(tmp_path),
+            "https://model.example.test/v1",
+            model="solver",
+        ),
+        "session-1",
+    )
+    assert command[-2:] == ["resume", "session-1"]
+    assert "--ignore-user-config" not in command
+    assert "--skip-git-repo-check" not in command
+    assert command.count("resume") == 1
+
+
+def test_codex_macos_terminal_opens_one_command_document(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    script = tmp_path / "open-terminal.command"
+    script.write_text("#!/bin/zsh\n", encoding="utf-8")
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(command: list[str], **kwargs: Any) -> None:
+        calls.append((command, kwargs))
+
+    monkeypatch.setattr("internal.codex.sys.platform", "darwin")
+    monkeypatch.setattr("internal.codex.subprocess.run", fake_run)
+
+    _launch_system_terminal(script, tmp_path)
+
+    assert len(calls) == 1
+    command, options = calls[0]
+    assert command == ["/usr/bin/open", "-a", "Terminal", str(script)]
+    assert options["cwd"] == str(tmp_path)
+    assert options["check"] is True
+    assert options["timeout"] == 15
+
+
 def test_codex_follow_up_and_side_create_expected_sessions(tmp_path: Path) -> None:
     class Prompt:
         def prompt(self, exercise_id: int):
@@ -1734,12 +1779,88 @@ def test_codex_open_terminal_writes_workspace_local_resume_script(
         lambda script, workspace: launched.append((script, workspace)),
     )
     result = manager.open_terminal(task.id)
-    script = tmp_path / "runs" / task.id / "open-terminal.zsh"
+    script = tmp_path / str(result["scriptPath"])
     content = script.read_text(encoding="utf-8")
     assert result["opened"] is True
     assert launched == [(script, tmp_path)]
     assert "CODEX_HOME=" in content
     assert "codex" in content and "resume session-1" in content
+    assert "--ignore-user-config" not in content
+    assert "--skip-git-repo-check" not in content
+
+    opened_paths: list[Path] = []
+    monkeypatch.setattr(
+        "internal.codex._open_system_path", opened_paths.append
+    )
+    folder_result = manager.open_challenge_folder(task.id)
+    challenge_directory = tmp_path / "download" / "Web" / "7-x"
+    assert folder_result == {"opened": True, "path": "download/Web/7-x"}
+    assert opened_paths == [challenge_directory]
+    assert challenge_directory.is_dir()
+    manager.close()
+
+
+def test_codex_legacy_folder_recovery_and_download_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task_id = "a" * 24
+    tasks_path = tmp_path / "runtime" / "codex" / "tasks.json"
+    tasks_path.parent.mkdir(parents=True)
+    tasks_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tasks": [
+                    {
+                        "snapshot": {
+                            "id": task_id,
+                            "exerciseId": 7,
+                            "mode": "full",
+                            "status": "completed",
+                            "writeupPath": f"writeups/Web/7-x-codex-{task_id}.md",
+                            "sessionId": "session-1",
+                            "createdAt": "2026-09-13T00:00:00Z",
+                        },
+                        "prompt": "legacy task",
+                        "config": {
+                            "baseUrl": "https://model.example.test/v1",
+                            "model": "solver",
+                            "outputPath": str(tmp_path / "runs" / task_id / "final.md"),
+                        },
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "https://model.example.test/v1"),
+            prompt=None,
+            runner=None,
+            max_concurrency=1,
+            runs_root=tmp_path / "runs",
+            writeup_root=tmp_path / "writeups",
+            workspace_root=tmp_path,
+            tasks_path=tasks_path,
+        )
+    )
+    opened_paths: list[Path] = []
+    monkeypatch.setattr("internal.codex._open_system_path", opened_paths.append)
+
+    result = manager.open_challenge_folder(task_id)
+
+    expected = tmp_path / "download" / "Web" / "7-x"
+    assert result == {"opened": True, "path": "download/Web/7-x"}
+    assert opened_paths == [expected]
+
+    task = manager._tasks[task_id]
+    task.snapshot = task.snapshot.__class__(
+        **{**task.snapshot.__dict__, "challenge_path": "../outside"}
+    )
+    with pytest.raises(CodexError, match="download"):
+        manager.open_challenge_folder(task_id)
+    assert opened_paths == [expected]
     manager.close()
 
 

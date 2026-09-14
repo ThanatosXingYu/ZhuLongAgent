@@ -170,6 +170,8 @@ class CodexProtocol(Protocol):
 
     def open_terminal(self, task_id: str) -> dict[str, Any]: ...
 
+    def open_challenge_folder(self, task_id: str) -> dict[str, Any]: ...
+
 
 class FlagRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
@@ -1093,6 +1095,20 @@ def create_app(
             try:
                 return _success_response(
                     await asyncio.to_thread(services.codex.open_terminal, parts[0])
+                )
+            except Exception as exc:
+                return _codex_error(exc)
+        if len(parts) == 2 and parts[1] == "folder":
+            if not _method(request, "POST"):
+                return _method_error("POST")
+            body_error = await _empty_body_error(request)
+            if body_error is not None:
+                return body_error
+            try:
+                return _success_response(
+                    await asyncio.to_thread(
+                        services.codex.open_challenge_folder, parts[0]
+                    )
                 )
             except Exception as exc:
                 return _codex_error(exc)

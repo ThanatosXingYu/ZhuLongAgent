@@ -188,12 +188,12 @@
     codexTaskMeta: $("codex-task-meta"),
     codexTaskEvents: $("codex-task-events"),
     codexTaskOutput: $("codex-task-output"),
-    codexTaskResume: $("codex-task-resume"),
-    codexTaskWriteup: $("codex-task-writeup"),
     continueCodexTask: $("continue-codex-task"),
     cancelCodexTask: $("cancel-codex-task"),
     deleteCodexTask: $("delete-codex-task"),
     openCodexTerminal: $("open-codex-terminal"),
+    openCodexFolder: $("open-codex-folder"),
+    copyCodexResume: $("copy-codex-resume"),
     codexTaskMessage: $("codex-task-message"),
     codexTaskFollowUp: $("codex-task-follow-up"),
     codexTaskSide: $("codex-task-side"),
@@ -2620,13 +2620,12 @@
       els.codexTaskEvents.textContent = "尚未选择任务";
       state.codexEventsFollowTail = true;
       els.codexTaskOutput.textContent = "尚未完成";
-      els.codexTaskResume.hidden = true;
-      els.codexTaskResume.replaceChildren();
-      els.codexTaskWriteup.textContent = "";
       els.cancelCodexTask.disabled = true;
       els.continueCodexTask.disabled = true;
       els.deleteCodexTask.disabled = true;
       els.openCodexTerminal.disabled = true;
+      els.openCodexFolder.disabled = true;
+      els.copyCodexResume.disabled = true;
       els.codexTaskMessage.value = "";
       els.codexTaskFollowUp.disabled = true;
       els.codexTaskSide.disabled = true;
@@ -2643,22 +2642,13 @@
     state.codexEventsFollowTail = shouldFollow;
     requestAnimationFrame(scrollCodexEventsToBottom);
     els.codexTaskOutput.textContent = task.output || (task.error ? `任务失败：${task.error}` : "尚未完成");
-    els.codexTaskResume.hidden = !task.sessionId;
-    els.codexTaskResume.replaceChildren();
-    if (task.sessionId) {
-      const resumeCommand = `codex resume ${task.sessionId}`;
-      els.codexTaskResume.append(
-        createElement("code", "", resumeCommand),
-        createElement("small", "codex-task-resume-note", "会话保存在本项目 runtime/codex；建议点击“打开对话”"),
-        makeCopyButton(resumeCommand),
-      );
-    }
-    els.codexTaskWriteup.textContent = task.writeupPath ? `WP：${task.writeupPath}` : "";
     const terminal = isCodexTerminal(task.status);
     els.cancelCodexTask.disabled = terminal;
     els.continueCodexTask.disabled = !terminal || !task.sessionId;
     els.deleteCodexTask.disabled = !terminal;
     els.openCodexTerminal.disabled = !terminal || !task.sessionId;
+    els.openCodexFolder.disabled = false;
+    els.copyCodexResume.disabled = !task.sessionId;
     const canMessage = Boolean(task.sessionId) && task.status !== "queued" && task.mode !== "side";
     els.codexTaskFollowUp.disabled = !canMessage;
     els.codexTaskSide.disabled = !canMessage;
@@ -2686,6 +2676,32 @@
         showToast(`打开 Codex 对话失败：${error.message}`, "error");
       }
     });
+  }
+
+  async function openCodexFolder() {
+    const id = state.codexSelectedTaskId;
+    if (!id) return;
+    await withButton(els.openCodexFolder, async () => {
+      try {
+        await request(`/api/codex/tasks/${encodeURIComponent(id)}/folder`, {
+          method: "POST",
+        });
+        showToast("已打开题目目录", "success");
+      } catch (error) {
+        showToast(`打开题目目录失败：${error.message}`, "error");
+      }
+    });
+  }
+
+  async function copyCodexResumeCommand() {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task?.sessionId) return;
+    try {
+      await navigator.clipboard.writeText(`codex resume ${task.sessionId}`);
+      showToast("恢复命令已复制", "success");
+    } catch {
+      showToast("复制失败，请使用“打开对话”", "warning");
+    }
   }
 
   function stopCodexPollingIfIdle() {
@@ -2961,6 +2977,8 @@
     els.codexTaskFollowUp.addEventListener("click", () => sendCodexMessage(false));
     els.codexTaskSide.addEventListener("click", () => sendCodexMessage(true));
     els.openCodexTerminal.addEventListener("click", () => void openCodexTerminal());
+    els.openCodexFolder.addEventListener("click", () => void openCodexFolder());
+    els.copyCodexResume.addEventListener("click", () => void copyCodexResumeCommand());
     els.confirmCodexStart.addEventListener("click", confirmCodexStart);
     els.cancelCodexStart.addEventListener("click", () => els.codexPromptDialog.close());
     $("close-codex-prompt").addEventListener("click", () => els.codexPromptDialog.close());
