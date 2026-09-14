@@ -35,11 +35,15 @@ from internal.codex import (
     ManagerConfig,
     ProcessConfig,
     ProcessResult,
+    Snapshot,
+    TokenUsage,
     _launch_system_terminal,
     _prepare_codex_home,
     _process_environment,
+    _snapshot_from_dict,
     build_command,
     build_interactive_command,
+    parse_event_line,
 )
 from internal.codex_skills import CTF_SKILL_NAMES, prepare_codex_skills
 from internal.config import (
@@ -73,6 +77,9 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert "renderRichText(detail.description" in script
     assert "renderRichText(detail.content" in script
     assert "innerHTML" not in script
+    assert "copyCodexResumeCommand" not in script
+    assert "renderCodexEvents" in script
+    assert "const canFollowUp" in script and "const canSide" in script
     assert "const SCORE_REFRESH_MS = 5000;" in script
     assert "const NOTICE_REFRESH_MS = 10000;" in script
     assert "const ATTACHMENT_TASK_POLL_MS = 500;" in script
@@ -100,8 +107,11 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert 'id="model-options"' in page and 'class="model-options-menu"' in page
     assert 'id="codex-model-options"' in page and 'role="listbox"' in page
     assert 'id="open-codex-folder"' in page
-    assert 'id="copy-codex-resume"' in page
-    assert 'id="codex-task-resume"' not in page
+    assert 'id="show-codex-task-details"' in page
+    assert 'id="copy-codex-resume"' not in page
+    assert 'id="codex-task-resume"' in page
+    assert '<div id="codex-task-events"' in page
+    assert 'id="codex-task-details-dialog"' in page
     assert 'id="codex-task-writeup"' not in page
     assert "<datalist" not in page
 
@@ -952,6 +962,26 @@ def test_tool_catalog_exposes_install_categories_and_idle_progress(
     assert json_tool["subgroup"] == "基础库"
 
 
+def test_tool_manager_reports_recent_transfer_speed_instead_of_task_average(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manager = ToolManager(tmp_path)
+    now = [100.0]
+    monkeypatch.setattr("internal.tool_manager.time.monotonic", lambda: now[0])
+    with manager._lock:
+        manager._current_started_at = 10.0
+        manager._reset_transfer_speed_locked()
+        now[0] = 101.0
+        manager._record_transfer_bytes_locked(2_000)
+        progress = manager._progress_snapshot()
+        assert progress["elapsed"] == 91.0
+        assert progress["speed"] == pytest.approx(2_000.0)
+
+        now[0] = 103.2
+        manager._record_transfer_bytes_locked(2_000)
+        assert manager._progress_snapshot()["speed"] == 0.0
+
+
 def test_tool_manager_writes_workspace_manifest_with_paths_and_usage(
     tmp_path: Path,
 ) -> None:
@@ -1440,6 +1470,137 @@ def test_codex_manager_runs_and_writes_output(tmp_path: Path) -> None:
     manager.close()
 
 
+def test_codex_error_event_uses_readable_item_message() -> None:
+    event = parse_event_line(
+        json.dumps(
+            {
+                "type": "item.completed",
+                "item": {
+                    "type": "error",
+                    "message": "Model metadata is unavailable",
+                },
+            }
+        )
+    )
+    assert event.kind == "error"
+    assert event.summary == "Model metadata is unavailable"
+
+
+def test_codex_turn_usage_is_structured_and_aggregated() -> None:
+    first = parse_event_line(
+        json.dumps(
+            {
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 120,
+                    "cached_input_tokens": 80,
+                    "cache_write_input_tokens": 4,
+                    "output_tokens": 30,
+                    "reasoning_output_tokens": 12,
+                },
+            }
+        )
+    )
+    assert first.summary == "本轮处理完成"
+    assert first.usage == TokenUsage(120, 80, 4, 30, 12, 150)
+    second = Event(
+        datetime.now(timezone.utc),
+        "turn.completed",
+        "本轮处理完成",
+        usage=TokenUsage(20, 10, 0, 5, 2, 25),
+    )
+    wire = Snapshot("a" * 24, 7, "full", "completed", events=(first, second)).to_dict()
+    assert wire["completedTurns"] == 2
+    assert wire["usage"] == {
+        "inputTokens": 140,
+        "cachedInputTokens": 90,
+        "cacheWriteInputTokens": 4,
+        "uncachedInputTokens": 50,
+        "outputTokens": 35,
+        "reasoningOutputTokens": 14,
+        "totalTokens": 175,
+    }
+
+    retained = Snapshot(
+        "b" * 24,
+        7,
+        "full",
+        "completed",
+        events=(second,),
+        usage=TokenUsage(1_000, 800, 20, 200, 90, 1_200),
+        completed_turns=9,
+    ).to_dict()
+    assert retained["completedTurns"] == 9
+    assert retained["usage"]["totalTokens"] == 1_200
+
+
+def test_codex_restores_usage_from_legacy_raw_event_summary() -> None:
+    restored = _snapshot_from_dict(
+        {
+            "id": "c" * 24,
+            "exerciseId": 8,
+            "mode": "full",
+            "status": "completed",
+            "createdAt": "2026-09-14T00:00:00Z",
+            "events": [
+                {
+                    "at": "2026-09-14T00:01:00Z",
+                    "kind": "turn.completed",
+                    "summary": json.dumps(
+                        {
+                            "type": "turn.completed",
+                            "usage": {
+                                "input_tokens": 320,
+                                "cached_input_tokens": 200,
+                                "output_tokens": 40,
+                            },
+                        }
+                    ),
+                }
+            ],
+        }
+    ).to_dict()
+    assert restored["completedTurns"] == 1
+    assert restored["events"][0]["summary"] == "本轮处理完成"
+    assert restored["usage"] == {
+        "inputTokens": 320,
+        "cachedInputTokens": 200,
+        "cacheWriteInputTokens": 0,
+        "uncachedInputTokens": 120,
+        "outputTokens": 40,
+        "reasoningOutputTokens": 0,
+        "totalTokens": 360,
+    }
+
+
+def test_codex_restores_readable_legacy_error_summary() -> None:
+    restored = _snapshot_from_dict(
+        {
+            "id": "d" * 24,
+            "exerciseId": 9,
+            "mode": "full",
+            "status": "failed",
+            "createdAt": "2026-09-14T00:00:00Z",
+            "events": [
+                {
+                    "at": "2026-09-14T00:01:00Z",
+                    "kind": "error",
+                    "summary": json.dumps(
+                        {
+                            "type": "item.completed",
+                            "item": {
+                                "type": "error",
+                                "message": "Model metadata is unavailable",
+                            },
+                        }
+                    ),
+                }
+            ],
+        }
+    ).to_dict()
+    assert restored["events"][0]["summary"] == "Model metadata is unavailable"
+
+
 def test_codex_task_metadata_survives_restart_without_api_key(tmp_path: Path) -> None:
     class Prompt:
         def prompt(self, exercise_id: int):
@@ -1734,6 +1895,13 @@ def test_codex_follow_up_and_side_create_expected_sessions(tmp_path: Path) -> No
             break
         time.sleep(0.01)
     assert manager.get(side.id).mode == "side"
+    assert manager.follow_up(side.id, "补充解释").status == "queued"
+    with pytest.raises(CodexError, match="不能继续创建 Side"):
+        manager.side(side.id, "再次分叉")
+    for _ in range(50):
+        if manager.get(side.id).status == "completed":
+            break
+        time.sleep(0.01)
     assert any(resume == "session-1" and not fork for resume, fork, _ in runner.calls)
     assert any(resume == "session-1" and fork for resume, fork, _ in runner.calls)
     manager.close()

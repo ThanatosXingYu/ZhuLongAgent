@@ -186,6 +186,7 @@
     codexTaskList: $("codex-task-list"),
     codexTaskStatus: $("codex-task-status"),
     codexTaskMeta: $("codex-task-meta"),
+    codexTaskResume: $("codex-task-resume"),
     codexTaskEvents: $("codex-task-events"),
     codexTaskOutput: $("codex-task-output"),
     continueCodexTask: $("continue-codex-task"),
@@ -193,7 +194,9 @@
     deleteCodexTask: $("delete-codex-task"),
     openCodexTerminal: $("open-codex-terminal"),
     openCodexFolder: $("open-codex-folder"),
-    copyCodexResume: $("copy-codex-resume"),
+    showCodexTaskDetails: $("show-codex-task-details"),
+    codexTaskDetailsDialog: $("codex-task-details-dialog"),
+    codexTaskDetailsContent: $("codex-task-details-content"),
     codexTaskMessage: $("codex-task-message"),
     codexTaskFollowUp: $("codex-task-follow-up"),
     codexTaskSide: $("codex-task-side"),
@@ -2567,6 +2570,166 @@
     return Number.isNaN(timestamp) ? "时间未知" : formatDate(timestamp);
   }
 
+  function codexTaskFullTime(value) {
+    if (!value) return "尚未产生";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "时间未知";
+    return new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).format(date);
+  }
+
+  function codexTaskLogTime(value) {
+    if (!value) return "--:--:--";
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return "时间未知";
+    return new Intl.DateTimeFormat("zh-CN", {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).format(date);
+  }
+
+  function codexTaskDuration(start, end) {
+    if (!start) return "尚未产生";
+    const startedAt = new Date(start).getTime();
+    const finishedAt = end ? new Date(end).getTime() : Date.now();
+    if (Number.isNaN(startedAt) || Number.isNaN(finishedAt)) return "时间未知";
+    return formatDuration(Math.max(0, finishedAt - startedAt) / 1000);
+  }
+
+  function codexUsageSummary(usage) {
+    if (!usage) return "";
+    return [
+      `输入 ${formatNumber(usage.inputTokens || 0)}`,
+      `缓存 ${formatNumber(usage.cachedInputTokens || 0)}`,
+      `输出 ${formatNumber(usage.outputTokens || 0)}`,
+    ].join(" · ");
+  }
+
+  function codexEventPresentation(event) {
+    const kind = event?.kind || "event";
+    const presentations = {
+      "thread.started": ["会话", "session", "Codex 会话已建立"],
+      "turn.started": ["开始", "progress", "开始处理新一轮请求"],
+      reasoning: ["思考", "reasoning", ""],
+      agent_message: ["Codex", "message", ""],
+      command_execution: ["执行命令", "command", ""],
+      "turn.completed": ["完成", "success", "本轮处理完成"],
+      stderr: ["错误输出", "error", ""],
+      error: ["错误", "error", ""],
+      stream_error: ["日志读取错误", "error", ""],
+      stdout: ["输出", "output", ""],
+    };
+    const [label, tone, fallback] = presentations[kind] || [kind, "output", ""];
+    const usageSummary = kind === "turn.completed" ? codexUsageSummary(event.usage) : "";
+    return {
+      label,
+      tone,
+      summary: usageSummary || fallback || String(event?.summary || "").trim() || "无详细内容",
+    };
+  }
+
+  function renderCodexEvents(events) {
+    const rows = Array.isArray(events) ? events : [];
+    if (!rows.length) {
+      els.codexTaskEvents.replaceChildren(createElement("div", "codex-event-empty", "暂无运行日志"));
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    rows.forEach((event) => {
+      const presentation = codexEventPresentation(event);
+      const card = createElement("article", `codex-event ${presentation.tone}`);
+      const header = createElement("header", "codex-event-header");
+      const time = createElement("time", "codex-event-time", codexTaskLogTime(event.at));
+      time.dateTime = event.at || "";
+      time.title = codexTaskFullTime(event.at);
+      header.append(
+        createElement("span", "codex-event-label", presentation.label),
+        time,
+      );
+      const bodyTag = event.kind === "command_execution" ? "code" : "div";
+      const body = createElement(bodyTag, "codex-event-body", presentation.summary);
+      card.append(header, body);
+      fragment.append(card);
+    });
+    els.codexTaskEvents.replaceChildren(fragment);
+  }
+
+  function appendCodexDetailSection(container, title, rows) {
+    const section = createElement("section", "codex-task-details-section");
+    section.append(createElement("h3", "", title));
+    const list = createElement("dl", "codex-task-details-list");
+    rows.forEach(([label, value, monospace = false]) => {
+      const row = createElement("div", "codex-task-details-row");
+      row.append(
+        createElement("dt", "", label),
+        createElement("dd", monospace ? "is-monospace" : "", String(value || "--")),
+      );
+      list.append(row);
+    });
+    section.append(list);
+    container.append(section);
+  }
+
+  function renderCodexTaskDetails(task) {
+    if (!task) {
+      els.codexTaskDetailsContent.replaceChildren(createElement("div", "empty-state compact", "尚未选择任务"));
+      return;
+    }
+    const content = document.createDocumentFragment();
+    appendCodexDetailSection(content, "任务", [
+      ["题目", `#${task.exerciseId} · ${codexTaskExerciseName(task)}`],
+      ["运行模式", codexModeLabel(task.mode)],
+      ["当前状态", codexStatusLabel(task.status)],
+      ["任务 ID", task.id, true],
+      ["会话 ID", task.sessionId || "尚未建立", true],
+      ["父任务 ID", task.parentTaskId || "无", true],
+      ["恢复命令", task.sessionId ? `codex resume ${task.sessionId}` : "尚不可恢复", true],
+    ]);
+    const events = Array.isArray(task.events) ? task.events : [];
+    appendCodexDetailSection(content, "时间", [
+      ["创建时间", codexTaskFullTime(task.createdAt)],
+      ["开始时间", codexTaskFullTime(task.startedAt)],
+      ["结束时间", codexTaskFullTime(task.finishedAt)],
+      ["首条日志", codexTaskFullTime(events[0]?.at)],
+      ["最近日志", codexTaskFullTime(events.at(-1)?.at)],
+      ["排队耗时", task.startedAt ? codexTaskDuration(task.createdAt, task.startedAt) : codexTaskDuration(task.createdAt)],
+      ["运行耗时", codexTaskDuration(task.startedAt, task.finishedAt)],
+      ["总耗时", codexTaskDuration(task.createdAt, task.finishedAt)],
+    ]);
+    const usage = task.usage;
+    appendCodexDetailSection(content, "Token 用量", usage ? [
+      ["完成轮次", formatNumber(task.completedTurns || 0)],
+      ["输入 Token", formatNumber(usage.inputTokens || 0)],
+      ["缓存输入", formatNumber(usage.cachedInputTokens || 0)],
+      ["非缓存输入", formatNumber(usage.uncachedInputTokens || 0)],
+      ["缓存写入", formatNumber(usage.cacheWriteInputTokens || 0)],
+      ["输出 Token", formatNumber(usage.outputTokens || 0)],
+      ["推理输出", formatNumber(usage.reasoningOutputTokens || 0)],
+      ["合计 Token", formatNumber(usage.totalTokens || 0)],
+    ] : [["统计状态", "尚未收到本轮完成事件中的 Token 数据"]]);
+    appendCodexDetailSection(content, "文件", [
+      ["题目目录", task.challengePath || "未记录", true],
+      ["Writeup", task.writeupPath || "未生成", true],
+    ]);
+    els.codexTaskDetailsContent.replaceChildren(content);
+  }
+
+  function showCodexTaskDetails() {
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task) return;
+    renderCodexTaskDetails(task);
+    els.codexTaskDetailsDialog.showModal();
+  }
+
   function codexTaskExerciseName(task) {
     const exercise = state.groups.flatMap((group) => group.corpus || []).find((item) => item.id === task.exerciseId);
     return exercise ? exercise.name || `题目 ${task.exerciseId}` : `题目 ${task.exerciseId}`;
@@ -2617,7 +2780,9 @@
     if (!task) {
       els.codexTaskStatus.textContent = "选择一个任务";
       els.codexTaskMeta.textContent = "--";
-      els.codexTaskEvents.textContent = "尚未选择任务";
+      els.codexTaskResume.hidden = true;
+      els.codexTaskResume.textContent = "--";
+      els.codexTaskEvents.replaceChildren(createElement("div", "codex-event-empty", "尚未选择任务"));
       state.codexEventsFollowTail = true;
       els.codexTaskOutput.textContent = "尚未完成";
       els.cancelCodexTask.disabled = true;
@@ -2625,7 +2790,7 @@
       els.deleteCodexTask.disabled = true;
       els.openCodexTerminal.disabled = true;
       els.openCodexFolder.disabled = true;
-      els.copyCodexResume.disabled = true;
+      els.showCodexTaskDetails.disabled = true;
       els.codexTaskMessage.value = "";
       els.codexTaskFollowUp.disabled = true;
       els.codexTaskSide.disabled = true;
@@ -2633,12 +2798,11 @@
     }
     els.codexTaskStatus.className = `codex-task-status ${codexStatusClass(task.status)}`;
     els.codexTaskStatus.textContent = `${codexModeLabel(task.mode)} · ${codexStatusLabel(task.status)} · ${codexTaskExerciseName(task)}`;
-    const started = task.startedAt ? codexTaskTime(task.startedAt) : "尚未启动";
-    const finished = task.finishedAt ? ` · 结束 ${codexTaskTime(task.finishedAt)}` : "";
-    els.codexTaskMeta.textContent = `任务 ${task.id} · 创建 ${codexTaskTime(task.createdAt)} · 开始 ${started}${finished}`;
+    els.codexTaskMeta.textContent = `任务 ${task.id} · 创建 ${codexTaskTime(task.createdAt)}`;
+    els.codexTaskResume.hidden = !task.sessionId;
+    els.codexTaskResume.textContent = task.sessionId ? `恢复会话：codex resume ${task.sessionId}` : "--";
     const shouldFollow = state.codexEventsFollowTail || codexEventsNearBottom();
-    const eventLines = (task.events || []).map((event) => `[${event.kind || "event"}] ${event.summary || ""}`);
-    els.codexTaskEvents.textContent = eventLines.length ? eventLines.join("\n") : "暂无运行日志";
+    renderCodexEvents(task.events);
     state.codexEventsFollowTail = shouldFollow;
     requestAnimationFrame(scrollCodexEventsToBottom);
     els.codexTaskOutput.textContent = task.output || (task.error ? `任务失败：${task.error}` : "尚未完成");
@@ -2648,16 +2812,19 @@
     els.deleteCodexTask.disabled = !terminal;
     els.openCodexTerminal.disabled = !terminal || !task.sessionId;
     els.openCodexFolder.disabled = false;
-    els.copyCodexResume.disabled = !task.sessionId;
-    const canMessage = Boolean(task.sessionId) && task.status !== "queued" && task.mode !== "side";
-    els.codexTaskFollowUp.disabled = !canMessage;
-    els.codexTaskSide.disabled = !canMessage;
+    els.showCodexTaskDetails.disabled = false;
+    const canFollowUp = Boolean(task.sessionId) && task.status !== "queued";
+    const canSide = canFollowUp && task.mode !== "side";
+    els.codexTaskFollowUp.disabled = !canFollowUp;
+    els.codexTaskSide.disabled = !canSide;
+    els.codexTaskSide.title = task.mode === "side" ? "Side 对话不能继续创建 Side 对话" : "";
   }
 
   function renderCodexTaskState() {
     const selected = state.codexTasks.find((task) => task.id === state.codexSelectedTaskId) || null;
     renderCodexTaskList();
     renderCodexTaskDetail(selected);
+    if (els.codexTaskDetailsDialog.open) renderCodexTaskDetails(selected);
     const canRun = state.codexAvailable === true && state.selectedExerciseId !== null;
     els.runCodex.disabled = !canRun;
     els.runCodexPure.disabled = !canRun;
@@ -2691,17 +2858,6 @@
         showToast(`打开题目目录失败：${error.message}`, "error");
       }
     });
-  }
-
-  async function copyCodexResumeCommand() {
-    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
-    if (!task?.sessionId) return;
-    try {
-      await navigator.clipboard.writeText(`codex resume ${task.sessionId}`);
-      showToast("恢复命令已复制", "success");
-    } catch {
-      showToast("复制失败，请使用“打开对话”", "warning");
-    }
   }
 
   function stopCodexPollingIfIdle() {
@@ -2978,7 +3134,11 @@
     els.codexTaskSide.addEventListener("click", () => sendCodexMessage(true));
     els.openCodexTerminal.addEventListener("click", () => void openCodexTerminal());
     els.openCodexFolder.addEventListener("click", () => void openCodexFolder());
-    els.copyCodexResume.addEventListener("click", () => void copyCodexResumeCommand());
+    els.showCodexTaskDetails.addEventListener("click", showCodexTaskDetails);
+    $("close-codex-task-details").addEventListener("click", () => els.codexTaskDetailsDialog.close());
+    els.codexTaskDetailsDialog.addEventListener("click", (event) => {
+      if (event.target === els.codexTaskDetailsDialog) els.codexTaskDetailsDialog.close();
+    });
     els.confirmCodexStart.addEventListener("click", confirmCodexStart);
     els.cancelCodexStart.addEventListener("click", () => els.codexPromptDialog.close());
     $("close-codex-prompt").addEventListener("click", () => els.codexPromptDialog.close());

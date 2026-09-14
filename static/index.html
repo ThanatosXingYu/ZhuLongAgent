@@ -541,7 +541,7 @@
           <span id="tool-manager-progress-size">--</span>
         </div>
         <div class="tool-manager-progress-metrics">
-          <span>速度 <strong id="tool-manager-progress-speed">--</strong></span>
+          <span>当前工具速度 <strong id="tool-manager-progress-speed">--</strong></span>
           <span>预计剩余 <strong id="tool-manager-progress-eta">--</strong></span>
         </div>
       </section>
@@ -605,6 +605,7 @@
           <div>
             <p id="codex-task-status" class="codex-task-status">选择一个任务</p>
             <p id="codex-task-meta" class="codex-task-meta">--</p>
+            <p id="codex-task-resume" class="codex-task-resume" hidden>--</p>
           </div>
           <div class="codex-task-detail-actions">
             <button id="continue-codex-task" class="button button-primary" type="button" disabled>
@@ -627,15 +628,15 @@
               <i data-lucide="folder-open" aria-hidden="true"></i>
               <span>题目目录</span>
             </button>
-            <button id="copy-codex-resume" class="button button-ghost" type="button" disabled title="复制 Codex 会话恢复命令">
-              <i data-lucide="copy" aria-hidden="true"></i>
-              <span>复制命令</span>
+            <button id="show-codex-task-details" class="button button-ghost" type="button" disabled title="查看当前 Codex 任务的完整运行详情">
+              <i data-lucide="info" aria-hidden="true"></i>
+              <span>详情</span>
             </button>
           </div>
         </div>
         <div class="codex-task-output-group">
           <h3>运行日志</h3>
-          <pre id="codex-task-events" class="codex-task-events">尚未选择任务</pre>
+          <div id="codex-task-events" class="codex-task-events">尚未选择任务</div>
         </div>
         <div class="codex-task-output-group">
           <h3>最终输出</h3>
@@ -650,6 +651,21 @@
           </div>
         </div>
       </section>
+    </div>
+  </dialog>
+
+  <dialog id="codex-task-details-dialog" class="codex-task-details-dialog" aria-labelledby="codex-task-details-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Task Diagnostics</p>
+        <h2 id="codex-task-details-title">Codex 任务详情</h2>
+      </div>
+      <button id="close-codex-task-details" class="icon-button" type="button" title="关闭" aria-label="关闭 Codex 任务详情">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div id="codex-task-details-content" class="codex-task-details-content">
+      <div class="empty-state compact">尚未选择任务</div>
     </div>
   </dialog>
 

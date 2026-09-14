@@ -15,6 +15,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,6 +145,8 @@ _GO_SOURCES: tuple[str, ...] = (
     "https://goproxy.cn",
     "https://mirrors.aliyun.com/goproxy/",
 )
+_TRANSFER_SPEED_WINDOW_SECONDS = 2.0
+
 _GITHUB_MIRRORS: tuple[str, ...] = (
     "https://ghfast.top/",
     "https://gh-proxy.com/",
@@ -181,6 +184,8 @@ class ToolManager:
         self._current_started_at = 0.0
         self._current_bytes = 0
         self._current_total = 0
+        self._current_speed = 0.0
+        self._transfer_samples: deque[tuple[float, int]] = deque()
         self._phase = ""
         self._message = ""
         self._python_index_url = ""
@@ -224,12 +229,15 @@ class ToolManager:
             }
 
     def _progress_snapshot(self) -> dict[str, Any]:
+        now = time.monotonic()
         elapsed = (
-            max(0.0, time.monotonic() - self._current_started_at)
+            max(0.0, now - self._current_started_at)
             if self._current_started_at > 0
             else 0.0
         )
-        speed = self._current_bytes / elapsed if elapsed > 0 else 0.0
+        speed = self._current_speed
+        if not self._transfer_samples or now - self._transfer_samples[-1][0] > _TRANSFER_SPEED_WINDOW_SECONDS:
+            speed = 0.0
         remaining = self._current_total - self._current_bytes
         eta = remaining / speed if speed > 0 and self._current_total > 0 else 0.0
         return {
@@ -328,6 +336,7 @@ class ToolManager:
             self._current_started_at = self._started_at
             self._current_bytes = 0
             self._current_total = 0
+            self._reset_transfer_speed_locked()
             self._phase = "排队"
             self._message = "等待安装任务开始"
         threading.Thread(target=self._install_worker, args=(selected,), daemon=True).start()
@@ -360,6 +369,7 @@ class ToolManager:
             self._current = spec.name
             self._current_bytes = 0
             self._current_total = 0
+            self._reset_transfer_speed_locked()
             self._phase = "卸载"
             self._message = f"正在卸载 {spec.label}"
             self._error = ""
@@ -482,6 +492,7 @@ class ToolManager:
                     self._current_started_at = time.monotonic()
                     self._current_bytes = 0
                     self._current_total = 0
+                    self._reset_transfer_speed_locked()
                     self._phase = "准备"
                     self._message = f"准备安装 {spec.label}"
                 try:
@@ -510,6 +521,7 @@ class ToolManager:
                 self._current = ""
                 self._current_bytes = 0
                 self._current_total = 0
+                self._reset_transfer_speed_locked()
                 self._phase = ""
                 self._message = ""
             # Keep the manifest useful even when a batch partially fails or
@@ -565,8 +577,34 @@ class ToolManager:
 
     def _set_progress(self, phase: str, message: str) -> None:
         with self._lock:
+            if phase != self._phase:
+                self._reset_transfer_speed_locked(self._current_bytes)
             self._phase = phase
             self._message = message
+
+    def _reset_transfer_speed_locked(self, current_bytes: int = 0) -> None:
+        now = time.monotonic()
+        self._current_speed = 0.0
+        self._transfer_samples.clear()
+        self._transfer_samples.append((now, max(0, current_bytes)))
+
+    def _record_transfer_bytes_locked(self, current_bytes: int) -> None:
+        now = time.monotonic()
+        normalized = max(0, current_bytes)
+        if normalized < self._current_bytes or not self._transfer_samples:
+            self._current_bytes = normalized
+            self._reset_transfer_speed_locked(normalized)
+            return
+        self._current_bytes = normalized
+        self._transfer_samples.append((now, normalized))
+        cutoff = now - _TRANSFER_SPEED_WINDOW_SECONDS
+        while len(self._transfer_samples) > 2 and self._transfer_samples[1][0] <= cutoff:
+            self._transfer_samples.popleft()
+        started_at, started_bytes = self._transfer_samples[0]
+        elapsed = now - started_at
+        self._current_speed = (
+            max(0, normalized - started_bytes) / elapsed if elapsed > 0 else 0.0
+        )
 
     def _ensure_venv(self) -> None:
         if self._venv_command("python").is_file():
@@ -630,7 +668,7 @@ class ToolManager:
                 if watched_root:
                     current_size = _directory_size(watched_root)
                     with self._lock:
-                        self._current_bytes = max(0, current_size - baseline_bytes)
+                        self._record_transfer_bytes_locked(current_size - baseline_bytes)
                 if self._cancel_event.is_set():
                     process.terminate()
                     try:
@@ -669,7 +707,7 @@ class ToolManager:
                 continue
             received, total = (int(value) for value in match.groups())
             with self._lock:
-                self._current_bytes = max(0, received)
+                self._record_transfer_bytes_locked(received)
                 self._current_total = max(0, total)
 
     def _install_go(self, spec: ToolSpec) -> None:
@@ -887,6 +925,7 @@ class ToolManager:
                     with self._lock:
                         self._current_total = max(0, total)
                         self._current_bytes = 0
+                        self._reset_transfer_speed_locked()
                     while True:
                         if self._cancel_event.is_set():
                             raise InstallCancelled
@@ -895,7 +934,9 @@ class ToolManager:
                             break
                         handle.write(chunk)
                         with self._lock:
-                            self._current_bytes += len(chunk)
+                            self._record_transfer_bytes_locked(
+                                self._current_bytes + len(chunk)
+                            )
                 return
             except InstallCancelled:
                 target.unlink(missing_ok=True)

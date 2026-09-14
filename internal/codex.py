@@ -87,11 +87,45 @@ class ProcessResult:
 
 
 @dataclass(frozen=True)
+class TokenUsage:
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_output_tokens: int = 0
+    total_tokens: int = 0
+
+    def __add__(self, other: TokenUsage) -> TokenUsage:
+        return TokenUsage(
+            input_tokens=self.input_tokens + other.input_tokens,
+            cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            cache_write_input_tokens=self.cache_write_input_tokens
+            + other.cache_write_input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            reasoning_output_tokens=self.reasoning_output_tokens
+            + other.reasoning_output_tokens,
+            total_tokens=self.total_tokens + other.total_tokens,
+        )
+
+    def to_dict(self) -> dict[str, int]:
+        return {
+            "inputTokens": self.input_tokens,
+            "cachedInputTokens": self.cached_input_tokens,
+            "cacheWriteInputTokens": self.cache_write_input_tokens,
+            "uncachedInputTokens": max(0, self.input_tokens - self.cached_input_tokens),
+            "outputTokens": self.output_tokens,
+            "reasoningOutputTokens": self.reasoning_output_tokens,
+            "totalTokens": self.total_tokens,
+        }
+
+
+@dataclass(frozen=True)
 class Event:
     at: datetime
     kind: str
     summary: str
     session_id: str = ""
+    usage: TokenUsage | None = None
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -101,6 +135,8 @@ class Event:
         }
         if self.session_id:
             result["sessionId"] = self.session_id
+        if self.usage is not None:
+            result["usage"] = self.usage.to_dict()
         return result
 
 
@@ -147,7 +183,13 @@ class ProcessRunner:
                         continue
                     event = parse_event_line(line, datetime.now(timezone.utc), redactor)
                     if kind_override:
-                        event = Event(event.at, kind_override, event.summary, event.session_id)
+                        event = Event(
+                            event.at,
+                            kind_override,
+                            event.summary,
+                            event.session_id,
+                            event.usage,
+                        )
                     if event.session_id:
                         session_id = event.session_id
                     callback(event)
@@ -371,6 +413,84 @@ class Redactor:
         return value
 
 
+def _usage_int(source: Mapping[str, Any], snake_name: str, camel_name: str) -> int:
+    return _nonnegative_int(source.get(snake_name, source.get(camel_name, 0)))
+
+
+def _nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _token_usage_from_mapping(source: Mapping[str, Any]) -> TokenUsage | None:
+    keys = {
+        "input_tokens",
+        "inputTokens",
+        "cached_input_tokens",
+        "cachedInputTokens",
+        "cache_write_input_tokens",
+        "cacheWriteInputTokens",
+        "output_tokens",
+        "outputTokens",
+        "reasoning_output_tokens",
+        "reasoningOutputTokens",
+        "total_tokens",
+        "totalTokens",
+    }
+    if not any(key in source for key in keys):
+        return None
+    input_tokens = _usage_int(source, "input_tokens", "inputTokens")
+    output_tokens = _usage_int(source, "output_tokens", "outputTokens")
+    total_tokens = _usage_int(source, "total_tokens", "totalTokens")
+    return TokenUsage(
+        input_tokens=input_tokens,
+        cached_input_tokens=_usage_int(
+            source, "cached_input_tokens", "cachedInputTokens"
+        ),
+        cache_write_input_tokens=_usage_int(
+            source, "cache_write_input_tokens", "cacheWriteInputTokens"
+        ),
+        output_tokens=output_tokens,
+        reasoning_output_tokens=_usage_int(
+            source, "reasoning_output_tokens", "reasoningOutputTokens"
+        ),
+        total_tokens=total_tokens or input_tokens + output_tokens,
+    )
+
+
+def _event_token_usage(
+    envelope: Mapping[str, Any], item: Mapping[str, Any]
+) -> TokenUsage | None:
+    containers = (item, envelope)
+    for container in containers:
+        for key in ("turn_token_usage", "turnTokenUsage", "usage"):
+            raw_usage = container.get(key)
+            if isinstance(raw_usage, Mapping):
+                usage = _token_usage_from_mapping(raw_usage)
+                if usage is not None:
+                    return usage
+    raw_payload = envelope.get("payload")
+    if isinstance(raw_payload, Mapping):
+        return _event_token_usage(raw_payload, {})
+    return None
+
+
+def _token_usage_from_summary(summary: str) -> TokenUsage | None:
+    try:
+        raw = json.loads(summary)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(raw, Mapping):
+        return None
+    raw_item = raw.get("item")
+    item = cast(Mapping[str, Any], raw_item) if isinstance(raw_item, Mapping) else {}
+    return _event_token_usage(raw, item)
+
+
 def parse_event_line(line: str, at: datetime | None = None, redactor: Redactor | None = None) -> Event:
     now = at or datetime.now(timezone.utc)
     redact = redactor or Redactor()
@@ -390,8 +510,29 @@ def parse_event_line(line: str, at: datetime | None = None, redactor: Redactor |
         envelope.get("id") if envelope.get("type") == "thread.started" else "",
     )
     kind = str(item.get("type") or envelope.get("type") or "stdout")
-    summary = _first_nonempty(item.get("text"), item.get("command"), item.get("aggregated_output"), item.get("output"), envelope.get("message"), line.strip())
-    return Event(now, kind, truncate_event_summary(redact.apply(str(summary))), session_id)
+    usage = _event_token_usage(envelope, item)
+    summary = _first_nonempty(
+        item.get("text"),
+        item.get("command"),
+        item.get("message"),
+        item.get("aggregated_output"),
+        item.get("output"),
+        envelope.get("message"),
+        line.strip(),
+    )
+    if kind == "thread.started":
+        summary = "Codex 会话已建立"
+    elif kind == "turn.started":
+        summary = "开始处理请求"
+    elif kind == "turn.completed":
+        summary = "本轮处理完成"
+    return Event(
+        now,
+        kind,
+        truncate_event_summary(redact.apply(str(summary))),
+        session_id,
+        usage,
+    )
 
 
 def truncate_event_summary(value: str) -> str:
@@ -425,6 +566,8 @@ class Snapshot:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     parent_id: str = ""
+    usage: TokenUsage = field(default_factory=TokenUsage)
+    completed_turns: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -457,7 +600,25 @@ class Snapshot:
             result["finishedAt"] = _time_wire(self.finished_at)
         if self.parent_id:
             result["parentTaskId"] = self.parent_id
+        usage = self.usage
+        completed_turns = self.completed_turns
+        if completed_turns <= 0 and usage == TokenUsage():
+            usage, completed_turns = _aggregate_event_usage(self.events)
+        if completed_turns > 0 or usage != TokenUsage():
+            result["usage"] = usage.to_dict()
+            result["completedTurns"] = completed_turns
         return result
+
+
+def _aggregate_event_usage(events: Iterable[Event]) -> tuple[TokenUsage, int]:
+    usage = TokenUsage()
+    completed_turns = 0
+    for event in events:
+        if event.kind != "turn.completed" or event.usage is None:
+            continue
+        usage += event.usage
+        completed_turns += 1
+    return usage, completed_turns
 
 
 @dataclass(frozen=True)
@@ -743,6 +904,8 @@ class CodexManager:
             parent = self._tasks.get(task_id)
             if parent is None:
                 raise TaskNotFound("codex task not found")
+            if parent.snapshot.mode == "side":
+                raise CodexError("Side 对话不能继续创建 Side 对话")
             session_id = parent.snapshot.session_id.strip()
             if not session_id:
                 raise CodexError("Codex 会话尚未建立，暂时不能发起 Side 提问")
@@ -967,10 +1130,23 @@ class CodexManager:
 
             def on_event(event: Event) -> None:
                 nonlocal events
-                event = Event(event.at, event.kind, truncate_event_summary(Redactor(self.config.process.api_key).apply(event.summary)), event.session_id)
+                event = Event(
+                    event.at,
+                    event.kind,
+                    truncate_event_summary(Redactor(self.config.process.api_key).apply(event.summary)),
+                    event.session_id,
+                    event.usage,
+                )
                 with self._condition:
                     events = (events + [event])[-MAX_TASK_EVENTS:]
-                    task.snapshot = _replace_snapshot(task.snapshot, events=tuple(events), session_id=event.session_id or task.snapshot.session_id)
+                    changes: dict[str, Any] = {
+                        "events": tuple(events),
+                        "session_id": event.session_id or task.snapshot.session_id,
+                    }
+                    if event.kind == "turn.completed" and event.usage is not None:
+                        changes["usage"] = task.snapshot.usage + event.usage
+                        changes["completed_turns"] = task.snapshot.completed_turns + 1
+                    task.snapshot = _replace_snapshot(task.snapshot, **changes)
                     self._persist_tasks_locked()
 
             while True:
@@ -1227,14 +1403,34 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
             at = _parse_time(item.get("at"))
             if at is None:
                 continue
-            events.append(
-                Event(
-                    at,
-                    str(item.get("kind", "event") or "event"),
-                    truncate_event_summary(str(item.get("summary", "") or "")),
-                    str(item.get("sessionId", "") or ""),
-                )
+            raw_usage = item.get("usage")
+            usage = (
+                _token_usage_from_mapping(raw_usage)
+                if isinstance(raw_usage, Mapping)
+                else None
             )
+            kind = str(item.get("kind", "event") or "event")
+            summary = truncate_event_summary(str(item.get("summary", "") or ""))
+            session_id = str(item.get("sessionId", "") or "")
+            legacy_event = parse_event_line(summary, at)
+            if legacy_event.kind == kind and legacy_event.summary != summary:
+                summary = legacy_event.summary
+                session_id = session_id or legacy_event.session_id
+                usage = usage or legacy_event.usage
+            if usage is None:
+                usage = _token_usage_from_summary(summary)
+            events.append(Event(at, kind, summary, session_id, usage))
+    event_usage, event_completed_turns = _aggregate_event_usage(events)
+    raw_usage = raw.get("usage")
+    persisted_usage = (
+        _token_usage_from_mapping(raw_usage)
+        if isinstance(raw_usage, Mapping)
+        else None
+    )
+    usage = persisted_usage or event_usage
+    completed_turns = _nonnegative_int(raw.get("completedTurns"))
+    if completed_turns <= 0:
+        completed_turns = event_completed_turns
     created_at = _parse_time(raw.get("createdAt")) or datetime.now(timezone.utc)
     status = str(raw.get("status", "failed") or "failed")
     allowed_statuses = {"queued", "running", "completed", "failed", "canceled"}
@@ -1258,6 +1454,8 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         started_at=_parse_time(raw.get("startedAt")),
         finished_at=_parse_time(raw.get("finishedAt")),
         parent_id=str(raw.get("parentTaskId", "") or ""),
+        usage=usage,
+        completed_turns=completed_turns,
     )
 
 
