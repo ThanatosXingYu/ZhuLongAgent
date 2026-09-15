@@ -125,3 +125,17 @@ def test_sse_route_reports_unavailable_without_a_broker() -> None:
     assert response.headers["content-type"].startswith("text/event-stream")
     assert "event: stream.unavailable" in response.text
     assert '"type":"stream.unavailable"' in response.text
+
+
+def test_heartbeat_is_a_structured_sse_event() -> None:
+    from internal.routers.realtime import _sse_wire
+
+    broker = EventBroker()
+    latest_before = broker.latest_id
+    event = broker.control_event(
+        "stream.heartbeat", data={"lastEventId": latest_before}
+    )
+    wire = _sse_wire(event)
+    assert "event: stream.heartbeat" in wire
+    assert '"type":"stream.heartbeat"' in wire
+    assert f'"lastEventId":{latest_before}' in wire

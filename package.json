@@ -1,0 +1,13 @@
+{
+  "name": "ichunqiu-agent-ui",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check:js": "node --check static/app.js && node --check static/modules/dom.js && node --check static/modules/realtime.js && node --check static/modules/api.js && node --check static/modules/state.js",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.62.0"
+  }
+}

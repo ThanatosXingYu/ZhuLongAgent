@@ -14,9 +14,12 @@
         <span class="brand-mark" aria-hidden="true"><i data-lucide="terminal"></i></span>
         <div>
           <h1>赛场控制台</h1>
-          <div id="connection-status" class="connection-status is-connecting" role="status">
-            <span class="status-dot" aria-hidden="true"></span>
-            <span class="connection-label">正在连接</span>
+          <div class="connection-cluster">
+            <div id="connection-status" class="connection-status is-connecting" role="status">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span class="connection-label">正在连接</span>
+            </div>
+            <span id="realtime-status" class="realtime-status is-connecting" role="status" title="实时事件连接状态">实时连接中</span>
           </div>
         </div>
       </div>
@@ -70,6 +73,15 @@
       </div>
     </div>
   </header>
+
+  <section id="startup-faults" class="startup-faults" role="alert" hidden>
+    <div>
+      <strong>部分功能初始化失败</strong>
+      <span data-fault-summary>其余功能仍可继续使用。</span>
+      <ul data-fault-list></ul>
+    </div>
+    <button id="retry-initialization" class="button button-ghost button-compact" type="button">重新初始化失败模块</button>
+  </section>
 
   <main class="workspace">
     <aside class="panel exercise-panel" aria-labelledby="exercise-heading">
@@ -727,6 +739,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script src="/app.js" defer></script>
+  <script type="module" src="/app.js"></script>
 </body>
 </html>

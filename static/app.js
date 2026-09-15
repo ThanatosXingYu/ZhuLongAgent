@@ -1,3 +1,8 @@
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js";
+import { createApiClient } from "./modules/api.js";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js";
+import { createAppState } from "./modules/state.js";
+
 "use strict";
 
 (() => {
@@ -5,6 +10,8 @@
   const NOTICE_REFRESH_MS = 10000;
   const BUILD_POLL_MS = 2000;
   const BUILD_POLL_TIMEOUT_MS = 60000;
+  const FALLBACK_POLL_MS = 10000;
+  // Legacy cadence names remain for compatibility; SSE/fallback paths use FALLBACK_POLL_MS.
   const ATTACHMENT_TASK_POLL_MS = 500;
   const ATTACHMENT_SIZE_POLL_MS = 1000;
   const ACTIVE_ENVIRONMENT_STORAGE_KEY = "gcsis.active-environment-ids";
@@ -15,74 +22,16 @@
   const RICH_TEXT_TAGS = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IMG", "LI", "OL", "P", "PRE", "S", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL"]);
   const DROPPED_RICH_TEXT_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "MATH", "OBJECT", "SCRIPT", "STYLE", "SVG", "TEXTAREA"]);
 
-  const state = {
-    groups: [],
-    notices: [],
-    overview: null,
-    matchInfo: null,
-    detail: null,
-    noticeDetail: null,
-    attachmentCatalog: null,
-    attachmentBusy: false,
-    attachmentTask: null,
-    attachmentTaskTimer: null,
-    attachmentSizeTimer: null,
-    attachmentSizeProbing: false,
-    collapsedGroups: new Set(),
-    collapsedAttachmentCategories: new Set(),
-    trackedEnvironmentIds: new Set(),
-    activeEnvironments: new Map(),
-    environmentRefreshBusy: false,
-    environmentRefreshQueued: false,
-    environmentSyncVersion: 0,
-    environmentBatchBusy: false,
-    environmentStopBusy: new Set(),
-    environmentsRestored: false,
-    exercisesLoaded: false,
-    selectedExerciseId: null,
-    selectedNoticeId: null,
-    aiExerciseId: null,
-    codexAvailable: null,
-    codexSystemPrompt: "",
-    codexCtfSkillsEnabled: true,
-    modelApiKeyConfigured: false,
-    modelApiKeyMasked: "",
-    codexApiKeyConfigured: false,
-    codexApiKeyMasked: "",
-    codexStartMode: "run",
-    codexTasks: [],
-    codexSelectedTaskId: null,
-    codexPollTimer: null,
-    codexTerminalSeen: new Set(),
-    codexEventsFollowTail: true,
-    codexLoadedEvents: new Map(),
-    codexHasMoreEvents: new Map(),
-    codexExpandedEvents: new Set(),
-    codexCollapsedEvents: new Set(),
-    codexCollapsedRounds: new Set(),
-    codexRoundCursor: new Map(),
-    codexCollapsedTaskGroups: new Set(),
-    codexCollapsedSessions: new Set(),
-    codexAutoResumeInterrupted: false,
-    exerciseSearch: "",
-    exerciseFilters: { unsolved: false, attachment: false, environment: false },
-    toolManagerTimer: null,
-    tools: [],
-    toolSelection: new Set(),
-    environmentStatus: null,
-    scoreTimer: null,
-    noticeTimer: null,
-    pollToken: 0,
-    configured: false,
-    authenticated: false,
-    authExpiryNoticeAt: 0,
-  };
+  const state = createAppState({ realtimeStopped: REALTIME_STATUS.STOPPED });
 
   const $ = (id) => document.getElementById(id);
   let dialogLayerSequence = 0;
   const els = {
     connection: $("connection-status"),
-    connectionLabel: $("connection-status").querySelector(".connection-label"),
+    connectionLabel: $("connection-status")?.querySelector(".connection-label") || null,
+    realtimeStatus: $("realtime-status"),
+    startupFaults: $("startup-faults"),
+    retryInitialization: $("retry-initialization"),
     teamSummary: $("team-summary"),
     score: $("score-value"),
     rank: $("rank-value"),
@@ -260,14 +209,7 @@
     toastRegion: $("toast-region"),
   };
 
-  class RequestError extends Error {
-    constructor(message, code = "REQUEST_ERROR", status = 0) {
-      super(message);
-      this.name = "RequestError";
-      this.code = code;
-      this.status = status;
-    }
-  }
+  let faultCenter = null;
 
   function createElement(tag, className, text) {
     const node = document.createElement(tag);
@@ -342,6 +284,7 @@
   }
 
   function syncToastRegionHost(excludedDialog = null) {
+    if (!els.toastRegion) return;
     const topDialog = [...document.querySelectorAll("dialog[open]")]
       .filter((dialog) => dialog !== excludedDialog)
       .sort((left, right) => Number(left.dataset.dialogLayer || 0) - Number(right.dataset.dialogLayer || 0))
@@ -376,6 +319,7 @@
   }
 
   function setConnection(kind) {
+    if (!els.connection || !els.connectionLabel) return;
     els.connection.classList.remove("is-connecting", "is-connected", "is-error");
     els.connection.classList.add(`is-${kind}`);
     els.connectionLabel.textContent = kind === "connected" ? "已连接" : kind === "error" ? "连接异常" : "正在连接";
@@ -433,31 +377,12 @@
     return new Promise((resolve) => window.setTimeout(resolve, ms));
   }
 
-  async function request(path, options = {}) {
-    let response;
-    try {
-      response = await fetch(path, { credentials: "same-origin", ...options });
-    } catch {
-      setConnection("error");
-      throw new RequestError("无法连接到本地服务", "NETWORK_ERROR");
-    }
-
-    let payload;
-    try {
-      payload = await response.json();
-    } catch {
-      setConnection("error");
-      throw new RequestError("服务返回了无效响应", "INVALID_RESPONSE", response.status);
-    }
-    setConnection("connected");
-    if (!response.ok || !payload.ok) {
-      const fault = payload.error || {};
-      if (fault.code === "AUTH_EXPIRED") handleAuthExpired();
-      if (fault.code === "MATCH_CONTEXT_MISSING") handleMatchContextExpired();
-      throw new RequestError(fault.message || "请求失败", fault.code || "REQUEST_FAILED", response.status);
-    }
-    return payload.data;
-  }
+  const apiClient = createApiClient({
+    onConnection: setConnection,
+    onAuthExpired: handleAuthExpired,
+    onMatchContextExpired: handleMatchContextExpired,
+  });
+  const request = (...args) => apiClient.request(...args);
 
   function handleAuthExpired() {
     stopWorkspacePollingOnAuthFailure();
@@ -789,9 +714,9 @@
     try {
       const catalog = await request("/api/tools");
       renderToolManager(catalog);
-      if (catalog.status === "running" || catalog.status === "cancelling") {
+      if ((catalog.status === "running" || catalog.status === "cancelling") && shouldUseFallbackPolling() && !state.realtimeClient) {
         if (state.toolManagerTimer) window.clearTimeout(state.toolManagerTimer);
-        state.toolManagerTimer = window.setTimeout(() => loadTools(options), 1000);
+        state.toolManagerTimer = window.setTimeout(() => loadTools(options), FALLBACK_POLL_MS);
       }
       return catalog;
     } catch (error) {
@@ -1256,6 +1181,10 @@
   }
 
   function showToast(message, kind = "info") {
+    if (!els.toastRegion) {
+      console[kind === "error" ? "error" : "warn"](`[${kind}] ${message}`);
+      return;
+    }
     const toast = createElement("div", `toast ${kind}`);
     const iconName = kind === "success" ? "check-circle-2" : kind === "warning" ? "triangle-alert" : kind === "error" ? "circle-x" : "info";
     toast.append(icon(iconName), createElement("span", "toast-message", message));
@@ -1371,7 +1300,7 @@
 
   function exerciseMatchesFilters(exercise, group) {
     const query = state.exerciseSearch.trim().toLocaleLowerCase("zh-CN");
-    const haystack = `${exercise.name || ""} ${exercise.id || ""} ${group.name || ""}`.toLocaleLowerCase("zh-CN");
+    const haystack = `${exercise.name || ""} ${exercise.id || ""} ${exercise.category || ""} ${group.name || ""}`.toLocaleLowerCase("zh-CN");
     if (query && !haystack.includes(query)) return false;
     if (state.exerciseFilters.unsolved && exercise.hasSolved) return false;
     if (state.exerciseFilters.attachment && !exercise.hasAttachment) return false;
@@ -1875,6 +1804,7 @@
 
   async function pollAttachmentTask(taskId) {
     stopAttachmentTaskPolling();
+    if (!shouldUseFallbackPolling()) return;
     try {
       const task = await request(`/api/attachments/downloads/${encodeURIComponent(taskId)}`);
       if (state.attachmentTask && state.attachmentTask.id !== taskId) return;
@@ -1882,7 +1812,7 @@
       renderAttachmentProgress();
       setAttachmentManagerBusy(!attachmentTaskFinished(task));
       if (!attachmentTaskFinished(task)) {
-        state.attachmentTaskTimer = window.setTimeout(() => pollAttachmentTask(taskId), ATTACHMENT_TASK_POLL_MS);
+        if (!state.realtimeClient) state.attachmentTaskTimer = window.setTimeout(() => pollAttachmentTask(taskId), ATTACHMENT_TASK_POLL_MS);
         return;
       }
       const failures = Number(task.failedFiles || 0);
@@ -1977,12 +1907,13 @@
 
   async function pollAttachmentSizes() {
     stopAttachmentSizePolling();
+    if (!shouldUseFallbackPolling()) return;
     try {
       const status = await request("/api/attachments/sizes");
       if (status.status === "running") {
         state.attachmentSizeProbing = true;
         els.attachmentSummary.textContent = `正在获取附件大小 ${Number(status.completedFiles || 0)} / ${Number(status.totalFiles || 0)}`;
-        state.attachmentSizeTimer = window.setTimeout(pollAttachmentSizes, ATTACHMENT_SIZE_POLL_MS);
+        if (!state.realtimeClient) state.attachmentSizeTimer = window.setTimeout(pollAttachmentSizes, ATTACHMENT_SIZE_POLL_MS);
         return;
       }
       state.attachmentSizeProbing = false;
@@ -1999,8 +1930,8 @@
     state.attachmentSizeProbing = true;
     try {
       const status = await request(`/api/attachments/sizes${force ? "?refresh=true" : ""}`, { method: "POST", headers: ATTACHMENT_ACTION_HEADERS });
-      if (status.status === "running") state.attachmentSizeTimer = window.setTimeout(pollAttachmentSizes, ATTACHMENT_SIZE_POLL_MS);
-      else await pollAttachmentSizes();
+      if (status.status === "running" && shouldUseFallbackPolling()) state.attachmentSizeTimer = window.setTimeout(pollAttachmentSizes, ATTACHMENT_SIZE_POLL_MS);
+      else if (status.status !== "running") await handleAttachmentProbe(status);
     } catch (_) {
       state.attachmentSizeProbing = false;
       // A failed size probe is retried after the next login or page load.
@@ -2816,7 +2747,17 @@
       stream_error: ["日志读取错误", "error", ""],
       stdout: ["输出", "output", ""],
     };
-    const [label, tone, fallback] = presentations[kind] || [kind, "output", ""];
+    let [label, tone, fallback] = presentations[kind] || [kind, "output", ""];
+    if (kind === "stderr") {
+      const diagnostic = String(event?.summary || "").toLowerCase();
+      const warning = ["warning", "warn:", "defaulting to fallback metadata", "degrade performance", "deprecated"].some((marker) => diagnostic.includes(marker));
+      const hardError = ["error", "failed", "fatal", "panic", "exception", "退出码"].some((marker) => diagnostic.includes(marker));
+      [label, tone, fallback] = warning
+        ? ["警告", "warning", ""]
+        : hardError
+          ? ["错误输出", "error", ""]
+          : ["诊断输出", "muted", ""];
+    }
     const summary = kind === "command_execution"
       ? codexCommandSummary(event)
       : kind === "turn.completed" && event.usage
@@ -2912,7 +2853,8 @@
   }
 
   function codexEventDefaultExpanded(event) {
-    if (["agent_message", "stderr", "error", "stream_error", "round.failed"].includes(event.kind)) return true;
+    if (["agent_message", "error", "stream_error", "round.failed"].includes(event.kind)) return true;
+    if (event.kind === "warning") return true;
     if (event.kind === "stdout" && String(event.summary || "").length < 360) return true;
     return false;
   }
@@ -3387,7 +3329,9 @@
   }
 
   function ensureCodexPolling() {
-    if (!state.codexPollTimer) state.codexPollTimer = window.setInterval(() => loadCodexTasks(), 1000);
+    if (!shouldUseFallbackPolling()) return;
+    if (state.realtimeClient) return;
+    if (!state.codexPollTimer) state.codexPollTimer = window.setInterval(() => loadCodexTasks({ silent: true }), FALLBACK_POLL_MS);
   }
 
   async function loadCodexTask(id, options = {}) {
@@ -3416,6 +3360,7 @@
       const previousDetails = new Map(state.codexTasks.map((task) => [task.id, task]));
       const result = await request("/api/codex/tasks");
       state.codexAvailable = result.available === undefined ? true : Boolean(result.available);
+      state.codexLimit = Number(result.limit || state.codexLimit || 10);
       state.codexTasks = (Array.isArray(result.tasks) ? result.tasks : []).map((task) => ({
         ...task,
         events: state.codexLoadedEvents.get(task.id) || previousDetails.get(task.id)?.events || [],
@@ -3748,6 +3693,179 @@
     rounds[index].scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
+  function shouldUseFallbackPolling() {
+    return [REALTIME_STATUS.POLLING, REALTIME_STATUS.OFFLINE].includes(state.realtimeStatus);
+  }
+
+  function updateRealtimeStatus(status) {
+    state.realtimeStatus = status;
+    const labels = {
+      [REALTIME_STATUS.CONNECTING]: "实时连接中",
+      [REALTIME_STATUS.LIVE]: "实时",
+      [REALTIME_STATUS.RECONNECTING]: "重连中",
+      [REALTIME_STATUS.POLLING]: "轮询降级",
+      [REALTIME_STATUS.OFFLINE]: "网络离线",
+      [REALTIME_STATUS.STOPPED]: "实时已停止",
+    };
+    if (els.realtimeStatus) {
+      els.realtimeStatus.className = `realtime-status is-${status}`;
+      els.realtimeStatus.textContent = labels[status] || status;
+      els.realtimeStatus.title = status === REALTIME_STATUS.POLLING
+        ? "SSE 连续连接失败，已切换为每 10 秒低频轮询；连接恢复后会自动切回实时推送"
+        : `实时事件连接状态：${labels[status] || status}`;
+    }
+    if (!shouldUseFallbackPolling()) {
+      if (state.codexPollTimer) window.clearInterval(state.codexPollTimer);
+      state.codexPollTimer = null;
+      if (state.toolManagerTimer) window.clearTimeout(state.toolManagerTimer);
+      state.toolManagerTimer = null;
+      stopAttachmentTaskPolling();
+      stopAttachmentSizePolling();
+    } else {
+      const activeCodex = state.codexTasks.some((task) => ["running", "queued"].includes(task.status));
+      if (activeCodex || els.codexTaskDialog?.open) ensureCodexPolling();
+    }
+  }
+
+  function updateCodexCounter() {
+    const active = state.codexTasks.filter((task) => ["running", "queued"].includes(task.status)).length;
+    els.codexActiveCount.textContent = state.codexAvailable === false ? "不可用" : `${active}/${state.codexLimit || 10}`;
+  }
+
+  function upsertCodexRealtimeTask(incoming) {
+    if (!incoming?.id) return null;
+    const index = state.codexTasks.findIndex((task) => task.id === incoming.id);
+    const previous = index >= 0 ? state.codexTasks[index] : null;
+    const task = {
+      ...(previous || {}),
+      ...incoming,
+      events: previous?.events || incoming.events || [],
+    };
+    if (index >= 0) state.codexTasks.splice(index, 1, task);
+    else state.codexTasks.unshift(task);
+    if (!state.codexSelectedTaskId) state.codexSelectedTaskId = task.id;
+    return { task, previous };
+  }
+
+  async function handleCodexRealtimeTask(incoming) {
+    state.codexAvailable = true;
+    const result = upsertCodexRealtimeTask(incoming);
+    if (!result) return;
+    const { task, previous } = result;
+    updateCodexCounter();
+    renderCodexTaskState();
+    renderExercises();
+    if (isCodexTerminal(task.status) && previous && previous.status !== task.status && !state.codexTerminalSeen.has(task.id)) {
+      state.codexTerminalSeen.add(task.id);
+      if (task.exerciseId === state.selectedExerciseId) await loadExerciseDetail(task.exerciseId, { refresh: true, silent: true });
+      await loadOverview({ refresh: true, silent: true });
+    }
+  }
+
+  function handleCodexRealtimeLog(payload) {
+    const taskId = String(payload?.taskId || "");
+    const event = payload?.event;
+    if (!taskId || !event) return;
+    const existing = state.codexLoadedEvents.get(taskId) || state.codexTasks.find((task) => task.id === taskId)?.events || [];
+    const merged = mergeCodexEventLists(existing, [event]);
+    state.codexLoadedEvents.set(taskId, merged);
+    const task = state.codexTasks.find((candidate) => candidate.id === taskId);
+    if (task) {
+      task.events = merged;
+      task.logCount = Math.max(Number(task.logCount || 0), Number(event.sequence || 0), merged.length);
+    }
+    if (state.codexSelectedTaskId === taskId && task) renderCodexTaskDetail(task);
+  }
+
+  async function handleAttachmentRealtimeTask(task) {
+    if (!task?.id) return;
+    state.attachmentTask = task;
+    renderAttachmentProgress();
+    setAttachmentManagerBusy(!attachmentTaskFinished(task));
+    if (!attachmentTaskFinished(task) || state.attachmentTerminalSeen.has(task.id)) return;
+    state.attachmentTerminalSeen.add(task.id);
+    const failures = Number(task.failedFiles || 0);
+    if (task.status === "cancelled") showToast(`${task.label || "附件下载"}已取消`, "warning");
+    else showToast(
+      failures || task.status === "failed"
+        ? `${task.label || "附件下载"}完成，${failures} 个文件失败`
+        : `${task.label || "附件下载"}完成`,
+      failures || task.status === "failed" ? "warning" : "success",
+    );
+    await loadAttachmentCatalog({ silent: true });
+    if (state.selectedExerciseId !== null) await loadExerciseDetail(state.selectedExerciseId, { silent: true });
+  }
+
+  async function handleAttachmentProbe(status) {
+    state.attachmentSizeProbing = status?.status === "running";
+    if (state.attachmentSizeProbing) {
+      els.attachmentSummary.textContent = `正在获取附件大小 ${Number(status.completedFiles || 0)} / ${Number(status.totalFiles || 0)}`;
+      return;
+    }
+    if (state.attachmentCatalog) await loadAttachmentCatalog({ silent: true });
+    if (state.selectedExerciseId !== null) await loadExerciseDetail(state.selectedExerciseId, { silent: true });
+  }
+
+  async function handleRealtimeEvent(event) {
+    switch (event?.type) {
+      case "codex.task":
+        await handleCodexRealtimeTask(event.data);
+        break;
+      case "codex.event":
+        handleCodexRealtimeLog(event.data);
+        break;
+      case "codex.deleted":
+        state.codexTasks = state.codexTasks.filter((task) => task.id !== event.resourceId);
+        state.codexLoadedEvents.delete(event.resourceId);
+        if (state.codexSelectedTaskId === event.resourceId) state.codexSelectedTaskId = state.codexTasks[0]?.id || null;
+        updateCodexCounter();
+        renderCodexTaskState();
+        renderExercises();
+        break;
+      case "attachment.task":
+        await handleAttachmentRealtimeTask(event.data);
+        break;
+      case "attachment.probe":
+        await handleAttachmentProbe(event.data);
+        break;
+      case "tool.install":
+        renderToolManager(event.data);
+        break;
+      default:
+        break;
+    }
+  }
+
+  async function refreshRealtimeSnapshots() {
+    const jobs = [loadCodexTasks({ silent: true }), resumeAttachmentDownload()];
+    if (state.attachmentCatalog || els.attachmentDialog?.open) jobs.push(loadAttachmentCatalog({ silent: true }));
+    if (state.tools.length || els.toolManagerDialog?.open) jobs.push(loadTools({ silent: true }));
+    await Promise.allSettled(jobs);
+  }
+
+  async function fallbackRefresh() {
+    const jobs = [loadCodexTasks({ silent: true })];
+    if (state.attachmentTask && !attachmentTaskFinished(state.attachmentTask)) {
+      jobs.push(pollAttachmentTask(state.attachmentTask.id));
+    }
+    if (state.attachmentSizeProbing) jobs.push(pollAttachmentSizes());
+    if (els.toolManagerDialog?.open || state.tools.length) jobs.push(loadTools({ silent: true }));
+    await Promise.allSettled(jobs);
+  }
+
+  function startRealtime() {
+    if (state.realtimeClient) return;
+    state.realtimeClient = new RealtimeClient({
+      onEvent: handleRealtimeEvent,
+      onReset: refreshRealtimeSnapshots,
+      onStatus: updateRealtimeStatus,
+      onFallbackTick: fallbackRefresh,
+      fallbackIntervalMs: FALLBACK_POLL_MS,
+    });
+    state.realtimeClient.start();
+    window.__gcsisRealtime = state.realtimeClient;
+  }
+
   function toggleScoreRefresh() {
     if (state.scoreTimer) window.clearInterval(state.scoreTimer);
     state.scoreTimer = els.scoreRefresh.checked ? window.setInterval(() => loadOverview({ silent: true, refresh: true }), SCORE_REFRESH_MS) : null;
@@ -3758,188 +3876,255 @@
     state.noticeTimer = els.noticeRefresh.checked ? window.setInterval(() => loadNotices({ silent: true, refresh: true, refreshDetail: true }), NOTICE_REFRESH_MS) : null;
   }
 
-  function wireEvents() {
-    $("refresh-overview").addEventListener("click", () => withButton($("refresh-overview"), () => loadOverview({ refresh: true })));
-    $("refresh-exercises").addEventListener("click", () => withButton($("refresh-exercises"), () => loadExercises({ refresh: true })));
-    els.activeEnvironmentRefresh.addEventListener("click", () => refreshTrackedEnvironments({ refresh: true, notify: true }));
-    els.stopAllEnvironments.addEventListener("click", stopAllEnvironments);
-    $("refresh-notices").addEventListener("click", () => withButton($("refresh-notices"), () => loadNotices({ refresh: true, refreshDetail: true })));
-    els.selectedExerciseRefresh.addEventListener("click", () => {
-      const id = state.selectedExerciseId;
-      if (id !== null) withButton(els.selectedExerciseRefresh, () => loadExerciseDetail(id, { refresh: true }));
-    });
-    els.openAIPrompt.addEventListener("click", openAIPromptDialog);
-    els.runCodex.addEventListener("click", runCodex);
-    els.runCodexPure.addEventListener("click", runCodexPure);
-    els.openCodexTasks.addEventListener("click", openCodexTaskDialog);
-    els.openSettings.addEventListener("click", openSettingsDialog);
-    els.openToolManager.addEventListener("click", openToolManagerDialog);
-    $("close-tool-manager").addEventListener("click", () => closeDialog(els.toolManagerDialog));
-    els.toolManagerDialog.addEventListener("click", (event) => {
-      if (event.target === els.toolManagerDialog) closeDialog(els.toolManagerDialog);
-    });
-    els.matchBindForm.addEventListener("submit", (event) => {
-      event.preventDefault();
-      void bindMatch();
-    });
-    els.loginModePassword.addEventListener("click", () => setLoginMode("password"));
-    els.loginModeSms.addEventListener("click", () => setLoginMode("sms"));
-    els.passwordLoginForm.addEventListener("submit", passwordLogin);
-    els.smsLoginForm.addEventListener("submit", smsLogin);
-    els.platformLogout.addEventListener("click", logoutPlatform);
-    els.sendSmsCode.addEventListener("click", sendSmsCode);
-    els.refreshPasswordCaptcha.addEventListener("click", () => refreshCaptcha("image"));
-    els.refreshRotateCaptcha.addEventListener("click", () => refreshCaptcha("rotate"));
-    els.rotateCaptchaAngle.addEventListener("input", updateCaptchaRotation);
-    els.settingsForm.addEventListener("submit", saveRuntimeConfig);
-    els.fetchModels.addEventListener("click", () => void fetchModelList("model"));
-    els.fetchCodexModels.addEventListener("click", () => void fetchModelList("codex"));
-    bindModelPicker(els.settingModelName, els.modelOptions);
-    bindModelPicker(els.settingCodexModel, els.codexModelOptions);
-    document.addEventListener("click", (event) => {
-      if (event.target.closest(".model-picker")) return;
-      els.modelOptions.hidden = true;
-      els.codexModelOptions.hidden = true;
-    });
-    els.installSelectedTools.addEventListener("click", () => installTools(false));
-    els.installAllTools.addEventListener("click", () => installTools(true));
-    els.cancelToolInstall.addEventListener("click", cancelToolInstall);
-    els.refreshEnvironmentStatus.addEventListener("click", () => withButton(els.refreshEnvironmentStatus, () => loadEnvironmentStatus({ refresh: true, notify: true })));
-    $("close-settings").addEventListener("click", () => {
-      els.settingPlatformToken.value = "";
-      els.passwordValue.value = "";
-      els.passwordImageCode.value = "";
-      els.smsCode.value = "";
-      closeDialog(els.settingsDialog);
-    });
-    els.settingsDialog.addEventListener("click", (event) => {
-      if (event.target === els.settingsDialog) closeDialog(els.settingsDialog);
-    });
-    els.settingsDialog.addEventListener("close", () => {
-      els.settingPlatformToken.value = "";
-      els.passwordValue.value = "";
-      els.passwordImageCode.value = "";
-      els.smsCode.value = "";
-      els.passwordCaptcha.removeAttribute("src");
-      els.rotateCaptchaImage.removeAttribute("src");
-    });
-    els.exerciseSearch.addEventListener("input", () => {
-      state.exerciseSearch = els.exerciseSearch.value;
-      renderExercises();
-    });
-    [
-      [els.filterUnsolved, "unsolved"],
-      [els.filterAttachment, "attachment"],
-      [els.filterEnvironment, "environment"],
-    ].forEach(([button, key]) => {
-      button.addEventListener("click", () => {
-        state.exerciseFilters[key] = !state.exerciseFilters[key];
-        renderExercises();
-      });
-    });
-    els.resetExerciseFilters.addEventListener("click", resetExerciseFilters);
-    els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
-    els.codexTaskCompose.addEventListener("click", focusCodexMessage);
-    els.deleteCodexTask.addEventListener("click", deleteCodexTask);
-    els.renameCodexTask.addEventListener("click", renameCodexTask);
-    els.codexReturnParent.addEventListener("click", returnToCodexParent);
-    els.copyCodexLog.addEventListener("click", copyCodexLog);
-    els.downloadCodexLog.addEventListener("click", () => downloadCodexArtifact("logs.txt"));
-    els.exportCodexJson.addEventListener("click", () => downloadCodexArtifact("logs.json"));
-    els.openCodexLogFile.addEventListener("click", () => void openCodexRawLog());
-    els.finishCodexTask.addEventListener("click", () => void finishInterruptedCodexTask());
-    els.codexLoadEarlier.addEventListener("click", () => void loadEarlierCodexEvents());
-    els.codexCollapseAll.addEventListener("click", () => setAllCodexEventsExpanded(false));
-    els.codexExpandAll.addEventListener("click", () => setAllCodexEventsExpanded(true));
-    els.codexPrevRound.addEventListener("click", () => navigateCodexRound(-1));
-    els.codexNextRound.addEventListener("click", () => navigateCodexRound(1));
-    els.codexLatestRound.addEventListener("click", () => navigateCodexRound("latest"));
-    const updateCodexEventsFollowState = () => {
-      state.codexEventsFollowTail = codexEventsNearBottom();
-    };
-    els.codexTaskEvents.addEventListener("scroll", updateCodexEventsFollowState);
-    els.codexTaskEvents.addEventListener("wheel", () => window.requestAnimationFrame(updateCodexEventsFollowState), { passive: true });
-    els.codexTaskEvents.addEventListener("touchmove", () => window.requestAnimationFrame(updateCodexEventsFollowState), { passive: true });
-    els.codexTaskFollowUp.addEventListener("click", () => sendCodexMessage(false));
-    els.codexTaskSide.addEventListener("click", () => sendCodexMessage(true));
-    els.openCodexTerminal.addEventListener("click", () => void openCodexTerminal());
-    els.openCodexFolder.addEventListener("click", () => void openCodexFolder());
-    els.showCodexTaskDetails.addEventListener("click", showCodexTaskDetails);
-    $("close-codex-task-details").addEventListener("click", () => closeDialog(els.codexTaskDetailsDialog));
-    els.codexTaskDetailsDialog.addEventListener("click", (event) => {
-      if (event.target === els.codexTaskDetailsDialog) closeDialog(els.codexTaskDetailsDialog);
-    });
-    els.confirmCodexStart.addEventListener("click", confirmCodexStart);
-    els.cancelCodexStart.addEventListener("click", () => closeDialog(els.codexPromptDialog));
-    $("close-codex-prompt").addEventListener("click", () => closeDialog(els.codexPromptDialog));
-    els.codexPromptDialog.addEventListener("click", (event) => {
-      if (event.target === els.codexPromptDialog) closeDialog(els.codexPromptDialog);
-    });
-    $("close-codex-tasks").addEventListener("click", () => {
-      closeDialog(els.codexTaskDialog);
-      stopCodexPollingIfIdle();
-    });
-    els.codexTaskDialog.addEventListener("click", (event) => {
-      if (event.target === els.codexTaskDialog) {
-        closeDialog(els.codexTaskDialog);
-        stopCodexPollingIfIdle();
-      }
-    });
-    document.querySelectorAll("dialog").forEach((dialog) => {
-      dialog.addEventListener("close", () => {
-        delete dialog.dataset.dialogLayer;
-        syncToastRegionHost(dialog);
-        if (dialog === els.codexTaskDialog) stopCodexPollingIfIdle();
-      });
-    });
-    els.aiCopyPrompt.addEventListener("click", copyAIPrompt);
-    els.aiRun.addEventListener("click", runAISolver);
-    $("close-ai-prompt").addEventListener("click", () => closeDialog(els.aiPromptDialog));
-    els.aiPromptDialog.addEventListener("click", (event) => {
-      if (event.target === els.aiPromptDialog) closeDialog(els.aiPromptDialog);
-    });
-    $("open-attachment-manager").addEventListener("click", openAttachmentManager);
-    els.attachmentCheck.addEventListener("click", checkAttachments);
-    els.attachmentDownloadAll.addEventListener("click", downloadAllAttachments);
-    els.attachmentPause.addEventListener("click", () => controlAttachmentDownload("pause"));
-    els.attachmentResume.addEventListener("click", () => controlAttachmentDownload("resume"));
-    els.attachmentCancel.addEventListener("click", cancelAttachmentDownload);
-    $("close-attachment-manager").addEventListener("click", () => closeDialog(els.attachmentDialog));
-    els.attachmentDialog.addEventListener("click", (event) => {
-      if (event.target === els.attachmentDialog) closeDialog(els.attachmentDialog);
-    });
-    els.scoreRefresh.addEventListener("change", toggleScoreRefresh);
-    els.noticeRefresh.addEventListener("change", toggleNoticeRefresh);
-    els.flagInput.addEventListener("input", updateFlagLength);
-    els.flagForm.addEventListener("submit", submitFlag);
-    $("open-match-info").addEventListener("click", () => {
-      openDialog(els.matchDialog);
-    });
-    $("refresh-match-info").addEventListener("click", () => withButton($("refresh-match-info"), () => loadMatchInfo({ refresh: true })));
-    $("close-match-info").addEventListener("click", () => closeDialog(els.matchDialog));
-    els.matchDialog.addEventListener("click", (event) => {
-      if (event.target === els.matchDialog) closeDialog(els.matchDialog);
+  function requireModuleElements(moduleName, ids) {
+    return requireElements(moduleName, Object.fromEntries(ids.map((id) => [id, $(id)])));
+  }
+
+  function bindModuleOnce(moduleName, ids, binder) {
+    if (state.initializedModules.has(moduleName)) return;
+    requireModuleElements(moduleName, ids);
+    binder();
+    state.initializedModules.add(moduleName);
+  }
+
+  function setModuleEnabled(moduleName, enabled) {
+    const targets = {
+      "题目与容器": [$("exercise-list"), $("run-codex"), $("run-codex-pure"), $("open-ai-prompt")],
+      "公告": [$("notice-list"), $("notice-detail")],
+      "附件": [$("open-attachment-manager")],
+      "工具管理": [$("open-tool-manager")],
+      "Codex": [$("open-codex-tasks"), $("run-codex"), $("run-codex-pure")],
+      "设置与认证": [$("open-settings")],
+    }[moduleName] || [];
+    targets.filter(Boolean).forEach((element) => {
+      element.classList.toggle("module-disabled", !enabled);
+      if ("disabled" in element) element.disabled = !enabled;
+      if (!enabled) element.title = `${moduleName}初始化失败，请查看页面故障提示后重试`;
     });
   }
 
-  async function init() {
-    setConnection("connecting");
-    loadTrackedEnvironmentIds();
-    loadCollapsedGroups();
-    loadCollapsedAttachmentCategories();
-    renderActiveEnvironments();
-    wireEvents();
-    setWorkspaceActionsEnabled(false);
-    updateFlagLength();
-    updateCaptchaRotation();
-    refreshIcons();
-    const config = await loadRuntimeConfig();
-    if (config && config.configured && state.authenticated) await refreshWorkspaceAfterLogin();
-    else if (config && config.configured) showAuthenticationRequiredWorkspace();
-    else if (config) showUnconfiguredWorkspace();
-    await resumeAttachmentDownload();
-    await loadCodexTasks();
+  async function runInitModule(moduleName, initializer) {
+    const ok = await safeInitModule(faultCenter, moduleName, initializer);
+    setModuleEnabled(moduleName, ok);
+    return ok;
   }
+
+  function bindInfrastructureEvents() {
+    bindModuleOnce("基础设施", ["toast-region", "connection-status"], () => {
+      document.querySelectorAll("dialog").forEach((dialog) => {
+        dialog.addEventListener("close", () => {
+          delete dialog.dataset.dialogLayer;
+          syncToastRegionHost(dialog);
+          if (dialog === els.codexTaskDialog) stopCodexPollingIfIdle();
+        });
+        dialog.addEventListener("click", (event) => {
+          if (event.target === dialog) closeDialog(dialog);
+        });
+      });
+    });
+  }
+
+  function bindOverviewAndNoticeEvents() {
+    bindModuleOnce("公告", ["refresh-overview", "refresh-notices", "score-auto-refresh", "notice-auto-refresh", "open-match-info", "refresh-match-info", "close-match-info", "match-info-dialog"], () => {
+      $("refresh-overview").addEventListener("click", () => withButton($("refresh-overview"), () => loadOverview({ refresh: true })));
+      $("refresh-notices").addEventListener("click", () => withButton($("refresh-notices"), () => loadNotices({ refresh: true, refreshDetail: true })));
+      els.scoreRefresh.addEventListener("change", toggleScoreRefresh);
+      els.noticeRefresh.addEventListener("change", toggleNoticeRefresh);
+      $("open-match-info").addEventListener("click", () => openDialog(els.matchDialog));
+      $("refresh-match-info").addEventListener("click", () => withButton($("refresh-match-info"), () => loadMatchInfo({ refresh: true })));
+      $("close-match-info").addEventListener("click", () => closeDialog(els.matchDialog));
+    });
+  }
+
+  function bindExerciseEvents() {
+    bindModuleOnce("题目与容器", ["refresh-exercises", "refresh-active-environments", "stop-all-environments", "refresh-selected-exercise", "open-ai-prompt", "run-codex", "run-codex-pure", "exercise-search", "filter-unsolved", "filter-attachment", "filter-environment", "reset-exercise-filters", "flag-input", "flag-form", "copy-ai-prompt", "run-ai-solver", "close-ai-prompt", "ai-prompt-dialog"], () => {
+      $("refresh-exercises").addEventListener("click", () => withButton($("refresh-exercises"), () => loadExercises({ refresh: true })));
+      els.activeEnvironmentRefresh.addEventListener("click", () => refreshTrackedEnvironments({ refresh: true, notify: true }));
+      els.stopAllEnvironments.addEventListener("click", stopAllEnvironments);
+      els.selectedExerciseRefresh.addEventListener("click", () => {
+        const id = state.selectedExerciseId;
+        if (id !== null) withButton(els.selectedExerciseRefresh, () => loadExerciseDetail(id, { refresh: true }));
+      });
+      els.openAIPrompt.addEventListener("click", openAIPromptDialog);
+      els.runCodex.addEventListener("click", runCodex);
+      els.runCodexPure.addEventListener("click", runCodexPure);
+      els.exerciseSearch.addEventListener("input", () => {
+        state.exerciseSearch = els.exerciseSearch.value;
+        renderExercises();
+      });
+      [[els.filterUnsolved, "unsolved"], [els.filterAttachment, "attachment"], [els.filterEnvironment, "environment"]].forEach(([button, key]) => {
+        button.addEventListener("click", () => {
+          state.exerciseFilters[key] = !state.exerciseFilters[key];
+          renderExercises();
+        });
+      });
+      els.resetExerciseFilters.addEventListener("click", resetExerciseFilters);
+      els.aiCopyPrompt.addEventListener("click", copyAIPrompt);
+      els.aiRun.addEventListener("click", runAISolver);
+      $("close-ai-prompt").addEventListener("click", () => closeDialog(els.aiPromptDialog));
+      els.flagInput.addEventListener("input", updateFlagLength);
+      els.flagForm.addEventListener("submit", submitFlag);
+    });
+  }
+
+  function bindSettingsEvents() {
+    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "password-login-form", "sms-login-form", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "model-options", "setting-codex-model", "codex-model-options"], () => {
+      els.openSettings.addEventListener("click", openSettingsDialog);
+      els.matchBindForm.addEventListener("submit", (event) => { event.preventDefault(); void bindMatch(); });
+      els.loginModePassword.addEventListener("click", () => setLoginMode("password"));
+      els.loginModeSms.addEventListener("click", () => setLoginMode("sms"));
+      els.passwordLoginForm.addEventListener("submit", passwordLogin);
+      els.smsLoginForm.addEventListener("submit", smsLogin);
+      els.platformLogout.addEventListener("click", logoutPlatform);
+      els.sendSmsCode.addEventListener("click", sendSmsCode);
+      els.refreshPasswordCaptcha.addEventListener("click", () => refreshCaptcha("image"));
+      els.refreshRotateCaptcha.addEventListener("click", () => refreshCaptcha("rotate"));
+      els.rotateCaptchaAngle.addEventListener("input", updateCaptchaRotation);
+      els.settingsForm.addEventListener("submit", saveRuntimeConfig);
+      els.fetchModels.addEventListener("click", () => void fetchModelList("model"));
+      els.fetchCodexModels.addEventListener("click", () => void fetchModelList("codex"));
+      bindModelPicker(els.settingModelName, els.modelOptions);
+      bindModelPicker(els.settingCodexModel, els.codexModelOptions);
+      document.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest(".model-picker")) return;
+        els.modelOptions.hidden = true;
+        els.codexModelOptions.hidden = true;
+      });
+      $("close-settings").addEventListener("click", () => {
+        els.settingPlatformToken.value = "";
+        els.passwordValue.value = "";
+        els.passwordImageCode.value = "";
+        els.smsCode.value = "";
+        closeDialog(els.settingsDialog);
+      });
+      els.settingsDialog.addEventListener("close", () => {
+        els.settingPlatformToken.value = "";
+        els.passwordValue.value = "";
+        els.passwordImageCode.value = "";
+        els.smsCode.value = "";
+        els.passwordCaptcha.removeAttribute("src");
+        els.rotateCaptchaImage.removeAttribute("src");
+      });
+    });
+  }
+
+  function bindToolEvents() {
+    bindModuleOnce("工具管理", ["open-tool-manager", "close-tool-manager", "tool-manager-dialog", "install-selected-tools", "install-all-tools", "cancel-tool-install", "refresh-environment-status"], () => {
+      els.openToolManager.addEventListener("click", openToolManagerDialog);
+      $("close-tool-manager").addEventListener("click", () => closeDialog(els.toolManagerDialog));
+      els.installSelectedTools.addEventListener("click", () => installTools(false));
+      els.installAllTools.addEventListener("click", () => installTools(true));
+      els.cancelToolInstall.addEventListener("click", cancelToolInstall);
+      els.refreshEnvironmentStatus.addEventListener("click", () => withButton(els.refreshEnvironmentStatus, () => loadEnvironmentStatus({ refresh: true, notify: true })));
+    });
+  }
+
+  function bindAttachmentEvents() {
+    bindModuleOnce("附件", ["open-attachment-manager", "close-attachment-manager", "attachment-manager-dialog", "check-attachments", "download-all-attachments", "pause-attachment-download", "resume-attachment-download", "cancel-attachment-download"], () => {
+      $("open-attachment-manager").addEventListener("click", openAttachmentManager);
+      els.attachmentCheck.addEventListener("click", checkAttachments);
+      els.attachmentDownloadAll.addEventListener("click", downloadAllAttachments);
+      els.attachmentPause.addEventListener("click", () => controlAttachmentDownload("pause"));
+      els.attachmentResume.addEventListener("click", () => controlAttachmentDownload("resume"));
+      els.attachmentCancel.addEventListener("click", cancelAttachmentDownload);
+      $("close-attachment-manager").addEventListener("click", () => closeDialog(els.attachmentDialog));
+    });
+  }
+
+  function bindCodexEvents() {
+    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-dialog", "codex-primary-action", "codex-task-compose", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
+      els.openCodexTasks.addEventListener("click", openCodexTaskDialog);
+      els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
+      els.codexTaskCompose.addEventListener("click", focusCodexMessage);
+      els.deleteCodexTask.addEventListener("click", deleteCodexTask);
+      els.renameCodexTask.addEventListener("click", renameCodexTask);
+      els.codexReturnParent.addEventListener("click", returnToCodexParent);
+      els.copyCodexLog.addEventListener("click", copyCodexLog);
+      els.downloadCodexLog.addEventListener("click", () => downloadCodexArtifact("logs.txt"));
+      els.exportCodexJson.addEventListener("click", () => downloadCodexArtifact("logs.json"));
+      els.openCodexLogFile.addEventListener("click", () => void openCodexRawLog());
+      els.finishCodexTask.addEventListener("click", () => void finishInterruptedCodexTask());
+      els.codexLoadEarlier.addEventListener("click", () => void loadEarlierCodexEvents());
+      els.codexCollapseAll.addEventListener("click", () => setAllCodexEventsExpanded(false));
+      els.codexExpandAll.addEventListener("click", () => setAllCodexEventsExpanded(true));
+      els.codexPrevRound.addEventListener("click", () => navigateCodexRound(-1));
+      els.codexNextRound.addEventListener("click", () => navigateCodexRound(1));
+      els.codexLatestRound.addEventListener("click", () => navigateCodexRound("latest"));
+      const updateFollowState = () => { state.codexEventsFollowTail = codexEventsNearBottom(); };
+      els.codexTaskEvents.addEventListener("scroll", updateFollowState);
+      els.codexTaskEvents.addEventListener("wheel", () => window.requestAnimationFrame(updateFollowState), { passive: true });
+      els.codexTaskEvents.addEventListener("touchmove", () => window.requestAnimationFrame(updateFollowState), { passive: true });
+      els.codexTaskFollowUp.addEventListener("click", () => sendCodexMessage(false));
+      els.codexTaskSide.addEventListener("click", () => sendCodexMessage(true));
+      els.openCodexTerminal.addEventListener("click", () => void openCodexTerminal());
+      els.openCodexFolder.addEventListener("click", () => void openCodexFolder());
+      els.showCodexTaskDetails.addEventListener("click", showCodexTaskDetails);
+      $("close-codex-task-details").addEventListener("click", () => closeDialog(els.codexTaskDetailsDialog));
+      els.confirmCodexStart.addEventListener("click", confirmCodexStart);
+      els.cancelCodexStart.addEventListener("click", () => closeDialog(els.codexPromptDialog));
+      $("close-codex-prompt").addEventListener("click", () => closeDialog(els.codexPromptDialog));
+      $("close-codex-tasks").addEventListener("click", () => {
+        closeDialog(els.codexTaskDialog);
+        stopCodexPollingIfIdle();
+      });
+    });
+  }
+
+  async function initializeApplication() {
+    setConnection("connecting");
+    await runInitModule("基础设施", async () => {
+      bindInfrastructureEvents();
+      loadCollapsedGroups();
+      loadCollapsedAttachmentCategories();
+      refreshIcons();
+    });
+    await runInitModule("题目与容器", async () => {
+      bindExerciseEvents();
+      loadTrackedEnvironmentIds();
+      renderActiveEnvironments();
+      setWorkspaceActionsEnabled(false);
+      updateFlagLength();
+    });
+    await runInitModule("公告", async () => bindOverviewAndNoticeEvents());
+    await runInitModule("设置与认证", async () => {
+      bindSettingsEvents();
+      updateCaptchaRotation();
+    });
+    await runInitModule("工具管理", async () => bindToolEvents());
+    await runInitModule("附件", async () => bindAttachmentEvents());
+    await runInitModule("Codex", async () => bindCodexEvents());
+    await runInitModule("实时推送", async () => startRealtime());
+
+    await runInitModule("运行配置", async () => {
+      const config = await loadRuntimeConfig();
+      if (!config) throw new Error("无法读取或应用运行配置");
+      state.runtimeConfig = config;
+    });
+    const config = state.runtimeConfig;
+    await runInitModule("首屏比赛数据", async () => {
+      if (config && config.configured && state.authenticated) await refreshWorkspaceAfterLogin();
+      else if (config && config.configured) showAuthenticationRequiredWorkspace();
+      else if (config) showUnconfiguredWorkspace();
+    });
+    await runInitModule("附件恢复", async () => resumeAttachmentDownload());
+    await runInitModule("Codex 任务恢复", async () => loadCodexTasks());
+  }
+
+  async function init() {
+    try {
+      await initializeApplication();
+    } catch (error) {
+      faultCenter?.report("应用启动", error);
+      setConnection("error");
+    }
+  }
+  faultCenter = createFaultCenter({
+    host: els.startupFaults,
+    retryButton: els.retryInitialization,
+    notify: showToast,
+  });
+  installGlobalErrorBoundary(faultCenter, showToast);
+  document.addEventListener("app:retry-init", () => void initializeApplication());
 
   window.addEventListener("storage", (event) => {
     if (event.key !== ACTIVE_ENVIRONMENT_STORAGE_KEY) return;
@@ -3948,6 +4133,7 @@
   });
 
   window.addEventListener("beforeunload", () => {
+    state.realtimeClient?.stop();
     if (state.scoreTimer) window.clearInterval(state.scoreTimer);
     if (state.noticeTimer) window.clearInterval(state.noticeTimer);
     if (state.codexPollTimer) window.clearInterval(state.codexPollTimer);

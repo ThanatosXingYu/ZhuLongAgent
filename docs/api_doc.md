@@ -548,4 +548,4 @@ Last-Event-ID: 1770000000000001
 }
 ```
 
-事件类型包括 `codex.task`、`codex.event`、`codex.deleted`、`attachment.task`、`attachment.probe` 和 `tool.install`。连接建立后发送 `stream.ready`；客户端携带的事件 ID 已超出服务端回放窗口或来自服务重启前时发送 `stream.reset`。SSE 只负责状态通知，首次打开页面仍应读取对应 REST API 快照；SSE 不可用时可低频轮询这些原有接口。
+事件类型包括 `codex.task`、`codex.event`、`codex.deleted`、`attachment.task`、`attachment.probe` 和 `tool.install`。连接建立后发送 `stream.ready`；空闲连接每 15 秒发送结构化 `stream.heartbeat`；客户端携带的事件 ID 已超出服务端回放窗口或来自服务重启前时发送 `stream.reset`。浏览器按事件 ID 去重，重连时通过 `Last-Event-ID`（原生 EventSource）或 `lastEventId` 查询参数续传；连续失败后进入 10 秒低频轮询，SSE 恢复后自动停止降级轮询。SSE 只负责状态通知，首次打开页面和 `stream.reset` 后仍应读取对应 REST API 快照。

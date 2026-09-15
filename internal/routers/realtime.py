@@ -66,7 +66,12 @@ def create_realtime_router(event_broker: EventBroker | None) -> APIRouter:
                             subscription.queue.get(), timeout=15.0
                         )
                     except TimeoutError:
-                        yield ": heartbeat\n\n"
+                        yield _sse_wire(
+                            event_broker.control_event(
+                                "stream.heartbeat",
+                                data={"lastEventId": event_broker.latest_id},
+                            )
+                        )
                         continue
                     yield _sse_wire(event)
             except asyncio.CancelledError:

@@ -96,7 +96,7 @@ Codex 默认最多同时运行 10 个任务。超过上限的新任务会显示�
 
 浏览器统一连接 `GET /api/events` 接收 Codex、附件下载和工具安装事件。事件包含单调递增的 `id`、`type`、`resourceId`、UTC 时间和结构化 `data`；浏览器断线重连会携带 `Last-Event-ID`，服务端在回放窗口内续传缺失事件，超出窗口时发送 `stream.reset` 让页面用当前 API 快照校准。SSE 连接异常不会阻断业务接口，前端会先重连，连续失败后切换为低频轮询，恢复后再停止轮询。
 
-后端正在按清晰边界渐进拆分：`internal/events.py` 负责线程安全事件发布与回放，`internal/routers/realtime.py` 只负责 SSE HTTP 协议；原有 API 路径、请求体和响应格式保持兼容。前端模块目录和完整浏览器测试说明见后续“开发与检查”。
+后端正在按清晰边界渐进拆分：`internal/events.py` 负责线程安全事件发布与回放，`internal/routers/realtime.py` 只负责 SSE HTTP 协议；原有 API 路径、请求体和响应格式保持兼容。前端以 `static/app.js` 为渐进迁移入口，`static/modules/api.js`、`state.js`、`dom.js` 和 `realtime.js` 分别承载 API 客户端、状态初始化、故障隔离/全局错误边界和 SSE 连接管理，避免继续把基础设施逻辑堆入单个文件。任一业务模块初始化失败时会在页面顶部指出模块、缺失元素 ID 与原因，并允许单独重试，不阻断其他模块和首屏数据加载。
 
 ## 数据目录
 
@@ -139,9 +139,13 @@ PIP_CACHE_DIR="$PWD/tools/cache/pip" .venv/bin/python -m pip install -r requirem
 .venv/bin/ruff check internal main.py scripts temp/tests
 .venv/bin/mypy --strict internal main.py scripts
 .venv/bin/pytest -q temp/tests
-node --check static/app.js
+npm ci
+npm run check:js
+npm run test:e2e
 git diff --check
 ```
+
+Playwright 会启动隔离的本地静态/API/SSE 测试服务，并通过 Chromium 真实点击验证首屏自动加载、题目搜索与组合筛选、Codex 会话树选择和关闭、Escape/背景关闭、Toast 顶层显示、Side 请求正文、警告分级以及 SSE 增量日志/状态更新。测试不读取或修改 `runtime/` 中的真实登录态和任务数据。
 
 提交前请确认暂存区没有 Token、密码、下载产物或运行数据库：
 
