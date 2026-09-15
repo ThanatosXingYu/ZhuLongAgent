@@ -123,7 +123,7 @@ X-GCSIS-Action: tools-manager
     "codexBaseUrl": "https://codex.example.test/v1",
     "codexModel": "codex-model",
     "codexApiKeyConfigured": true,
-    "codexMaxConcurrency": 5,
+    "codexMaxConcurrency": 10,
     "codexCtfSkillsEnabled": true
   }
 }
@@ -143,11 +143,11 @@ X-GCSIS-Action: tools-manager
   "codexBaseUrl": "https://codex.example.test/v1",
   "codexModel": "codex-model",
   "codexApiKey": "example-codex-key",
-  "codexMaxConcurrency": 5
+  "codexMaxConcurrency": 10
 }
 ```
 
-字段可以省略；省略的敏感字段保持原值。传入空字符串会清空对应值。`codexMaxConcurrency` 允许 `1` 到 `16`，默认值为 `5`；超过并发上限的 Codex 任务会进入队列，正在运行的任务不会被暂停或取消。`codexCtfSkillsEnabled` 默认为 `true`，用于启用或关闭项目内置 CTF 技能包。比赛地址和登录态必须使用平台接口修改，不能通过此接口写入。
+字段可以省略；省略的敏感字段保持原值。传入空字符串会清空对应值。`codexMaxConcurrency` 允许 `1` 到 `16`，默认值为 `10`；超过并发上限的 Codex 任务会进入队列，正在运行的任务不会被暂停或取消。`codexCtfSkillsEnabled` 默认为 `true`，用于启用或关闭项目内置 CTF 技能包。比赛地址和登录态必须使用平台接口修改，不能通过此接口写入。
 
 ## 比赛绑定与登录
 

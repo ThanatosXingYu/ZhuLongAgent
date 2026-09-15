@@ -561,7 +561,7 @@
     els.settingCodexModel.value = config.codexModel || "";
     els.codexModelOptions.replaceChildren();
     els.codexModelOptions.hidden = true;
-    els.settingCodexConcurrency.value = String(config.codexMaxConcurrency || 5);
+    els.settingCodexConcurrency.value = String(config.codexMaxConcurrency || 10);
     state.codexSystemPrompt = config.codexSystemPrompt || "";
     els.settingCodexSystemPrompt.value = state.codexSystemPrompt;
     state.codexCtfSkillsEnabled = config.codexCtfSkillsEnabled !== false;
@@ -1217,7 +1217,7 @@
       modelName: els.settingModelName.value.trim(),
       codexBaseUrl: els.settingCodexBaseUrl.value.trim(),
       codexModel: els.settingCodexModel.value.trim(),
-      codexMaxConcurrency: Number(els.settingCodexConcurrency.value || 5),
+      codexMaxConcurrency: Number(els.settingCodexConcurrency.value || 10),
       codexSystemPrompt: els.settingCodexSystemPrompt.value.trim(),
       codexCtfSkillsEnabled: els.settingCodexCtfSkills.checked,
       codexAutoResumeInterrupted: els.settingCodexAutoResume.checked,
@@ -2810,6 +2810,7 @@
       "process.started": ["进程", "progress", "Codex 子进程已启动"],
       "process.completed": ["进程", "success", "Codex 子进程已结束"],
       "turn.completed": ["Token 统计", "success", "本轮 Codex 处理完成"],
+      warning: ["警告", "warning", ""],
       stderr: ["错误输出", "error", ""],
       error: ["错误", "error", ""],
       stream_error: ["日志读取错误", "error", ""],

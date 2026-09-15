@@ -196,7 +196,7 @@ def test_platform_settings_are_not_loaded_from_environment(
     assert config.platform_token == ""
     assert config.model_base_url == ""
     assert config.model_name == ""
-    assert config.codex_max_concurrency == DEFAULT_CODEX_MAX_CONCURRENCY == 5
+    assert config.codex_max_concurrency == DEFAULT_CODEX_MAX_CONCURRENCY == 10
     assert config.listen_addr == "127.0.0.1:1"
 
 
@@ -2066,7 +2066,7 @@ def test_codex_manager_applies_original_constructor_defaults(tmp_path: Path) -> 
             writeup_root="",
         )
     )
-    assert manager.limit == DEFAULT_CODEX_MAX_CONCURRENCY == 5
+    assert manager.limit == DEFAULT_CODEX_MAX_CONCURRENCY == 10
     assert manager.runs_root == Path("codex-runs")
     assert manager.writeup_root == Path("writeups")
     assert manager.workspace_root == tmp_path
@@ -2095,6 +2095,17 @@ def test_codex_process_uses_workspace_local_home(tmp_path: Path) -> None:
     assert environment["CODEX_HOME"] == codex_home
     assert environment["GCSIS_CODEX_API_KEY"] == "not-a-real-key"
     assert "--ignore-user-config" in command
+
+
+def test_codex_stderr_warning_is_not_classified_as_error() -> None:
+    from internal.codex import _stderr_event_kind
+
+    warning = (
+        "Model metadata for `deepseek-v4-flash` not found. "
+        "Defaulting to fallback metadata; this can degrade performance and cause issues."
+    )
+    assert _stderr_event_kind(warning) == "warning"
+    assert _stderr_event_kind("ERROR request failed") == "stderr"
 
 
 def test_codex_process_rejects_home_outside_workspace(tmp_path: Path) -> None:
@@ -2400,18 +2411,23 @@ def test_codex_side_conversation_uses_question_summary_and_source(tmp_path: Path
             return PromptResult("prompt", False, "", exercise_id, "Web", "Cold Forge")
 
     class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[ProcessConfig, str]] = []
+
         def run(
             self, config: ProcessConfig, prompt: str, _on_event, _cancel
         ) -> ProcessResult:
+            self.calls.append((config, prompt))
             Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
             Path(config.output_path).write_text("done", encoding="utf-8")
-            return ProcessResult(0, prompt, "session-side")
+            return ProcessResult(0, prompt, f"session-{len(self.calls)}")
 
+    runner = Runner()
     manager = CodexManager(
         ManagerConfig(
             ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
             Prompt(),
-            Runner(),
+            runner,
             1,
             tmp_path / "runs",
             tmp_path / "writeups",
@@ -2432,6 +2448,10 @@ def test_codex_side_conversation_uses_question_summary_and_source(tmp_path: Path
         if manager.get(side.id).status == "completed":
             break
         time.sleep(0.01)
+    side_config, side_prompt = runner.calls[1]
+    assert side_prompt == question
+    assert side_config.resume_session_id == ""
+    assert side_config.fork_session is False
     assert manager.follow_up(side.id, "继续验证").id == side.id
     with pytest.raises(CodexError, match="不能继续创建 Side"):
         manager.side(side.id, "再次分支")

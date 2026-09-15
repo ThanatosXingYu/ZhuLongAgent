@@ -591,8 +591,9 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .codex-tree-children::before { content: ""; position: absolute; inset: -4px auto 13px 0; width: 1px; background: var(--line-strong); }
 .codex-tree-row { position: relative; min-width: 0; display: flex; align-items: stretch; }
 .codex-tree-row.depth-1::before { content: ""; position: absolute; z-index: 1; left: -14px; top: 22px; width: 14px; height: 1px; background: var(--line-strong); }
-.codex-tree-row.is-current-branch .codex-tree-item { border-color: #93bddf; box-shadow: inset 3px 0 0 var(--blue); }
-.codex-tree-row.is-selected .codex-tree-item { background: var(--surface); border-color: #b9d4eb; box-shadow: 0 2px 8px rgba(27, 44, 52, 0.08); }
+.codex-tree-row.is-current-branch .codex-tree-status { position: relative; padding-left: 12px; }
+.codex-tree-row.is-current-branch .codex-tree-status::before { content: ""; position: absolute; left: 5px; top: 50%; width: 4px; height: 4px; transform: translateY(-50%); background: var(--blue); border-radius: 50%; box-shadow: 0 0 0 3px rgba(31, 93, 158, 0.12); }
+.codex-tree-row.is-selected .codex-tree-item { background: var(--surface); border-color: #93bddf; box-shadow: inset 3px 0 0 var(--blue), 0 2px 8px rgba(27, 44, 52, 0.08); }
 .codex-tree-item { min-width: 0; width: 100%; display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: center; gap: 7px; padding: 8px 7px; color: var(--text); background: transparent; border: 1px solid transparent; border-radius: 6px; text-align: left; }
 .codex-tree-item:hover { background: rgba(255, 255, 255, 0.8); }
 .codex-tree-icon { width: 24px; height: 24px; display: grid; place-items: center; color: var(--text-faint); background: #e7ecef; border-radius: 50%; }
@@ -674,6 +675,7 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .codex-event.message { border-left-color: #42a07b; background: #f8fcfa; }
 .codex-event.command { border-left-color: #71808a; background: #f7f8f9; }
 .codex-event.success { border-left-color: #42a07b; }
+.codex-event.warning { border-left-color: var(--amber); background: #fffbf2; }
 .codex-event.error { border-left-color: #cf5b55; background: #fffafa; }
 .codex-event.user { border-left-color: var(--blue); background: #f7fbff; }
 .codex-event.interrupted { border-left-color: var(--amber); background: #fffbf2; }

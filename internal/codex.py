@@ -233,7 +233,16 @@ class ProcessRunner:
                     if not line.strip():
                         continue
                     event = parse_event_line(line, datetime.now(timezone.utc), redactor)
-                    if kind_override:
+                    if kind_override == "stderr":
+                        kind = _stderr_event_kind(event.summary)
+                        event = replace(
+                            event,
+                            kind=kind,
+                            status=event.status or (
+                                "warning" if kind == "warning" else "failed"
+                            ),
+                        )
+                    elif kind_override:
                         event = replace(event, kind=kind_override)
                     if event.session_id:
                         session_id = event.session_id
@@ -483,6 +492,22 @@ def _process_environment(api_key: str, codex_home: str) -> dict[str, str]:
     if api_key:
         env[API_KEY_ENVIRONMENT] = api_key
     return env
+
+
+def _stderr_event_kind(message: str) -> str:
+    """Classify Codex diagnostics without treating warnings as hard failures."""
+
+    normalized = " ".join(message.casefold().split())
+    warning_markers = (
+        "warning",
+        "warn:",
+        "not found. defaulting to fallback metadata",
+        "this can degrade performance",
+        "deprecated",
+    )
+    if any(marker in normalized for marker in warning_markers):
+        return "warning"
+    return "stderr"
 
 
 class Redactor:
@@ -1280,8 +1305,8 @@ class CodexManager:
                 replace(
                     parent.config,
                     output_path=str(output_path),
-                    resume_session_id=session_id,
-                    fork_session=True,
+                    resume_session_id="",
+                    fork_session=False,
                 ),
             )
             self._tasks[task_id] = task
