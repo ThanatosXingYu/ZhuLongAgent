@@ -232,6 +232,9 @@
     codexTaskSide: $("codex-task-side"),
     codexTaskDetailsDialog: $("codex-task-details-dialog"),
     codexTaskDetailsContent: $("codex-task-details-content"),
+    codexPromptDialog: $("codex-prompt-dialog"),
+    codexPromptMode: $("codex-prompt-mode"),
+    codexStartPrompt: $("codex-start-prompt"),
     confirmCodexStart: $("confirm-codex-start"),
     cancelCodexStart: $("cancel-codex-start"),
     attachmentDialog: $("attachment-manager-dialog"),
@@ -335,6 +338,24 @@
     if (window.lucide && typeof window.lucide.createIcons === "function") {
       window.lucide.createIcons({ attrs: { "stroke-width": 1.8 } });
     }
+  }
+
+  function openDialog(dialog) {
+    if (!dialog) return;
+    if (typeof dialog.showModal === "function") {
+      if (!dialog.open) dialog.showModal();
+      return;
+    }
+    dialog.setAttribute("open", "open");
+  }
+
+  function closeDialog(dialog) {
+    if (!dialog) return;
+    if (typeof dialog.close === "function") {
+      if (dialog.open) dialog.close();
+      return;
+    }
+    dialog.removeAttribute("open");
   }
 
   function setConnection(kind) {
@@ -1108,8 +1129,7 @@
   }
 
   function openSettingsDialog() {
-    if (typeof els.settingsDialog.showModal === "function") els.settingsDialog.showModal();
-    else els.settingsDialog.setAttribute("open", "open");
+    openDialog(els.settingsDialog);
     void loadRuntimeConfig();
   }
 
@@ -1169,8 +1189,7 @@
   }
 
   function openToolManagerDialog() {
-    if (typeof els.toolManagerDialog.showModal === "function") els.toolManagerDialog.showModal();
-    else els.toolManagerDialog.setAttribute("open", "open");
+    openDialog(els.toolManagerDialog);
     void Promise.all([loadTools(), loadEnvironmentStatus()]);
   }
 
@@ -1224,8 +1243,19 @@
     const iconName = kind === "success" ? "check-circle-2" : kind === "warning" ? "triangle-alert" : kind === "error" ? "circle-x" : "info";
     toast.append(icon(iconName), createElement("span", "toast-message", message));
     els.toastRegion.append(toast);
+    // A non-modal dialog participates in the browser top layer, so notices stay
+    // above native modal dialogs instead of being hidden behind their backdrop.
+    if (typeof els.toastRegion.show === "function") {
+      if (els.toastRegion.open) els.toastRegion.close();
+      els.toastRegion.show();
+    } else {
+      els.toastRegion.hidden = false;
+    }
     refreshIcons();
-    window.setTimeout(() => toast.remove(), 4600);
+    window.setTimeout(() => {
+      toast.remove();
+      if (!els.toastRegion.children.length) closeDialog(els.toastRegion);
+    }, 4600);
   }
 
   function showLoadError(container, message) {
@@ -2128,8 +2158,7 @@
   }
 
   function openAttachmentManager() {
-    if (typeof els.attachmentDialog.showModal === "function") els.attachmentDialog.showModal();
-    else els.attachmentDialog.setAttribute("open", "open");
+    openDialog(els.attachmentDialog);
     els.attachmentSummary.textContent = "正在检查本地文件";
     els.attachmentList.replaceChildren(createElement("div", "empty-state", "正在检查本地附件"));
     setAttachmentManagerBusy(true);
@@ -2491,8 +2520,7 @@
     els.aiRunOutput.textContent = "尚未运行";
     els.aiCopyPrompt.disabled = true;
     els.aiRun.disabled = true;
-    if (typeof els.aiPromptDialog.showModal === "function") els.aiPromptDialog.showModal();
-    else els.aiPromptDialog.setAttribute("open", "open");
+    openDialog(els.aiPromptDialog);
     try {
       const prompt = await request(`/api/exercises/${encodeURIComponent(id)}/ai/prompt`);
       if (state.aiExerciseId !== id) return;
@@ -3095,7 +3123,7 @@
     if (!task) return;
     closeCodexMoreMenu();
     renderCodexTaskDetails(task);
-    els.codexTaskDetailsDialog.showModal();
+    openDialog(els.codexTaskDetailsDialog);
   }
 
   function codexTaskExerciseName(task) {
@@ -3433,8 +3461,7 @@
   }
 
   function openCodexTaskDialog() {
-    if (typeof els.codexTaskDialog.showModal === "function") els.codexTaskDialog.showModal();
-    else els.codexTaskDialog.setAttribute("open", "open");
+    openDialog(els.codexTaskDialog);
     ensureCodexPolling();
     void loadCodexTasks();
   }
@@ -3446,8 +3473,7 @@
     els.codexPromptMode.textContent = isPure
       ? "题目的标准 AI 提示词会自动作为任务正文发送；这里修改本次附加系统指令，纯解题安全约束会始终附加。"
       : "题目的标准 AI 提示词会自动作为任务正文发送；这里修改本次附加系统指令，不会改变全局配置。";
-    if (typeof els.codexPromptDialog.showModal === "function") els.codexPromptDialog.showModal();
-    else els.codexPromptDialog.setAttribute("open", "open");
+    openDialog(els.codexPromptDialog);
     els.codexStartPrompt.focus();
   }
 
@@ -3463,7 +3489,7 @@
     const isPure = mode === "pure";
     const button = isPure ? els.runCodexPure : els.runCodex;
     const systemPrompt = els.codexStartPrompt.value.trim();
-    els.codexPromptDialog.close();
+    closeDialog(els.codexPromptDialog);
     await withButton(button, async () => {
       try {
         const task = await request(`/api/exercises/${encodeURIComponent(id)}/codex/${mode}`, {
@@ -3731,9 +3757,9 @@
     els.openCodexTasks.addEventListener("click", openCodexTaskDialog);
     els.openSettings.addEventListener("click", openSettingsDialog);
     els.openToolManager.addEventListener("click", openToolManagerDialog);
-    $("close-tool-manager").addEventListener("click", () => els.toolManagerDialog.close());
+    $("close-tool-manager").addEventListener("click", () => closeDialog(els.toolManagerDialog));
     els.toolManagerDialog.addEventListener("click", (event) => {
-      if (event.target === els.toolManagerDialog) els.toolManagerDialog.close();
+      if (event.target === els.toolManagerDialog) closeDialog(els.toolManagerDialog);
     });
     els.matchBindForm.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -3767,10 +3793,10 @@
       els.passwordValue.value = "";
       els.passwordImageCode.value = "";
       els.smsCode.value = "";
-      els.settingsDialog.close();
+      closeDialog(els.settingsDialog);
     });
     els.settingsDialog.addEventListener("click", (event) => {
-      if (event.target === els.settingsDialog) els.settingsDialog.close();
+      if (event.target === els.settingsDialog) closeDialog(els.settingsDialog);
     });
     els.settingsDialog.addEventListener("close", () => {
       els.settingPlatformToken.value = "";
@@ -3822,31 +3848,31 @@
     els.openCodexTerminal.addEventListener("click", () => void openCodexTerminal());
     els.openCodexFolder.addEventListener("click", () => void openCodexFolder());
     els.showCodexTaskDetails.addEventListener("click", showCodexTaskDetails);
-    $("close-codex-task-details").addEventListener("click", () => els.codexTaskDetailsDialog.close());
+    $("close-codex-task-details").addEventListener("click", () => closeDialog(els.codexTaskDetailsDialog));
     els.codexTaskDetailsDialog.addEventListener("click", (event) => {
-      if (event.target === els.codexTaskDetailsDialog) els.codexTaskDetailsDialog.close();
+      if (event.target === els.codexTaskDetailsDialog) closeDialog(els.codexTaskDetailsDialog);
     });
     els.confirmCodexStart.addEventListener("click", confirmCodexStart);
-    els.cancelCodexStart.addEventListener("click", () => els.codexPromptDialog.close());
-    $("close-codex-prompt").addEventListener("click", () => els.codexPromptDialog.close());
+    els.cancelCodexStart.addEventListener("click", () => closeDialog(els.codexPromptDialog));
+    $("close-codex-prompt").addEventListener("click", () => closeDialog(els.codexPromptDialog));
     els.codexPromptDialog.addEventListener("click", (event) => {
-      if (event.target === els.codexPromptDialog) els.codexPromptDialog.close();
+      if (event.target === els.codexPromptDialog) closeDialog(els.codexPromptDialog);
     });
     $("close-codex-tasks").addEventListener("click", () => {
-      els.codexTaskDialog.close();
+      closeDialog(els.codexTaskDialog);
       stopCodexPollingIfIdle();
     });
     els.codexTaskDialog.addEventListener("click", (event) => {
       if (event.target === els.codexTaskDialog) {
-        els.codexTaskDialog.close();
+        closeDialog(els.codexTaskDialog);
         stopCodexPollingIfIdle();
       }
     });
     els.aiCopyPrompt.addEventListener("click", copyAIPrompt);
     els.aiRun.addEventListener("click", runAISolver);
-    $("close-ai-prompt").addEventListener("click", () => els.aiPromptDialog.close());
+    $("close-ai-prompt").addEventListener("click", () => closeDialog(els.aiPromptDialog));
     els.aiPromptDialog.addEventListener("click", (event) => {
-      if (event.target === els.aiPromptDialog) els.aiPromptDialog.close();
+      if (event.target === els.aiPromptDialog) closeDialog(els.aiPromptDialog);
     });
     $("open-attachment-manager").addEventListener("click", openAttachmentManager);
     els.attachmentCheck.addEventListener("click", checkAttachments);
@@ -3854,22 +3880,21 @@
     els.attachmentPause.addEventListener("click", () => controlAttachmentDownload("pause"));
     els.attachmentResume.addEventListener("click", () => controlAttachmentDownload("resume"));
     els.attachmentCancel.addEventListener("click", cancelAttachmentDownload);
-    $("close-attachment-manager").addEventListener("click", () => els.attachmentDialog.close());
+    $("close-attachment-manager").addEventListener("click", () => closeDialog(els.attachmentDialog));
     els.attachmentDialog.addEventListener("click", (event) => {
-      if (event.target === els.attachmentDialog) els.attachmentDialog.close();
+      if (event.target === els.attachmentDialog) closeDialog(els.attachmentDialog);
     });
     els.scoreRefresh.addEventListener("change", toggleScoreRefresh);
     els.noticeRefresh.addEventListener("change", toggleNoticeRefresh);
     els.flagInput.addEventListener("input", updateFlagLength);
     els.flagForm.addEventListener("submit", submitFlag);
     $("open-match-info").addEventListener("click", () => {
-      if (typeof els.matchDialog.showModal === "function") els.matchDialog.showModal();
-      else els.matchDialog.setAttribute("open", "open");
+      openDialog(els.matchDialog);
     });
     $("refresh-match-info").addEventListener("click", () => withButton($("refresh-match-info"), () => loadMatchInfo({ refresh: true })));
-    $("close-match-info").addEventListener("click", () => els.matchDialog.close());
+    $("close-match-info").addEventListener("click", () => closeDialog(els.matchDialog));
     els.matchDialog.addEventListener("click", (event) => {
-      if (event.target === els.matchDialog) els.matchDialog.close();
+      if (event.target === els.matchDialog) closeDialog(els.matchDialog);
     });
   }
 

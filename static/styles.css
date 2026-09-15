@@ -218,10 +218,10 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .panel-header h2 { font-size: 16px; font-weight: 750; }
 .heading-group { gap: 8px; min-width: 0; }
 .count-badge { min-width: 24px; padding: 1px 7px; color: var(--text-muted); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 999px; font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
-.exercise-panel-header { flex-wrap: wrap; }
-.exercise-panel-header .heading-group { margin-right: auto; }
-.exercise-quick-filters { display: flex; align-items: center; gap: 4px; }
-.filter-chip { min-height: 28px; padding: 3px 7px; color: var(--text-muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; font-size: 10px; font-weight: 700; }
+.exercise-panel-header { flex-wrap: nowrap; }
+.exercise-panel-header .heading-group { flex: 0 0 auto; margin-right: 0; }
+.exercise-quick-filters { min-width: 0; flex: 1 1 auto; display: flex; align-items: center; justify-content: flex-end; gap: 4px; }
+.filter-chip { flex: 0 0 auto; min-height: 28px; padding: 3px 6px; white-space: nowrap; color: var(--text-muted); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; font-size: 10px; font-weight: 700; }
 .filter-chip:hover { color: var(--text); border-color: var(--line-strong); }
 .filter-chip.is-selected { color: var(--brand-strong); background: var(--brand-soft); border-color: #9bcab8; box-shadow: inset 0 0 0 1px rgba(18, 97, 73, 0.06); }
 .exercise-search-bar { position: relative; flex: 0 0 auto; display: grid; grid-template-columns: 18px minmax(0, 1fr) 30px; align-items: center; gap: 5px; margin: 8px 8px 0; padding: 3px 4px 3px 9px; color: var(--text-faint); background: var(--surface-muted); border: 1px solid var(--line); border-radius: 6px; }
@@ -798,7 +798,8 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .attachment-file-status.is-error { color: var(--red); background: var(--red-soft); border-color: #f2c8c5; }
 .attachment-file-row:has(.is-error) > svg { color: var(--red); }
 
-.toast-region { position: fixed; z-index: 20; right: 20px; bottom: 20px; width: min(360px, calc(100% - 40px)); display: grid; gap: 8px; pointer-events: none; }
+.toast-region { position: fixed; z-index: 2147483647; inset: auto 20px 20px auto; width: min(420px, calc(100vw - 32px)); max-height: min(70vh, 680px); overflow: auto; display: grid; gap: 8px; margin: 0; padding: 0; color: transparent; background: transparent; border: 0; box-shadow: none; pointer-events: none; }
+.toast-region:not([open]) { display: none; }
 .toast { display: flex; align-items: flex-start; gap: 9px; padding: 12px 13px; color: var(--text); background: var(--surface); border: 1px solid var(--line-strong); border-left: 4px solid var(--blue); border-radius: 6px; box-shadow: 0 14px 34px rgba(27, 44, 52, 0.2); animation: toast-in 160ms ease-out; pointer-events: auto; }
 .toast.success { border-left-color: #2b8a65; }
 .toast.warning { border-left-color: var(--amber); }
@@ -815,6 +816,9 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 @keyframes toast-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
 
 @media (max-width: 1240px) {
+  .exercise-panel-header { flex-wrap: wrap; }
+  .exercise-panel-header .heading-group { margin-right: auto; }
+  .exercise-quick-filters { flex: 0 0 auto; justify-content: flex-start; }
   .topbar-inner { grid-template-columns: auto minmax(190px, 1fr) auto; gap: 16px; }
   .topbar-overview { gap: 12px; }
   .overview-status { min-width: 0; max-width: 160px; padding-left: 12px; }
@@ -873,7 +877,7 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
   .flag-bar { flex-wrap: wrap; }
   .flag-field { flex-basis: 100%; }
   .flag-bar .button { width: 100%; }
-  .toast-region { right: 10px; bottom: 10px; width: calc(100% - 20px); }
+  .toast-region { right: 10px; bottom: 10px; width: calc(100% - 20px); max-height: min(65vh, 620px); }
   .ai-prompt-dialog { width: calc(100% - 20px); max-height: calc(100vh - 20px); }
   .settings-dialog { width: calc(100% - 20px); max-height: calc(100vh - 20px); }
   .tool-manager-dialog { width: calc(100% - 20px); max-height: calc(100vh - 20px); }

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 from collections.abc import Callable
@@ -114,6 +115,23 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert 'id="codex-task-details-dialog"' in page
     assert 'id="codex-task-writeup"' not in page
     assert "<datalist" not in page
+
+
+def test_frontend_dom_bindings_match_registered_elements() -> None:
+    """Catch a missing DOM registration before it aborts the whole event wiring."""
+    root = Path(__file__).parents[2]
+    script = (root / "static" / "app.js").read_text(encoding="utf-8")
+    page = (root / "static" / "index.html").read_text(encoding="utf-8")
+
+    elements_match = re.search(r"const els = \{(.*?)\n  \};", script, re.DOTALL)
+    assert elements_match is not None
+    registered = set(re.findall(r"^\s*(\w+):", elements_match.group(1), re.MULTILINE))
+    used = set(re.findall(r"\bels\.(\w+)", script))
+    assert used <= registered, f"Unregistered els fields: {sorted(used - registered)}"
+
+    html_ids = set(re.findall(r'id=["\']([^"\']+)["\']', page))
+    queried_ids = set(re.findall(r'\$\(["\']([^"\']+)["\']\)', script))
+    assert queried_ids <= html_ids, f"Missing HTML ids: {sorted(queried_ids - html_ids)}"
 
 
 class Source:
