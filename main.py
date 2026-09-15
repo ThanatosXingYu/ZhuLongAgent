@@ -14,6 +14,7 @@ from internal.codex import CodexManager, ManagerConfig, ProcessConfig, ProcessRu
 from internal.codex_skills import prepare_codex_skills
 from internal.config import Config, RuntimeConfigStore, load
 from internal.download import DownloadService
+from internal.events import EventBroker
 from internal.ichunqiu import AgentClient
 from internal.openai_client import OpenAIClient
 from internal.solver import SolverService
@@ -47,8 +48,11 @@ def build_application(config: Config | None = None) -> FastAPI:
     )
     cached = CachedService(upstream)
     downloads = DownloadService(workspace / "download", cached, timeout=300.0)
-    attachment_tasks = AttachmentTaskManager(downloads)
-    tools = ToolManager(workspace)
+    event_broker = EventBroker()
+    attachment_tasks = AttachmentTaskManager(
+        downloads, event_publisher=event_broker.publish
+    )
+    tools = ToolManager(workspace, event_publisher=event_broker.publish)
     model = OpenAIClient(runtime.model_base_url, runtime.model_api_key, timeout=120.0)
     solver = SolverService(
         cached, downloads, model, runtime.model_name, workspace / "writeups", workspace
@@ -85,6 +89,7 @@ def build_application(config: Config | None = None) -> FastAPI:
             system_prompt=runtime.codex_system_prompt,
             tasks_path=runtime_root / "codex" / "tasks.json",
             auto_resume_interrupted=runtime.codex_auto_resume_interrupted,
+            event_publisher=event_broker.publish,
         )
     )
     app = create_app(
@@ -98,6 +103,7 @@ def build_application(config: Config | None = None) -> FastAPI:
         attachment_tasks,
         tools,
         environment_workspace=workspace,
+        event_broker=event_broker,
     )
     app.state.config = config_store.get()
     app.state.config_store = config_store

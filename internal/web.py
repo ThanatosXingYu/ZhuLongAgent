@@ -28,7 +28,9 @@ from .download import (
     TooLarge,
 )
 from .environment import collect_environment_status
+from .events import EventBroker
 from .openai_client import ModelListError, fetch_models
+from .routers.realtime import create_realtime_router
 from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
 from .config import Config, ConfigError, RuntimeConfigStore
@@ -140,7 +142,9 @@ class AIProtocol(Protocol):
 class ToolManagerProtocol(Protocol):
     def catalog(self) -> dict[str, Any]: ...
 
-    def install(self, names: list[str] | None = None, all_tools: bool = False) -> dict[str, Any]: ...
+    def install(
+        self, names: list[str] | None = None, all_tools: bool = False
+    ) -> dict[str, Any]: ...
 
     def cancel(self) -> dict[str, Any]: ...
 
@@ -172,7 +176,9 @@ class CodexProtocol(Protocol):
 
     def open_challenge_folder(self, task_id: str) -> dict[str, Any]: ...
 
-    def events_page(self, task_id: str, before: int = 0, limit: int = 64) -> dict[str, Any]: ...
+    def events_page(
+        self, task_id: str, before: int = 0, limit: int = 64
+    ) -> dict[str, Any]: ...
 
     def log_text(self, task_id: str) -> str: ...
 
@@ -237,9 +243,7 @@ class CodexStartRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid", populate_by_name=True, str_strip_whitespace=True
     )
-    system_prompt: str = Field(
-        default="", alias="systemPrompt", max_length=20_000
-    )
+    system_prompt: str = Field(default="", alias="systemPrompt", max_length=20_000)
 
 
 class CodexMessageRequest(BaseModel):
@@ -326,7 +330,11 @@ class AttachmentDownloadRequest(BaseModel):
     @model_validator(mode="after")
     def validate_scope_fields(self) -> "AttachmentDownloadRequest":
         if self.scope == "all":
-            if self.exercise_id is not None or self.attachment_index is not None or self.category is not None:
+            if (
+                self.exercise_id is not None
+                or self.attachment_index is not None
+                or self.category is not None
+            ):
                 raise ValueError("all scope does not accept attachment selection")
             return self
         if self.scope == "category":
@@ -381,14 +389,20 @@ def create_app(
     attachment_tasks: AttachmentTasksProtocol | None = None,
     tools: ToolManagerProtocol | None = None,
     environment_workspace: str | Path | None = None,
+    event_broker: EventBroker | None = None,
 ) -> FastAPI:
-    services = Services(agent, downloader, ai, codex, attachments, attachment_tasks, tools)
+    services = Services(
+        agent, downloader, ai, codex, attachments, attachment_tasks, tools
+    )
     app = FastAPI(
         title="CTF 比赛工作台", docs_url=None, redoc_url=None, redirect_slashes=False
     )
     app.state.services = services
     app.state.config_store = config_store
-    app.state.environment_workspace = Path(environment_workspace or Path.cwd()).resolve()
+    app.state.environment_workspace = Path(
+        environment_workspace or Path.cwd()
+    ).resolve()
+    app.state.event_broker = event_broker
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next: Callable[..., Any]) -> Any:
@@ -421,6 +435,8 @@ def create_app(
         _request: Request, _exc: RequestValidationError
     ) -> JSONResponse:
         return _error_response(400, "INVALID_REQUEST", "请求格式无效")
+
+    app.include_router(create_realtime_router(event_broker))
 
     @app.api_route(
         "/api/config",
@@ -559,7 +575,9 @@ def create_app(
             result = await asyncio.to_thread(reader)
         except Exception as exc:
             LOGGER.warning("平台接口字段诊断读取失败", exc_info=exc)
-            return _error_response(500, "SCHEMA_DIAGNOSTICS_FAILED", "接口字段诊断暂时不可用")
+            return _error_response(
+                500, "SCHEMA_DIAGNOSTICS_FAILED", "接口字段诊断暂时不可用"
+            )
         return _success_response(result)
 
     @app.api_route(
@@ -940,14 +958,18 @@ def create_app(
         if request.method != "POST":
             return _method_error("GET, POST")
         if request.headers.get(ATTACHMENT_ACTION_HEADER) != TOOLS_ACTION_PURPOSE:
-            return _error_response(403, "CROSS_SITE_ACTION_REJECTED", "工具操作缺少同源凭据")
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "工具操作缺少同源凭据"
+            )
         parsed, error = await _validated_request(request, ToolInstallRequest)
         if error is not None:
             return error
         assert parsed is not None
         try:
             return _success_response(
-                await asyncio.to_thread(services.tools.install, parsed.tool_ids, parsed.all_tools),
+                await asyncio.to_thread(
+                    services.tools.install, parsed.tool_ids, parsed.all_tools
+                ),
                 202,
             )
         except ValueError as exc:
@@ -957,7 +979,9 @@ def create_app(
         if services.tools is None:
             return _error_response(503, "TOOLS_UNAVAILABLE", "工具管理服务未启用")
         if not _trusted_tools_request(request):
-            return _error_response(403, "CROSS_SITE_ACTION_REJECTED", "工具操作缺少同源凭据")
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "工具操作缺少同源凭据"
+            )
         body_error = await _empty_body_error(request)
         if body_error is not None:
             return body_error
@@ -973,7 +997,9 @@ def create_app(
             return _error_response(409, "TOOL_TASK_BUSY", str(exc))
         except Exception:
             LOGGER.exception("tool uninstall failed for %s", tool_id)
-            return _error_response(500, "TOOL_UNINSTALL_FAILED", "工具卸载失败，请查看服务日志")
+            return _error_response(
+                500, "TOOL_UNINSTALL_FAILED", "工具卸载失败，请查看服务日志"
+            )
 
     @app.api_route(
         "/api/tools/cancel",
@@ -983,7 +1009,9 @@ def create_app(
         if not _method(request, "POST"):
             return _method_error("POST")
         if request.headers.get(ATTACHMENT_ACTION_HEADER) != TOOLS_ACTION_PURPOSE:
-            return _error_response(403, "CROSS_SITE_ACTION_REJECTED", "工具操作缺少同源凭据")
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "工具操作缺少同源凭据"
+            )
         body_error = await _empty_body_error(request)
         if body_error is not None:
             return body_error
@@ -1017,7 +1045,9 @@ def create_app(
         if not _method(request, "GET"):
             return _method_error("GET")
         workspace = getattr(app.state, "environment_workspace", Path.cwd())
-        return _success_response(await asyncio.to_thread(collect_environment_status, workspace))
+        return _success_response(
+            await asyncio.to_thread(collect_environment_status, workspace)
+        )
 
     @app.api_route(
         "/api/codex/tasks",
@@ -1028,7 +1058,9 @@ def create_app(
             return _method_error("GET")
         if services.codex is None or not services.codex.enabled():
             if services.codex is None:
-                return _error_response(503, "CODEX_UNAVAILABLE", "Codex CLI 未配置或不可用")
+                return _error_response(
+                    503, "CODEX_UNAVAILABLE", "Codex CLI 未配置或不可用"
+                )
         assert services.codex is not None
         data = _wire(services.codex.list())
         if isinstance(data, dict):

@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .download import CatalogResult, DownloadService
+from .events import EventPublisher
 
 DownloadScope = Literal["all", "category", "exercise", "single", "redownload"]
 TaskStatus = Literal[
@@ -87,7 +88,12 @@ class _ProbeState:
 class AttachmentTaskManager:
     """Run long attachment work outside request handlers and expose snapshots."""
 
-    def __init__(self, downloads: DownloadService, probe_workers: int = 4) -> None:
+    def __init__(
+        self,
+        downloads: DownloadService,
+        probe_workers: int = 4,
+        event_publisher: EventPublisher | None = None,
+    ) -> None:
         self._downloads = downloads
         self._probe_workers = max(1, min(int(probe_workers), 8))
         self._lock = threading.RLock()
@@ -96,6 +102,8 @@ class AttachmentTaskManager:
         self._history: dict[str, _DownloadState] = {}
         self._probe = _ProbeState()
         self._probe_generation = 0
+        self._event_publisher = event_publisher
+        self._last_download_publish = 0.0
 
     def start_all(self) -> dict[str, Any]:
         return self._start("all", "全部缺失附件")
@@ -136,7 +144,9 @@ class AttachmentTaskManager:
                 state.status = "paused"
                 state.pause_started_monotonic = time.monotonic()
                 state.updated_at = time.time()
-            return self._download_snapshot(state)
+            snapshot = self._download_snapshot(state)
+            self._publish("attachment.task", state.id, snapshot)
+            return snapshot
 
     def resume(self, task_id: str) -> dict[str, Any]:
         with self._condition:
@@ -149,7 +159,9 @@ class AttachmentTaskManager:
                 state.status = "running"
                 state.updated_at = time.time()
                 self._condition.notify_all()
-            return self._download_snapshot(state)
+            snapshot = self._download_snapshot(state)
+            self._publish("attachment.task", state.id, snapshot)
+            return snapshot
 
     def cancel(self, task_id: str) -> dict[str, Any]:
         with self._condition:
@@ -165,7 +177,9 @@ class AttachmentTaskManager:
                 state.status = "cancelling"
                 state.updated_at = time.time()
                 self._condition.notify_all()
-            return self._download_snapshot(state)
+            snapshot = self._download_snapshot(state)
+            self._publish("attachment.task", state.id, snapshot)
+            return snapshot
 
     def start_probe(self, force: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -180,13 +194,15 @@ class AttachmentTaskManager:
             self._probe_generation += 1
             generation = self._probe_generation
             self._probe = _ProbeState(status="running", started_at=now, updated_at=now)
+            snapshot = self._probe_snapshot()
+            self._publish("attachment.probe", "sizes", snapshot)
             threading.Thread(
                 target=self._run_probe,
                 args=(generation,),
                 name="attachment-size-probe",
                 daemon=True,
             ).start()
-            return self._probe_snapshot()
+            return snapshot
 
     def probe_status(self) -> dict[str, Any]:
         with self._lock:
@@ -196,6 +212,7 @@ class AttachmentTaskManager:
         with self._lock:
             self._probe_generation += 1
             self._probe = _ProbeState()
+            self._publish("attachment.probe", "sizes", self._probe_snapshot())
 
     def _start(
         self,
@@ -220,13 +237,15 @@ class AttachmentTaskManager:
             self._active = state
             self._history[state.id] = state
             self._trim_history()
+            snapshot = self._download_snapshot(state)
+            self._publish("attachment.task", state.id, snapshot)
             threading.Thread(
                 target=self._run_download,
                 args=(state, exercise_id, index, category),
                 name=f"attachment-download-{state.id[:8]}",
                 daemon=True,
             ).start()
-            return self._download_snapshot(state)
+            return snapshot
 
     def _run_download(
         self,
@@ -248,6 +267,7 @@ class AttachmentTaskManager:
                 state.started_monotonic = time.monotonic()
                 if state.pause_requested:
                     state.pause_started_monotonic = state.started_monotonic
+                self._publish_download_locked(state, force=True)
             for target in targets:
                 self._wait_for_download(state)
                 self._download_target(state, target)
@@ -261,6 +281,7 @@ class AttachmentTaskManager:
                 state.current_total_bytes = 0
                 state.updated_at = time.time()
                 state.finished_monotonic = time.monotonic()
+                self._publish_download_locked(state, force=True)
         except _DownloadCancelled:
             with self._lock:
                 state.status = "cancelled"
@@ -269,16 +290,19 @@ class AttachmentTaskManager:
                 state.current_total_bytes = 0
                 state.updated_at = time.time()
                 state.finished_monotonic = time.monotonic()
+                self._publish_download_locked(state, force=True)
         except Exception as exc:
             with self._lock:
                 state.status = "failed"
                 state.error = str(exc) or type(exc).__name__
                 state.updated_at = time.time()
                 state.finished_monotonic = time.monotonic()
+                self._publish_download_locked(state, force=True)
         finally:
             with self._lock:
                 if self._active is state:
                     self._active = None
+                self._publish_download_locked(state, force=True)
 
     def _download_target(self, state: _DownloadState, target: _Target) -> None:
         with self._lock:
@@ -286,6 +310,7 @@ class AttachmentTaskManager:
             state.current_bytes = 0
             state.current_total_bytes = target.size
             state.updated_at = time.time()
+            self._publish_download_locked(state, force=True)
 
         def progress(received: int, total: int) -> None:
             with self._lock:
@@ -295,6 +320,7 @@ class AttachmentTaskManager:
                         state.total_bytes += total
                     state.current_total_bytes = total
                 state.updated_at = time.time()
+                self._publish_download_locked(state)
 
         completed = False
         try:
@@ -328,6 +354,7 @@ class AttachmentTaskManager:
                 state.current_bytes = 0
                 state.current_total_bytes = 0
                 state.updated_at = time.time()
+                self._publish_download_locked(state, force=True)
 
     def _task(self, task_id: str) -> _DownloadState:
         state = self._history.get(task_id)
@@ -387,6 +414,7 @@ class AttachmentTaskManager:
                 if not item.error
             )
         return targets
+
     @staticmethod
     def _target_exists(catalog: CatalogResult, target: _Target) -> bool:
         return any(
@@ -427,6 +455,7 @@ class AttachmentTaskManager:
                     "completed_with_errors" if self._probe.failed_files else "completed"
                 )
                 self._probe.updated_at = time.time()
+                self._publish("attachment.probe", "sizes", self._probe_snapshot())
         except Exception as exc:
             with self._lock:
                 if generation != self._probe_generation:
@@ -434,6 +463,7 @@ class AttachmentTaskManager:
                 self._probe.status = "failed"
                 self._probe.error = str(exc) or type(exc).__name__
                 self._probe.updated_at = time.time()
+                self._publish("attachment.probe", "sizes", self._probe_snapshot())
 
     @staticmethod
     def _probe_targets(catalog: CatalogResult) -> tuple[int, list[_Target]]:
@@ -463,14 +493,13 @@ class AttachmentTaskManager:
             else:
                 self._probe.failed_files += 1
             self._probe.updated_at = time.time()
+            self._publish("attachment.probe", "sizes", self._probe_snapshot())
 
     def _download_snapshot(self, state: _DownloadState) -> dict[str, Any]:
         endpoint = state.finished_monotonic or time.monotonic()
         if state.status == "paused" and state.pause_started_monotonic > 0:
             endpoint = state.pause_started_monotonic
-        elapsed = max(
-            0.0, endpoint - state.started_monotonic - state.paused_seconds
-        )
+        elapsed = max(0.0, endpoint - state.started_monotonic - state.paused_seconds)
         transferred = (
             state.downloaded_bytes + state.discarded_bytes + state.current_bytes
         )
@@ -520,6 +549,19 @@ class AttachmentTaskManager:
             "startedAt": round(self._probe.started_at * 1000),
             "updatedAt": round(self._probe.updated_at * 1000),
         }
+
+    def _publish_download_locked(
+        self, state: _DownloadState, *, force: bool = False
+    ) -> None:
+        now = time.monotonic()
+        if not force and now - self._last_download_publish < 0.1:
+            return
+        self._last_download_publish = now
+        self._publish("attachment.task", state.id, self._download_snapshot(state))
+
+    def _publish(self, event_type: str, resource_id: str, data: dict[str, Any]) -> None:
+        if self._event_publisher is not None:
+            self._event_publisher(event_type, resource_id, data)
 
     def _trim_history(self) -> None:
         while len(self._history) > 20:

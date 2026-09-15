@@ -21,6 +21,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .events import EventPublisher
+
 
 class InstallCancelled(RuntimeError):
     """Raised internally when the user cancels a tool installation."""
@@ -165,7 +167,9 @@ def _tool_category(spec: ToolSpec) -> tuple[str, str]:
 
 
 class ToolManager:
-    def __init__(self, workspace: Path) -> None:
+    def __init__(
+        self, workspace: Path, event_publisher: EventPublisher | None = None
+    ) -> None:
         self.workspace = workspace.resolve()
         self.root = self.workspace / "tools"
         self.manifest_path = self.root / "installed-tools.txt"
@@ -194,6 +198,8 @@ class ToolManager:
         self._go_source_tested = False
         self._github_source_url = ""
         self._github_source_tested = False
+        self._event_publisher = event_publisher
+        self._last_event_publish = 0.0
         self._sync_venv_launchers()
         # Rebuild a stale/missing manifest when a workspace already contains
         # installed tools (for example after upgrading this application).
@@ -339,6 +345,7 @@ class ToolManager:
             self._reset_transfer_speed_locked()
             self._phase = "排队"
             self._message = "等待安装任务开始"
+            self._publish_catalog_locked(force=True)
         threading.Thread(target=self._install_worker, args=(selected,), daemon=True).start()
         return self.catalog()
 
@@ -347,6 +354,7 @@ class ToolManager:
             if self._status == "running":
                 self._status = "cancelling"
                 self._cancel_event.set()
+                self._publish_catalog_locked(force=True)
             return self.catalog()
 
     def uninstall(self, name: str) -> dict[str, Any]:
@@ -375,6 +383,7 @@ class ToolManager:
             self._error = ""
             self._errors.pop(spec.name, None)
             self._cancel_event.clear()
+            self._publish_catalog_locked(force=True)
 
         try:
             if spec.kind in {"python", "python-bundle"}:
@@ -388,12 +397,14 @@ class ToolManager:
                 self._current = ""
                 self._phase = ""
                 self._message = ""
+                self._publish_catalog_locked(force=True)
             raise
         with self._lock:
             self._status = "idle"
             self._current = ""
             self._phase = ""
             self._message = ""
+            self._publish_catalog_locked(force=True)
         self._write_manifest()
         return self.catalog()
 
@@ -495,6 +506,7 @@ class ToolManager:
                     self._reset_transfer_speed_locked()
                     self._phase = "准备"
                     self._message = f"准备安装 {spec.label}"
+                    self._publish_catalog_locked(force=True)
                 try:
                     self._install_one(spec)
                 except InstallCancelled:
@@ -502,9 +514,11 @@ class ToolManager:
                 except Exception as exc:
                     with self._lock:
                         self._errors[spec.name] = _format_process_error(exc)
+                        self._publish_catalog_locked(force=True)
                 finally:
                     with self._lock:
                         self._completed += 1
+                        self._publish_catalog_locked(force=True)
             with self._lock:
                 self._status = (
                     "cancelled"
@@ -524,12 +538,14 @@ class ToolManager:
                 self._reset_transfer_speed_locked()
                 self._phase = ""
                 self._message = ""
+                self._publish_catalog_locked(force=True)
             # Keep the manifest useful even when a batch partially fails or
             # is cancelled: it reflects what is actually available now.
             self._write_manifest()
         except Exception as exc:
             with self._lock:
                 self._status, self._error, self._current = "failed", _format_process_error(exc), ""
+                self._publish_catalog_locked(force=True)
             self._write_manifest()
 
     def _install_one(self, spec: ToolSpec) -> None:
@@ -581,6 +597,7 @@ class ToolManager:
                 self._reset_transfer_speed_locked(self._current_bytes)
             self._phase = phase
             self._message = message
+            self._publish_catalog_locked(force=True)
 
     def _reset_transfer_speed_locked(self, current_bytes: int = 0) -> None:
         now = time.monotonic()
@@ -594,6 +611,7 @@ class ToolManager:
         if normalized < self._current_bytes or not self._transfer_samples:
             self._current_bytes = normalized
             self._reset_transfer_speed_locked(normalized)
+            self._publish_catalog_locked()
             return
         self._current_bytes = normalized
         self._transfer_samples.append((now, normalized))
@@ -605,6 +623,16 @@ class ToolManager:
         self._current_speed = (
             max(0, normalized - started_bytes) / elapsed if elapsed > 0 else 0.0
         )
+        self._publish_catalog_locked()
+
+    def _publish_catalog_locked(self, *, force: bool = False) -> None:
+        if self._event_publisher is None:
+            return
+        now = time.monotonic()
+        if not force and now - self._last_event_publish < 0.1:
+            return
+        self._last_event_publish = now
+        self._event_publisher("tool.install", self._current or "manager", self.catalog())
 
     def _ensure_venv(self) -> None:
         if self._venv_command("python").is_file():
@@ -709,6 +737,7 @@ class ToolManager:
             with self._lock:
                 self._record_transfer_bytes_locked(received)
                 self._current_total = max(0, total)
+                self._publish_catalog_locked()
 
     def _install_go(self, spec: ToolSpec) -> None:
         if not shutil.which("go"):
@@ -926,6 +955,7 @@ class ToolManager:
                         self._current_total = max(0, total)
                         self._current_bytes = 0
                         self._reset_transfer_speed_locked()
+                        self._publish_catalog_locked(force=True)
                     while True:
                         if self._cancel_event.is_set():
                             raise InstallCancelled

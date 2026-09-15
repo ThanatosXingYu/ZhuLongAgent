@@ -1926,7 +1926,11 @@ def test_codex_follow_up_and_side_create_expected_sessions(tmp_path: Path) -> No
             break
         time.sleep(0.01)
     assert any(resume == "session-1" and not fork for resume, fork, _ in runner.calls)
-    assert any(resume == "session-1" and fork for resume, fork, _ in runner.calls)
+    assert any(
+        not resume and not fork and prompt == "解释思路"
+        for resume, fork, prompt in runner.calls
+    )
+    assert not any(fork for _, fork, _ in runner.calls)
     manager.close()
 
 

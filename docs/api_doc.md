@@ -90,6 +90,7 @@ X-GCSIS-Action: tools-manager
 | `DELETE` | `/api/tools/{tool_id}` | 卸载指定的本地 CTF 工具 |
 | `POST` | `/api/tools/{tool_id}/uninstall` | 卸载指定的本地 CTF 工具（兼容写法） |
 | `GET` | `/api/environment` | 查询本机常用开发环境状态 |
+| `GET` | `/api/events` | SSE 实时事件流，支持 `Last-Event-ID` 断线续传 |
 | `GET` | `/api/exercises/{id}/ai/prompt` | 生成 AI 解题提示词 |
 | `POST` | `/api/exercises/{id}/ai/run` | 使用兼容模型解题 |
 | `POST` | `/api/exercises/{id}/codex/run` | 启动 Codex 解题任务 |
@@ -471,7 +472,7 @@ Content-Type: application/json
 {"toolIds":["sqlmap","z3"],"all":false}
 ```
 
-一键安装全部工具时使用 `{"toolIds":[],"all":true}`。安装状态会通过 `GET /api/tools` 轮询，所有文件保存在当前目录的 `tools/`。
+一键安装全部工具时使用 `{"toolIds":[],"all":true}`。安装状态优先由 `GET /api/events` 的 `tool.install` 事件实时推送，`GET /api/tools` 保留为首次快照和轮询降级接口；所有文件保存在当前目录的 `tools/`。
 
 `GET /api/tools` 返回的每个工具包含 `category` 和 `categoryLabel`：
 
@@ -521,8 +522,30 @@ DELETE /api/codex/tasks/{task_id}
 
 `codex/run` 允许通过本地 API 操作题目环境和提交答案；`codex/pure` 只分析已有题目说明与本地附件，不访问比赛接口、不启动环境、不提交 Flag。
 
-任务详情页的“再次输入”会在原会话中继续，“Side 提问”会 fork 一个独立会话并标记为 Side，不影响主任务。两种操作都由本地 Codex CLI 的 `resume` / `fork` 子命令执行。
+任务详情页的“再次输入”会使用原 Session 继续；“Side 提问”会创建与父任务关联但不继承父 Session 历史的新会话，只发送用户本次输入，不附加题目 Prompt 或全局系统 Prompt。Side 仍会在会话树中显示父子来源，但不会执行 Codex `fork`。
 
 消息接口请求体为 `{"message":"补充要求","side":false}`；将 `side` 设为 `true` 会创建独立的 Side 会话。
 
 Codex 任务会自动使用后端生成的标准题目 AI 提示词作为任务正文；启动窗口中可编辑的内容是本次任务附加的系统指令，两者都会发送给 Codex。
+
+### SSE 实时事件
+
+```text
+GET /api/events
+Accept: text/event-stream
+Last-Event-ID: 1770000000000001
+```
+
+每条事件的 `data:` 是统一结构：
+
+```json
+{
+  "id": 1770000000000002,
+  "type": "codex.event",
+  "resourceId": "任务 ID",
+  "time": "2026-09-15T08:00:00Z",
+  "data": {}
+}
+```
+
+事件类型包括 `codex.task`、`codex.event`、`codex.deleted`、`attachment.task`、`attachment.probe` 和 `tool.install`。连接建立后发送 `stream.ready`；客户端携带的事件 ID 已超出服务端回放窗口或来自服务重启前时发送 `stream.reset`。SSE 只负责状态通知，首次打开页面仍应读取对应 REST API 快照；SSE 不可用时可低频轮询这些原有接口。

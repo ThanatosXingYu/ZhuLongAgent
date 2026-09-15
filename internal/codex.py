@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, cast
 
 from .config import DEFAULT_CODEX_MAX_CONCURRENCY, DEFAULT_CODEX_SYSTEM_PROMPT
+from .events import EventPublisher
 from .solver import PromptResult, safe_writeup_segment
 
 MAX_TASK_EVENTS = 128
@@ -238,9 +239,8 @@ class ProcessRunner:
                         event = replace(
                             event,
                             kind=kind,
-                            status=event.status or (
-                                "warning" if kind == "warning" else "failed"
-                            ),
+                            status=event.status
+                            or ("warning" if kind == "warning" else "failed"),
                         )
                     elif kind_override:
                         event = replace(event, kind=kind_override)
@@ -847,6 +847,7 @@ class ManagerConfig:
     system_prompt: str = ""
     tasks_path: str | Path = ""
     auto_resume_interrupted: bool = False
+    event_publisher: EventPublisher | None = None
 
 
 @dataclass
@@ -889,6 +890,8 @@ class CodexManager:
         self._condition = threading.Condition()
         self._closed = False
         self._workers: list[threading.Thread] = []
+        self._event_publisher = config.event_publisher
+        self._published_task_signatures: dict[str, str] = {}
         self._load_tasks()
         if self.enabled():
             self._workers = [
@@ -1586,6 +1589,8 @@ class CodexManager:
             self._order = [item for item in self._order if item != task_id]
             writeup_path = task.snapshot.writeup_path
             output_path = task.config.output_path
+            self._published_task_signatures.pop(task_id, None)
+            self._publish("codex.deleted", task_id, {"id": task_id})
             self._persist_tasks_locked()
         self._remove_artifacts(task_id, writeup_path, output_path)
 
@@ -2065,6 +2070,11 @@ class CodexManager:
         elif normalized.kind == "process.completed":
             changes.update(process_alive=False, process_id=0)
         task.snapshot = _replace_snapshot(task.snapshot, **changes)
+        self._publish(
+            "codex.event",
+            task.snapshot.id,
+            {"taskId": task.snapshot.id, "event": normalized.to_dict()},
+        )
         return normalized
 
     def _hydrate_task_events(self, task: _Task) -> None:
@@ -2237,6 +2247,27 @@ class CodexManager:
                 temporary.unlink(missing_ok=True)
         except OSError:
             LOGGER.warning("无法保存 Codex 任务元数据", exc_info=True)
+        self._publish_changed_tasks_locked()
+
+    def _publish_changed_tasks_locked(self) -> None:
+        for task_id in self._order:
+            task = self._tasks.get(task_id)
+            if task is None:
+                continue
+            wire = task.snapshot.to_dict(include_events=False)
+            signature = json.dumps(
+                wire, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            )
+            if self._published_task_signatures.get(task_id) == signature:
+                continue
+            self._published_task_signatures[task_id] = signature
+            self._publish("codex.task", task_id, wire)
+
+    def _publish(
+        self, event_type: str, resource_id: str, data: Mapping[str, Any]
+    ) -> None:
+        if self._event_publisher is not None:
+            self._event_publisher(event_type, resource_id, data)
 
     @staticmethod
     def _task_to_dict(task: _Task) -> dict[str, Any]:
