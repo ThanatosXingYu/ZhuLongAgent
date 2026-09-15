@@ -79,6 +79,7 @@
   };
 
   const $ = (id) => document.getElementById(id);
+  let dialogLayerSequence = 0;
   const els = {
     connection: $("connection-status"),
     connectionLabel: $("connection-status").querySelector(".connection-label"),
@@ -340,22 +341,38 @@
     }
   }
 
+  function syncToastRegionHost(excludedDialog = null) {
+    const topDialog = [...document.querySelectorAll("dialog[open]")]
+      .filter((dialog) => dialog !== excludedDialog)
+      .sort((left, right) => Number(left.dataset.dialogLayer || 0) - Number(right.dataset.dialogLayer || 0))
+      .at(-1);
+    const host = topDialog || document.body;
+    if (els.toastRegion.parentElement !== host) host.append(els.toastRegion);
+  }
+
   function openDialog(dialog) {
     if (!dialog) return;
     if (typeof dialog.showModal === "function") {
-      if (!dialog.open) dialog.showModal();
-      return;
+      if (!dialog.open) {
+        dialog.showModal();
+        dialog.dataset.dialogLayer = String(++dialogLayerSequence);
+      }
+    } else {
+      dialog.setAttribute("open", "open");
+      dialog.dataset.dialogLayer = String(++dialogLayerSequence);
     }
-    dialog.setAttribute("open", "open");
+    syncToastRegionHost();
   }
 
   function closeDialog(dialog) {
     if (!dialog) return;
     if (typeof dialog.close === "function") {
       if (dialog.open) dialog.close();
-      return;
+    } else {
+      dialog.removeAttribute("open");
     }
-    dialog.removeAttribute("open");
+    delete dialog.dataset.dialogLayer;
+    syncToastRegionHost(dialog);
   }
 
   function setConnection(kind) {
@@ -1243,18 +1260,14 @@
     const iconName = kind === "success" ? "check-circle-2" : kind === "warning" ? "triangle-alert" : kind === "error" ? "circle-x" : "info";
     toast.append(icon(iconName), createElement("span", "toast-message", message));
     els.toastRegion.append(toast);
-    // A non-modal dialog participates in the browser top layer, so notices stay
-    // above native modal dialogs instead of being hidden behind their backdrop.
-    if (typeof els.toastRegion.show === "function") {
-      if (els.toastRegion.open) els.toastRegion.close();
-      els.toastRegion.show();
-    } else {
-      els.toastRegion.hidden = false;
-    }
+    // A modal dialog owns the browser's top layer. Mount notifications inside
+    // the currently topmost modal so they cannot be hidden by its backdrop.
+    syncToastRegionHost();
+    els.toastRegion.hidden = false;
     refreshIcons();
     window.setTimeout(() => {
       toast.remove();
-      if (!els.toastRegion.children.length) closeDialog(els.toastRegion);
+      if (!els.toastRegion.children.length) els.toastRegion.hidden = true;
     }, 4600);
   }
 
@@ -1538,6 +1551,7 @@
     els.selectedExerciseRefresh.disabled = true;
     els.openAIPrompt.disabled = true;
     els.runCodex.disabled = true;
+    els.runCodexPure.disabled = true;
     els.exerciseDetail.replaceChildren(createElement("div", "empty-state", "正在加载题目详情"));
     els.flagInput.disabled = true;
     els.flagSubmit.disabled = true;
@@ -2208,6 +2222,7 @@
       els.selectedExerciseRefresh.disabled = true;
       els.openAIPrompt.disabled = true;
       els.runCodex.disabled = true;
+      els.runCodexPure.disabled = true;
       els.exerciseDetail.replaceChildren(createElement("div", "empty-state", "暂无题目详情"));
       els.flagInput.disabled = true;
       els.flagSubmit.disabled = true;
@@ -2219,6 +2234,7 @@
     els.selectedExerciseRefresh.disabled = false;
     els.openAIPrompt.disabled = false;
     els.runCodex.disabled = state.codexAvailable !== true;
+    els.runCodexPure.disabled = state.codexAvailable !== true;
     const meta = [
       createElement("span", "meta-chip info", exerciseCategory(detail)),
       createElement("span", "meta-chip", `分值 ${detail.score || "—"}`),
@@ -3867,6 +3883,13 @@
         closeDialog(els.codexTaskDialog);
         stopCodexPollingIfIdle();
       }
+    });
+    document.querySelectorAll("dialog").forEach((dialog) => {
+      dialog.addEventListener("close", () => {
+        delete dialog.dataset.dialogLayer;
+        syncToastRegionHost(dialog);
+        if (dialog === els.codexTaskDialog) stopCodexPollingIfIdle();
+      });
     });
     els.aiCopyPrompt.addEventListener("click", copyAIPrompt);
     els.aiRun.addEventListener("click", runAISolver);

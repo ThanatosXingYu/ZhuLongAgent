@@ -90,6 +90,9 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert "混合题" not in script
     assert "persistCollapsedGroups" in script
     assert 'second: "2-digit"' in script
+    assert "syncToastRegionHost" in script
+    assert "els.runCodexPure.disabled = state.codexAvailable !== true;" in script
+    assert 'dialog.addEventListener("close"' in script
 
     page = (Path(__file__).parents[2] / "static" / "index.html").read_text(
         encoding="utf-8"
@@ -114,6 +117,8 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert '<div id="codex-task-events"' in page
     assert 'id="codex-task-details-dialog"' in page
     assert 'id="codex-task-writeup"' not in page
+    assert 'id="toast-region"' in page and 'aria-live="polite"' in page
+    assert '<dialog id="toast-region"' not in page
     assert "<datalist" not in page
 
 

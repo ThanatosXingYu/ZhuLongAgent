@@ -799,7 +799,7 @@ button:focus-visible, input:focus-visible, dialog:focus-visible {
 .attachment-file-row:has(.is-error) > svg { color: var(--red); }
 
 .toast-region { position: fixed; z-index: 2147483647; inset: auto 20px 20px auto; width: min(420px, calc(100vw - 32px)); max-height: min(70vh, 680px); overflow: auto; display: grid; gap: 8px; margin: 0; padding: 0; color: transparent; background: transparent; border: 0; box-shadow: none; pointer-events: none; }
-.toast-region:not([open]) { display: none; }
+.toast-region[hidden] { display: none; }
 .toast { display: flex; align-items: flex-start; gap: 9px; padding: 12px 13px; color: var(--text); background: var(--surface); border: 1px solid var(--line-strong); border-left: 4px solid var(--blue); border-radius: 6px; box-shadow: 0 14px 34px rgba(27, 44, 52, 0.2); animation: toast-in 160ms ease-out; pointer-events: auto; }
 .toast.success { border-left-color: #2b8a65; }
 .toast.warning { border-left-color: var(--amber); }
