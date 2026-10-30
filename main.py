@@ -76,7 +76,10 @@ def build_application(config: Config | None = None) -> FastAPI:
                 LOGGER.warning("无法迁移旧 Codex 数据目录，将继续使用新的目录")
     prepare_codex_skills(workspace, codex_home, runtime.codex_ctf_skills_enabled)
     model_catalog_path = prepare_model_catalog(
-        binary, codex_home / "model-catalog.json", runtime.codex_model
+        binary,
+        codex_home / "model-catalog.json",
+        runtime.codex_model,
+        ("deepseek-v4-flash",),
     )
     process_config = ProcessConfig(
         binary,
@@ -126,7 +129,10 @@ def build_application(config: Config | None = None) -> FastAPI:
         solver.configure_model(model, "auto")
         prepare_codex_skills(workspace, codex_home, updated.codex_ctf_skills_enabled)
         model_catalog_path = prepare_model_catalog(
-            binary, codex_home / "model-catalog.json", updated.codex_model
+            binary,
+            codex_home / "model-catalog.json",
+            updated.codex_model,
+            ("deepseek-v4-flash",),
         )
         codex.configure(
             ProcessConfig(

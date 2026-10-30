@@ -533,6 +533,39 @@ def test_model_provider_migration_preserves_legacy_api_key(tmp_path: Path) -> No
     assert "legacy-secret" not in response.text
 
 
+def test_codex_proxy_lists_configured_chat_models(tmp_path: Path) -> None:
+    providers = [
+        {
+            "id": "provider-a",
+            "name": "A",
+            "baseUrl": "https://a.example/v1",
+            "apiKey": "upstream-secret",
+            "model": "deepseek-v4.1-flash",
+            "protocol": "openai-chat",
+            "enabled": True,
+        }
+    ]
+    store = RuntimeConfigStore(
+        Config(
+            codex_model="deepseek-v4.1-flash",
+            codex_api_key="local-secret",
+            model_providers_json=json.dumps(providers),
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        rejected = client.get("/codex-proxy/v1/models")
+        response = client.get(
+            "/codex-proxy/v1/models",
+            headers={"Authorization": "Bearer local-secret"},
+        )
+
+    assert rejected.status_code == 401
+    assert response.status_code == 200
+    assert response.json()["data"][0]["id"] == "deepseek-v4.1-flash"
+
+
 def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:
     assert _listen_parts("127.0.0.1:8080") == ("127.0.0.1", 8080)
     assert _listen_parts(":8080") == ("0.0.0.0", 8080)

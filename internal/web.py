@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol, TypeGuard, TypeVar
@@ -19,7 +20,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .agent import APIError, PlatformNotConfigured
 from .attachment_tasks import DownloadTaskBusy, DownloadTaskNotFound
 from .codex import CodexError, CodexUnavailable, ErrPrompt, TaskNotFound
-from .codex_compat import build_chat_bridge, build_response_sse, complete_with_chat
+from .codex_compat import (
+    ChatBridge,
+    build_chat_bridge,
+    build_response_sse,
+    complete_with_chat,
+)
 from .download import (
     AttachmentNotFound,
     DownloadFailed,
@@ -30,7 +36,7 @@ from .download import (
 )
 from .environment import collect_environment_status
 from .events import EventBroker
-from .openai_client import ModelListError, fetch_models
+from .openai_client import Message, ModelCallError, ModelListError, fetch_models
 from .routers.realtime import create_realtime_router
 from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
@@ -497,6 +503,37 @@ def create_app(
     app.include_router(create_realtime_router(event_broker))
 
     @app.api_route(
+        "/codex-proxy/v1/models",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def codex_models_proxy(request: Request) -> Response:
+        if not _method(request, "GET"):
+            return _method_error("GET")
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        current = config_store.get()
+        expected_key = current.codex_api_key.strip()
+        authorization = request.headers.get("authorization", "").strip()
+        if not expected_key or authorization != f"Bearer {expected_key}":
+            return _error_response(401, "CODEX_PROXY_UNAUTHORIZED", "Codex 代理鉴权失败")
+        models = _codex_proxy_models(current)
+        return JSONResponse(
+            {
+                "object": "list",
+                "data": [
+                    {
+                        "id": model,
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "gcsis-codex",
+                    }
+                    for model in models
+                ],
+            },
+            headers={"Cache-Control": "no-store"},
+        )
+
+    @app.api_route(
         "/codex-proxy/v1/responses",
         methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
@@ -528,17 +565,17 @@ def create_app(
         try:
             message = await asyncio.wait_for(
                 asyncio.to_thread(
-                    complete_with_chat,
+                    _complete_codex_chat_with_retry,
                     bridge,
-                    base_url=upstream_base_url,
-                    api_key=upstream_api_key,
+                    upstream_base_url,
+                    upstream_api_key,
                 ),
-                timeout=150,
+                timeout=300,
             )
         except TimeoutError:
             return _error_response(504, "CODEX_CHAT_TIMEOUT", "Codex Chat 上游响应超时")
         except Exception as exc:
-            LOGGER.warning("Codex Chat compatibility request failed: %s", exc.__class__.__name__)
+            LOGGER.warning("Codex Chat compatibility request failed: %s", exc)
             return _error_response(502, "CODEX_CHAT_FAILED", "Codex Chat 上游请求失败")
         stream = build_response_sse(
             message,
@@ -1973,6 +2010,47 @@ def _codex_chat_upstream(config: Config) -> tuple[str, str]:
     ):
         return config.model_base_url.rstrip("/"), config.model_api_key
     return "", ""
+
+
+def _codex_proxy_models(config: Config) -> list[str]:
+    models: list[str] = []
+    if config.codex_model:
+        models.append(config.codex_model)
+    try:
+        providers = json.loads(config.model_providers_json or "[]")
+    except json.JSONDecodeError:
+        providers = []
+    for item in providers:
+        if (
+            isinstance(item, Mapping)
+            and bool(item.get("enabled", True))
+            and str(item.get("protocol", "") or "") == "openai-chat"
+        ):
+            model = str(item.get("model", "") or "").strip()
+            if model and model not in models:
+                models.append(model)
+    return models
+
+
+def _complete_codex_chat_with_retry(
+    bridge: ChatBridge, base_url: str, api_key: str
+) -> Message:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return complete_with_chat(
+                bridge,
+                base_url=base_url,
+                api_key=api_key,
+                timeout=100,
+            )
+        except ModelCallError as exc:
+            last_error = exc
+            if not exc.retryable or attempt >= 2:
+                raise
+            time.sleep(1.0 if attempt == 0 else 3.0)
+    assert last_error is not None
+    raise last_error
 
 
 def _runtime_patch_values(

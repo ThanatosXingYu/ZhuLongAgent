@@ -361,6 +361,12 @@ def build_command(
             f"model_providers.gcsis-codex.env_key={quote(API_KEY_ENVIRONMENT)}",
             "-c",
             f"model_providers.gcsis-codex.wire_api={quote(_codex_wire_api(config.protocol))}",
+            "-c",
+            "model_providers.gcsis-codex.request_max_retries=2",
+            "-c",
+            "model_providers.gcsis-codex.stream_max_retries=2",
+            "-c",
+            "model_providers.gcsis-codex.stream_idle_timeout_ms=300000",
             *(
                 ["-c", f"model_catalog_json={quote(config.model_catalog_path)}"]
                 if config.model_catalog_path
@@ -415,6 +421,12 @@ def build_interactive_command(
             f"model_providers.gcsis-codex.env_key={quote(API_KEY_ENVIRONMENT)}",
             "-c",
             f"model_providers.gcsis-codex.wire_api={quote(_codex_wire_api(config.protocol))}",
+            "-c",
+            "model_providers.gcsis-codex.request_max_retries=2",
+            "-c",
+            "model_providers.gcsis-codex.stream_max_retries=2",
+            "-c",
+            "model_providers.gcsis-codex.stream_idle_timeout_ms=300000",
             *(
                 ["-c", f"model_catalog_json={quote(config.model_catalog_path)}"]
                 if config.model_catalog_path
@@ -505,7 +517,9 @@ def _prepare_codex_home(config: ProcessConfig) -> str:
     return str(home)
 
 
-def prepare_model_catalog(binary: str, path: str | Path, model: str) -> str:
+def prepare_model_catalog(
+    binary: str, path: str | Path, model: str, aliases: tuple[str, ...] = ()
+) -> str:
     """Create a Codex model catalog containing all bundled and custom models."""
 
     selected_model = model.strip()
@@ -527,15 +541,11 @@ def prepare_model_catalog(binary: str, path: str | Path, model: str) -> str:
     if not isinstance(models, list) or not models:
         return ""
     normalized = [dict(item) for item in models if isinstance(item, Mapping)]
-    existing = next(
-        (
-            item
-            for item in normalized
-            if str(item.get("slug", "") or "") == selected_model
-        ),
-        None,
-    )
-    if existing is None:
+    existing_slugs = {str(item.get("slug", "") or "") for item in normalized}
+    for requested_model in (selected_model, *aliases):
+        candidate_model = requested_model.strip()
+        if not candidate_model or candidate_model in existing_slugs:
+            continue
         template = next(
             (
                 item
@@ -545,10 +555,11 @@ def prepare_model_catalog(binary: str, path: str | Path, model: str) -> str:
             normalized[0],
         )
         custom = json.loads(json.dumps(template))
-        custom["slug"] = selected_model
-        custom["display_name"] = selected_model
+        custom["slug"] = candidate_model
+        custom["display_name"] = candidate_model
         custom["description"] = "Custom OpenAI Chat model routed by the local workbench."
         normalized.append(custom)
+        existing_slugs.add(candidate_model)
     target = Path(path)
     try:
         target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
