@@ -11,6 +11,7 @@ import { createAppState } from "./modules/state.js";
   const BUILD_POLL_MS = 2000;
   const BUILD_POLL_TIMEOUT_MS = 60000;
   const FALLBACK_POLL_MS = 10000;
+  const PLATFORM_ACTION_TIMEOUT_MS = 15000;
   // Legacy cadence names remain for compatibility; SSE/fallback paths use FALLBACK_POLL_MS.
   const ATTACHMENT_TASK_POLL_MS = 500;
   const ATTACHMENT_SIZE_POLL_MS = 1000;
@@ -19,10 +20,31 @@ import { createAppState } from "./modules/state.js";
   const COLLAPSED_ATTACHMENT_CATEGORY_STORAGE_KEY = "gcsis.collapsed-attachment-categories";
   const ATTACHMENT_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "attachment-manager" });
   const PLATFORM_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "platform-auth" });
+  const CODEX_RECOVERY_PROMPT = "刚才程序意外退出了，请你核对上下文，接着之前的进度继续执行任务。";
+  const CODEX_WP_RAW_PROMPT = `请你根据当前题目信息以及你解题的思路、脚本等，完成该题WriteUp的撰写，然后告诉我wp的完整路径。要求：
+1.wp为markdown格式，保存到本地
+2.wp的文件名应为题目名_WriteUp.md
+3.wp中应该包含完整的思路、解题过程、解题脚本、最终flag等，不得引用外部poc等
+4.正文的中文和英文以及特殊符号之间不要加空格，除非是markdown语法等特殊要求
+5.wp不要太过臃肿，能够完整的写出该题的完整过程即可，也不要太过精简导致关键信息缺失`;
+  const CODEX_WP_DESENSITIZED_PROMPT = `请你根据当前题目信息以及你解题的思路、脚本等，完成该题脱敏版WriteUp的撰写，然后告诉我wp的完整路径。要求：
+1.wp为markdown格式，保存到本地
+2.wp的文件名应为题目名_WriteUp.md
+3.wp中应该包含完整的思路、解题过程、解题脚本、最终flag等，不得引用外部poc等
+4.正文的中文和英文以及特殊符号之间不要加空格，除非是markdown语法等特殊要求
+5.wp不要太过臃肿，能够完整的写出该题的完整过程即可，也不要太过精简导致关键信息缺失
+6.最重要的是，该版wp为脱敏wp，因为该题目是动态环境题目。脱敏的要求为不得写出该题目的靶机和端口信息；不得写出该题解出的flag；不得写入任何与本机信息、本地路径相关的信息。这些可以追溯到个人的信息全部使用占位符或完全脱敏，然后再写入到wp中。`;
   const RICH_TEXT_TAGS = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IMG", "LI", "OL", "P", "PRE", "S", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL"]);
   const DROPPED_RICH_TEXT_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "MATH", "OBJECT", "SCRIPT", "STYLE", "SVG", "TEXTAREA"]);
 
   const state = createAppState({ realtimeStopped: REALTIME_STATUS.STOPPED });
+  let platformAuthRequest = null;
+  let platformAuthController = null;
+  let platformAuthEpoch = 0;
+  let portablePlatformSession = "";
+  let modelRoutingStrategy = "round-robin";
+  let modelProviderSequence = 0;
+  let modelRoutingTrigger = null;
 
   const $ = (id) => document.getElementById(id);
   let dialogLayerSequence = 0;
@@ -76,6 +98,15 @@ import { createAppState } from "./modules/state.js";
     openCodexTasks: $("open-codex-tasks"),
     codexActiveCount: $("codex-active-count"),
     openSettings: $("open-settings"),
+    openModelRouting: $("open-model-routing"),
+    openModelRoutingSettings: $("open-model-routing-settings"),
+    modelRoutingPage: $("model-routing-page"),
+    modelProviderList: $("model-provider-list"),
+    addModelProvider: $("add-model-provider"),
+    modelRetryDelays: $("model-retry-delays"),
+    modelRecoveryInterval: $("model-recovery-interval"),
+    modelRoutingStatus: $("model-routing-status"),
+    saveModelRouting: $("save-model-routing"),
     openToolManager: $("open-tool-manager"),
     toolManagerDialog: $("tool-manager-dialog"),
     environmentStatusItems: $("environment-status-items"),
@@ -92,6 +123,8 @@ import { createAppState } from "./modules/state.js";
     platformAuthStatus: $("platform-auth-status"),
     platformLogout: $("platform-logout"),
     platformTeamInfo: $("platform-team-info"),
+    platformAuthenticatedActions: $("platform-authenticated-actions"),
+    copyAuthenticatedSession: $("copy-authenticated-session"),
     platformTeamName: $("platform-team-name"),
     platformUserName: $("platform-user-name"),
     platformTeamScore: $("platform-team-score"),
@@ -101,6 +134,7 @@ import { createAppState } from "./modules/state.js";
     platformLogin: $("platform-login"),
     loginModePassword: $("login-mode-password"),
     loginModeSms: $("login-mode-sms"),
+    loginModeSession: $("login-mode-session"),
     passwordLoginForm: $("password-login-form"),
     passwordAccount: $("password-account"),
     passwordValue: $("password-value"),
@@ -121,13 +155,20 @@ import { createAppState } from "./modules/state.js";
     sendSmsCode: $("send-sms-code"),
     smsLogin: $("sms-login"),
     smsLoginStatus: $("sms-login-status"),
+    sessionLoginForm: $("session-login-form"),
+    sessionRequestPacket: $("session-request-packet"),
+    copySessionLogin: $("copy-session-login"),
+    sessionLogin: $("session-login"),
+    sessionLoginStatus: $("session-login-status"),
     settingModelBaseUrl: $("setting-model-base-url"),
     settingModelName: $("setting-model-name"),
+    settingModelProtocol: $("setting-model-protocol"),
     settingModelApiKey: $("setting-model-api-key"),
     fetchModels: $("fetch-models"),
     modelOptions: $("model-options"),
     settingCodexBaseUrl: $("setting-codex-base-url"),
     settingCodexModel: $("setting-codex-model"),
+    settingCodexProtocol: $("setting-codex-protocol"),
     settingCodexApiKey: $("setting-codex-api-key"),
     fetchCodexModels: $("fetch-codex-models"),
     codexModelOptions: $("codex-model-options"),
@@ -159,6 +200,9 @@ import { createAppState } from "./modules/state.js";
     codexPrimaryAction: $("codex-primary-action"),
     codexTaskCompose: $("codex-task-compose"),
     codexMoreMenu: $("codex-more-menu"),
+    codexWpMenu: $("codex-wp-menu"),
+    codexWpDesensitized: $("codex-wp-desensitized"),
+    codexWpRaw: $("codex-wp-raw"),
     deleteCodexTask: $("delete-codex-task"),
     openCodexTerminal: $("open-codex-terminal"),
     openCodexFolder: $("open-codex-folder"),
@@ -384,6 +428,19 @@ import { createAppState } from "./modules/state.js";
   });
   const request = (...args) => apiClient.request(...args);
 
+  async function requestPlatformAction(path, options = {}) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(
+      () => controller.abort(),
+      PLATFORM_ACTION_TIMEOUT_MS,
+    );
+    try {
+      return await request(path, { ...options, signal: controller.signal });
+    } finally {
+      window.clearTimeout(timeout);
+    }
+  }
+
   function handleAuthExpired() {
     stopWorkspacePollingOnAuthFailure();
     state.authenticated = false;
@@ -433,14 +490,16 @@ import { createAppState } from "./modules/state.js";
 
   function setPlatformAuthentication(status) {
     const authenticated = Boolean(status && status.authenticated);
-    const contextUnavailable = authenticated && status.message === "已登录，队伍信息暂不可用";
+    const contextUnavailable = authenticated && /已登录，.+暂不可用/.test(status.message || "");
     const expired = !authenticated && Boolean(status && /失效|过期|重新登录/.test(status.message || ""));
     state.authenticated = authenticated;
+    if (!authenticated) portablePlatformSession = "";
     if (authenticated) state.authExpiryNoticeAt = 0;
     const teamName = status && status.teamName ? ` · ${status.teamName}` : "";
     els.platformAuthStatus.textContent = authenticated ? `已登录${teamName}` : expired ? "登录已过期，请重新登录" : "待登录";
     els.platformAuthStatus.className = `platform-auth-status${authenticated ? " is-authenticated" : expired ? " is-expired" : ""}`;
     els.platformLogout.hidden = !authenticated;
+    els.platformAuthenticatedActions.hidden = !authenticated;
     els.platformLogin.hidden = authenticated && !contextUnavailable;
     els.platformTeamInfo.hidden = !authenticated || contextUnavailable;
     const values = {
@@ -472,18 +531,272 @@ import { createAppState } from "./modules/state.js";
     }
   }
 
+  function applyPlatformAuthentication(status) {
+    platformAuthEpoch += 1;
+    platformAuthRequest = null;
+    setPlatformAuthentication(status);
+  }
+
+  function setModelRoutingStatus(message, kind = "") {
+    els.modelRoutingStatus.textContent = message;
+    els.modelRoutingStatus.className = `settings-status${kind ? ` ${kind}` : ""}`;
+  }
+
+  function setRoutingStrategy(value) {
+    modelRoutingStrategy = value === "failover" ? "failover" : "round-robin";
+    els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
+      const active = button.dataset.routing === modelRoutingStrategy;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+  }
+
+  function addProviderRow(provider = {}) {
+    const id = String(provider.id || `provider-${Date.now()}-${++modelProviderSequence}`);
+    const item = createElement("article", "model-provider-item");
+    item.dataset.providerId = id;
+    item.dataset.legacy = provider.legacy ? "true" : "false";
+    const heading = createElement("div", "model-provider-heading");
+    const enabledLabel = createElement("label", "settings-checkbox");
+    const enabled = document.createElement("input");
+    enabled.type = "checkbox";
+    enabled.checked = provider.enabled !== false;
+    enabled.className = "provider-enabled";
+    enabledLabel.append(enabled, createElement("span", "", "参与轮询"));
+    const name = document.createElement("input");
+    name.type = "text";
+    name.className = "provider-name";
+    name.maxLength = 128;
+    name.placeholder = "提供商名称";
+    name.value = String(provider.name || "");
+    const remove = createElement("button", "model-provider-remove", "删除");
+    remove.type = "button";
+    remove.addEventListener("click", () => item.remove());
+    heading.append(enabledLabel, name, remove);
+
+    const grid = createElement("div", "model-provider-grid");
+    const baseUrl = document.createElement("input");
+    baseUrl.type = "url";
+    baseUrl.className = "provider-base-url";
+    baseUrl.placeholder = "https://api.example.com/v1";
+    baseUrl.value = String(provider.baseUrl || "");
+    const protocol = document.createElement("select");
+    protocol.className = "provider-protocol";
+    [
+      ["openai-responses", "OpenAI Responses"],
+      ["openai-chat", "OpenAI Chat"],
+      ["anthropic", "Anthropic Messages"],
+    ].forEach(([value, label]) => {
+      const option = document.createElement("option");
+      option.value = value;
+      option.textContent = label;
+      protocol.append(option);
+    });
+    protocol.value = String(provider.protocol || "openai-chat");
+    const protocolWrap = createElement("span", "select-wrap");
+    protocolWrap.append(protocol, icon("chevron-down"));
+    grid.append(baseUrl, protocolWrap);
+
+    const modelGrid = createElement("div", "model-provider-grid");
+    const picker = createElement("span", "model-picker");
+    const model = document.createElement("input");
+    model.type = "text";
+    model.className = "provider-model";
+    model.placeholder = "模型名称";
+    model.value = String(provider.model || "");
+    model.addEventListener("input", () => {
+      menu.hidden = true;
+    });
+    const fetchButton = createElement("button", "button button-ghost button-compact", "获取模型");
+    fetchButton.type = "button";
+    const menu = createElement("div", "model-options-menu model-provider-menu");
+    menu.hidden = true;
+    picker.append(model, fetchButton, menu);
+    const apiKey = document.createElement("input");
+    apiKey.type = "password";
+    apiKey.className = "provider-api-key";
+    apiKey.autocomplete = "new-password";
+    apiKey.placeholder = provider.apiKeyConfigured
+      ? `当前 Key：${provider.apiKeyMasked || "已配置"}（留空保持）`
+      : "API Key";
+    modelGrid.append(picker, apiKey);
+    fetchButton.addEventListener("click", async () => {
+      const value = baseUrl.value.trim();
+      if (!value) {
+        setModelRoutingStatus("请先填写模型地址", "error");
+        return;
+      }
+      await withButton(fetchButton, async () => {
+        try {
+          const result = await request("/api/models", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              baseUrl: value,
+              apiKey: apiKey.value.trim() || undefined,
+              providerId: provider.apiKeyConfigured && !provider.legacy ? id : undefined,
+              protocol: protocol.value,
+              kind: "model",
+            }),
+          });
+          const models = Array.isArray(result.models) ? result.models : [];
+          if (!model.value.trim() && models.length === 1) model.value = models[0];
+          menu.replaceChildren();
+          models.forEach((name) => {
+            const option = createElement("button", "model-option", String(name));
+            option.type = "button";
+            option.addEventListener("click", () => {
+              model.value = String(name);
+              menu.hidden = true;
+            });
+            menu.append(option);
+          });
+          menu.hidden = models.length === 0;
+          setModelRoutingStatus(models.length ? `获取到 ${models.length} 个模型` : "没有可用模型", models.length ? "success" : "error");
+        } catch (error) {
+          setModelRoutingStatus(`获取模型失败：${error.message}`, "error");
+        }
+      });
+    });
+    item.append(heading, grid, modelGrid);
+    els.modelProviderList.append(item);
+  }
+
+  function collectModelProviders() {
+    return [...els.modelProviderList.querySelectorAll(".model-provider-item")].map((item) => {
+      const key = item.querySelector(".provider-api-key").value.trim();
+      const provider = {
+        id: item.dataset.providerId,
+        name: item.querySelector(".provider-name").value.trim(),
+        baseUrl: item.querySelector(".provider-base-url").value.trim(),
+        model: item.querySelector(".provider-model").value.trim(),
+        protocol: item.querySelector(".provider-protocol").value,
+        enabled: item.querySelector(".provider-enabled").checked,
+      };
+      if (key) provider.apiKey = key;
+      return provider;
+    });
+  }
+
+  function openModelRoutingPage(trigger = null) {
+    modelRoutingTrigger = trigger instanceof HTMLElement ? trigger : document.activeElement;
+    if (els.settingsDialog.open) closeDialog(els.settingsDialog);
+    els.modelRoutingPage.hidden = false;
+    document.body.classList.add("model-routing-open");
+    document.querySelector(".topbar")?.setAttribute("inert", "");
+    document.querySelector("main.workspace")?.setAttribute("inert", "");
+    window.requestAnimationFrame(() => els.modelRoutingPage.focus());
+  }
+
+  function closeModelRoutingPage() {
+    els.modelRoutingPage.hidden = true;
+    document.body.classList.remove("model-routing-open");
+    document.querySelector(".topbar")?.removeAttribute("inert");
+    document.querySelector("main.workspace")?.removeAttribute("inert");
+    const focusTarget = modelRoutingTrigger;
+    modelRoutingTrigger = null;
+    if (
+      focusTarget instanceof HTMLElement
+      && focusTarget.isConnected
+      && focusTarget.offsetParent !== null
+    ) focusTarget.focus();
+    else els.openSettings.focus();
+  }
+
+  async function loadModelRoutingPage(trigger = null) {
+    openModelRoutingPage(trigger);
+    setModelRoutingStatus("正在读取配置…");
+    try {
+      const config = await request("/api/config");
+      fillRuntimeConfig(config);
+      const providers = Array.isArray(config.modelProviders) ? config.modelProviders : [];
+      els.modelProviderList.replaceChildren();
+      if (providers.length) providers.forEach(addProviderRow);
+      else if (config.modelBaseUrl && config.modelName) {
+        addProviderRow({
+          name: "默认提供商",
+          baseUrl: config.modelBaseUrl,
+          model: config.modelName,
+          protocol: config.modelProtocol || "openai-chat",
+          enabled: true,
+          legacy: true,
+          apiKeyConfigured: config.modelApiKeyConfigured,
+          apiKeyMasked: config.modelApiKeyMasked,
+        });
+      } else {
+        addProviderRow();
+      }
+      setRoutingStrategy(config.modelRoutingStrategy || "round-robin");
+      els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
+      els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
+      setModelRoutingStatus("勾选参与轮询的提供商");
+      refreshIcons();
+    } catch (error) {
+      setModelRoutingStatus(`读取配置失败：${error.message}`, "error");
+    }
+  }
+
+  async function saveModelRouting() {
+    const providers = collectModelProviders();
+    if (!providers.length) {
+      setModelRoutingStatus("至少添加一个模型提供商", "error");
+      return;
+    }
+    const delays = els.modelRetryDelays.value.split(",").map((item) => Number(item.trim())).filter((item) => Number.isFinite(item) && item >= 0);
+    if (!delays.length) {
+      setModelRoutingStatus("重试间隔格式无效", "error");
+      return;
+    }
+    await withButton(els.saveModelRouting, async () => {
+      setModelRoutingStatus("正在保存…");
+      try {
+        const config = await request("/api/config", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            modelProviders: providers,
+            modelRoutingStrategy,
+            modelRetryDelays: delays,
+            modelRecoveryInterval: Number(els.modelRecoveryInterval.value || 60),
+          }),
+        });
+        fillRuntimeConfig(config);
+        const savedProviders = Array.isArray(config.modelProviders) ? config.modelProviders : [];
+        if (savedProviders.length) {
+          els.modelProviderList.replaceChildren();
+          savedProviders.forEach(addProviderRow);
+          refreshIcons();
+        }
+        setModelRoutingStatus("模型路由已保存并生效", "success");
+        showToast("模型提供商与轮询策略已保存", "success");
+      } catch (error) {
+        setModelRoutingStatus(`保存失败：${error.message}`, "error");
+      }
+    });
+  }
+
+  function invalidatePlatformAuthCheck() {
+    platformAuthEpoch += 1;
+    platformAuthController?.abort();
+    platformAuthController = null;
+    platformAuthRequest = null;
+  }
+
   function fillRuntimeConfig(config) {
+    state.runtimeConfig = config;
     state.configured = Boolean(config.configured);
-    const matchUrl = config.matchUrl || "";
+    const matchUrl = config.matchUrl || "https://match.ichunqiu.com/2026qwbs10";
     const hiddenAccessUrl = matchUrl.endsWith("/index") && config.matchKeyConfigured;
     els.settingMatchUrl.value = matchUrl;
-    els.settingMatchUrl.placeholder = hiddenAccessUrl ? "已通过带 k 的比赛地址绑定" : "https://match.ichunqiu.com/wanqubei";
+    els.settingMatchUrl.placeholder = hiddenAccessUrl ? "已通过带 k 的比赛地址绑定" : "https://match.ichunqiu.com/2026qwbs10";
     els.settingModelBaseUrl.value = config.modelBaseUrl || "";
     els.settingModelName.value = config.modelName || "";
+    els.settingModelProtocol.value = config.modelProtocol || "openai-chat";
     els.modelOptions.replaceChildren();
     els.modelOptions.hidden = true;
     els.settingCodexBaseUrl.value = config.codexBaseUrl || "";
     els.settingCodexModel.value = config.codexModel || "";
+    els.settingCodexProtocol.value = config.codexProtocol || "openai-responses";
     els.codexModelOptions.replaceChildren();
     els.codexModelOptions.hidden = true;
     els.settingCodexConcurrency.value = String(config.codexMaxConcurrency || 10);
@@ -512,31 +825,29 @@ import { createAppState } from "./modules/state.js";
     if (config.codexApiKeyConfigured) hints.push("Codex Key 已配置");
     setSettingsStatus(hints.length ? hints.join(" · ") : "模型配置未设置");
     if (config.configured) {
-      state.authenticated = false;
-      els.platformAuthStatus.textContent = "正在验证登录态";
-      els.platformAuthStatus.className = "platform-auth-status";
-      els.platformLogin.hidden = true;
-      els.platformTeamInfo.hidden = true;
-      els.teamSummary.hidden = true;
-      els.platformLogout.hidden = true;
       setInlineStatus(els.platformBindStatus, config.matchTitle ? `已绑定：${config.matchTitle}` : `已绑定：${matchUrl}`);
     } else {
-      state.authenticated = false;
-      els.platformAuthStatus.textContent = "尚未绑定";
-      els.platformAuthStatus.className = "platform-auth-status";
-      els.platformLogin.hidden = true;
-      els.platformTeamInfo.hidden = true;
-      els.teamSummary.hidden = true;
-      els.platformLogout.hidden = true;
       setInlineStatus(els.platformBindStatus, "");
     }
   }
 
-  async function loadRuntimeConfig() {
+  async function loadRuntimeConfig(options = {}) {
     try {
       const config = await request("/api/config");
       fillRuntimeConfig(config);
-      if (config.configured) await loadPlatformAuth();
+      if (config.configured) {
+        if (!state.authenticated) {
+          els.platformAuthStatus.textContent = "正在验证登录态";
+          els.platformAuthStatus.className = "platform-auth-status";
+          els.platformLogin.hidden = false;
+          els.platformLogout.hidden = true;
+          els.platformTeamInfo.hidden = true;
+        }
+        if (options.verifyAuth !== false) await loadPlatformAuth();
+      } else {
+        applyPlatformAuthentication({ authenticated: false, message: "尚未绑定" });
+        els.platformLogin.hidden = true;
+      }
       return config;
     } catch (error) {
       setSettingsStatus(`读取配置失败：${error.message}`, "error");
@@ -824,33 +1135,54 @@ import { createAppState } from "./modules/state.js";
   }
 
   async function loadPlatformAuth() {
-    try {
-      const status = await request("/api/platform/auth");
-      setPlatformAuthentication(status);
-      return status;
-    } catch (error) {
-      els.platformAuthStatus.textContent = "登录态不可用";
-      els.platformAuthStatus.className = "platform-auth-status";
-      els.platformLogin.hidden = false;
-      els.platformLogout.hidden = true;
-      setInlineStatus(els.platformBindStatus, error.message, "error");
-      return null;
-    }
+    if (platformAuthRequest) return platformAuthRequest;
+    const epoch = ++platformAuthEpoch;
+    const controller = new AbortController();
+    platformAuthController = controller;
+    platformAuthRequest = (async () => {
+      const timeout = window.setTimeout(() => controller.abort(), 6000);
+      try {
+        const status = await request("/api/platform/auth", { signal: controller.signal });
+        if (epoch !== platformAuthEpoch) return null;
+        setPlatformAuthentication(status);
+        return status;
+      } catch (error) {
+        if (epoch !== platformAuthEpoch) return null;
+        const message = controller.signal.aborted
+          ? "登录态验证超时，请直接登录"
+          : "登录态不可用";
+        applyPlatformAuthentication({ authenticated: false, message });
+        setInlineStatus(els.platformBindStatus, error.message, "error");
+        return null;
+      } finally {
+        window.clearTimeout(timeout);
+        if (platformAuthController === controller) platformAuthController = null;
+        if (epoch === platformAuthEpoch) platformAuthRequest = null;
+      }
+    })();
+    return platformAuthRequest;
   }
 
   async function logoutPlatform() {
     if (!window.confirm("确认退出当前 i春秋账号？已绑定的比赛将保留。")) return;
     await withButton(els.platformLogout, async () => {
+      invalidatePlatformAuthCheck();
       try {
-        const config = await request("/api/platform/logout", {
+        const config = await requestPlatformAction("/api/platform/logout", {
           method: "POST",
           headers: PLATFORM_ACTION_HEADERS,
         });
         fillRuntimeConfig(config);
         state.activeEnvironments.clear();
+        portablePlatformSession = "";
+        els.sessionRequestPacket.value = "";
+        updateSessionCopyButton();
         renderActiveEnvironments();
         if (config.configured) {
-          setPlatformAuthentication({ authenticated: false });
+          applyPlatformAuthentication({
+            authenticated: false,
+            message: "已退出账号，可以重新登录",
+          });
           showAuthenticationRequiredWorkspace();
         } else {
           showUnconfiguredWorkspace();
@@ -864,13 +1196,18 @@ import { createAppState } from "./modules/state.js";
 
   function setLoginMode(mode) {
     const passwordMode = mode === "password";
+    const smsMode = mode === "sms";
     els.loginModePassword.classList.toggle("is-active", passwordMode);
     els.loginModePassword.setAttribute("aria-pressed", String(passwordMode));
-    els.loginModeSms.classList.toggle("is-active", !passwordMode);
-    els.loginModeSms.setAttribute("aria-pressed", String(!passwordMode));
+    els.loginModeSms.classList.toggle("is-active", smsMode);
+    els.loginModeSms.setAttribute("aria-pressed", String(smsMode));
+    els.loginModeSession.classList.toggle("is-active", mode === "session");
+    els.loginModeSession.setAttribute("aria-pressed", String(mode === "session"));
     els.passwordLoginForm.hidden = !passwordMode;
-    els.smsLoginForm.hidden = passwordMode;
-    if (!passwordMode) refreshCaptcha("rotate");
+    els.smsLoginForm.hidden = !smsMode;
+    els.sessionLoginForm.hidden = mode !== "session";
+    if (smsMode) refreshCaptcha("rotate");
+    if (mode === "session") void hydrateSessionLogin();
   }
 
   function refreshCaptcha(kind) {
@@ -963,21 +1300,27 @@ import { createAppState } from "./modules/state.js";
     const payload = { matchUrl };
     if (els.settingPlatformToken.value) payload.platformToken = els.settingPlatformToken.value;
     await withButton(els.bindMatch, async () => {
+      invalidatePlatformAuthCheck();
       setInlineStatus(els.platformBindStatus, "正在绑定…");
       try {
-        const config = await request("/api/platform/bind", {
+        const config = await requestPlatformAction("/api/platform/bind", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...PLATFORM_ACTION_HEADERS },
           body: JSON.stringify(payload),
         });
         fillRuntimeConfig(config);
         setInlineStatus(els.platformBindStatus, config.matchTitle ? `已绑定：${config.matchTitle}` : "绑定成功");
-        const status = config.authenticated ? await loadPlatformAuth() : null;
+        const status = config.authStatus || { authenticated: Boolean(config.authenticated) };
+        applyPlatformAuthentication(status);
         const authenticated = Boolean(status && status.authenticated);
         showToast(authenticated ? "比赛已绑定，登录态有效" : "比赛已绑定，请登录", "success");
         if (authenticated) await refreshWorkspaceAfterLogin({ notify: true });
         else showAuthenticationRequiredWorkspace();
       } catch (error) {
+        applyPlatformAuthentication({
+          authenticated: false,
+          message: error.message || "绑定失败，请重新登录",
+        });
         setInlineStatus(els.platformBindStatus, `绑定失败：${error.message}`, "error");
         showToast(`绑定失败：${error.message}`, "error");
       }
@@ -993,19 +1336,25 @@ import { createAppState } from "./modules/state.js";
       return;
     }
     await withButton(els.passwordLogin, async () => {
+      invalidatePlatformAuthCheck();
       setInlineStatus(els.passwordLoginStatus, "正在登录…");
       try {
-        const status = await request("/api/platform/login/password", {
+        const status = await requestPlatformAction("/api/platform/login/password", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...PLATFORM_ACTION_HEADERS },
           body: JSON.stringify({ account, password, imageCode: els.passwordImageCode.value.trim() }),
         });
         if (!status.authenticated) throw new RequestError(status.message || "登录态验证失败", "AUTHENTICATION_FAILED");
-        setPlatformAuthentication(status);
+        applyPlatformAuthentication(status);
         setInlineStatus(els.passwordLoginStatus, "登录成功");
+        await hydrateSessionLogin({ force: true, silent: true });
         showToast("i春秋登录成功", "success");
         await refreshWorkspaceAfterLogin({ notify: true });
       } catch (error) {
+        applyPlatformAuthentication({
+          authenticated: false,
+          message: error.message || "登录失败，请重试",
+        });
         if (error.code === "1002") {
           els.passwordCaptchaWrap.hidden = false;
           els.passwordImageCode.value = "";
@@ -1028,7 +1377,7 @@ import { createAppState } from "./modules/state.js";
     await withButton(els.sendSmsCode, async () => {
       setInlineStatus(els.smsLoginStatus, "正在发送…");
       try {
-        await request("/api/platform/login/sms/send", {
+        await requestPlatformAction("/api/platform/login/sms/send", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...PLATFORM_ACTION_HEADERS },
           body: JSON.stringify({ areaId, phone, rotation: Number(els.rotateCaptchaAngle.value) }),
@@ -1050,29 +1399,138 @@ import { createAppState } from "./modules/state.js";
       return;
     }
     await withButton(els.smsLogin, async () => {
+      invalidatePlatformAuthCheck();
       setInlineStatus(els.smsLoginStatus, "正在登录…");
       try {
-        const status = await request("/api/platform/login/sms", {
+        const status = await requestPlatformAction("/api/platform/login/sms", {
           method: "POST",
           headers: { "Content-Type": "application/json", ...PLATFORM_ACTION_HEADERS },
           body: JSON.stringify({ phone, smsCode }),
         });
         els.smsCode.value = "";
         if (!status.authenticated) throw new RequestError(status.message || "登录态验证失败", "AUTHENTICATION_FAILED");
-        setPlatformAuthentication(status);
+        applyPlatformAuthentication(status);
         setInlineStatus(els.smsLoginStatus, "登录成功");
+        await hydrateSessionLogin({ force: true, silent: true });
         showToast("i春秋登录成功", "success");
         await refreshWorkspaceAfterLogin({ notify: true });
       } catch (error) {
         els.smsCode.value = "";
+        applyPlatformAuthentication({
+          authenticated: false,
+          message: error.message || "登录失败，请重试",
+        });
         setInlineStatus(els.smsLoginStatus, `登录失败：${error.message}`, "error");
+      }
+    });
+  }
+
+  function updateSessionCopyButton() {
+    els.copySessionLogin.disabled = !els.sessionRequestPacket.value.trim();
+  }
+
+  async function hydrateSessionLogin(options = {}) {
+    if (!state.authenticated) {
+      if (!els.sessionRequestPacket.value.trim()) {
+        setInlineStatus(els.sessionLoginStatus, "登录成功后可自动生成登录态，也可粘贴其他 Agent 的登录态");
+      }
+      updateSessionCopyButton();
+      return "";
+    }
+    if (portablePlatformSession && !options.force) {
+      els.sessionRequestPacket.value = portablePlatformSession;
+      setInlineStatus(els.sessionLoginStatus, "已载入当前账号登录态，可复制到其他电脑使用");
+      updateSessionCopyButton();
+      return portablePlatformSession;
+    }
+    try {
+      const result = await request("/api/platform/session-export", {
+        headers: PLATFORM_ACTION_HEADERS,
+      });
+      const session = String(result.session || "").trim();
+      if (!session) return "";
+      portablePlatformSession = session;
+      els.sessionRequestPacket.value = session;
+      setInlineStatus(els.sessionLoginStatus, "已载入当前账号登录态，可复制到其他电脑使用");
+      updateSessionCopyButton();
+      return session;
+    } catch (error) {
+      if (!options.silent && error.code !== "PLATFORM_NOT_AUTHENTICATED") {
+        setInlineStatus(els.sessionLoginStatus, `读取登录态失败：${error.message}`, "error");
+      }
+      return "";
+    }
+  }
+
+  async function copySessionLogin() {
+    const session = els.sessionRequestPacket.value.trim();
+    if (!session) return;
+    await copyPlatformSession(session);
+  }
+
+  async function copyPlatformSession(session) {
+    try {
+      await navigator.clipboard.writeText(session);
+      showToast("登录态已复制", "success");
+    } catch {
+      els.sessionRequestPacket.focus();
+      els.sessionRequestPacket.select();
+      showToast("自动复制失败，已选中登录态文本", "warning");
+    }
+  }
+
+  async function copyAuthenticatedSession() {
+    await withButton(els.copyAuthenticatedSession, async () => {
+      const session = await hydrateSessionLogin({ force: !portablePlatformSession });
+      if (!session) return;
+      await copyPlatformSession(session);
+    });
+  }
+
+  async function sessionLogin(event) {
+    event?.preventDefault();
+    const rawRequest = els.sessionRequestPacket.value.trim();
+    if (!rawRequest) {
+      setInlineStatus(els.sessionLoginStatus, "请粘贴带登录态的请求包", "error");
+      return;
+    }
+    await withButton(els.sessionLogin, async () => {
+      invalidatePlatformAuthCheck();
+      setInlineStatus(els.sessionLoginStatus, "正在提取并验证登录态…");
+      try {
+        const config = await requestPlatformAction("/api/platform/import-session", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...PLATFORM_ACTION_HEADERS },
+          body: JSON.stringify({
+            matchUrl: els.settingMatchUrl.value.trim(),
+            rawRequest,
+          }),
+        });
+        fillRuntimeConfig(config);
+        const status = config.authStatus || { authenticated: true };
+        applyPlatformAuthentication(status);
+        await hydrateSessionLogin({ force: true, silent: true });
+        setInlineStatus(els.sessionLoginStatus, "登录态导入成功");
+        showToast("登录态已自动提取并保存", "success");
+        await refreshWorkspaceAfterLogin({ notify: true });
+      } catch (error) {
+        applyPlatformAuthentication({
+          authenticated: false,
+          message: error.message || "登录态导入失败，请重试",
+        });
+        setInlineStatus(els.sessionLoginStatus, `导入失败：${error.message}`, "error");
       }
     });
   }
 
   function openSettingsDialog() {
     openDialog(els.settingsDialog);
-    void loadRuntimeConfig();
+    if (state.runtimeConfig) {
+      fillRuntimeConfig(state.runtimeConfig);
+      if (state.configured && !state.authenticated) els.platformLogin.hidden = false;
+      return;
+    }
+    void loadRuntimeConfig({ verifyAuth: true });
   }
 
   function renderModelOptions(target, models, modelInput) {
@@ -1111,7 +1569,11 @@ import { createAppState } from "./modules/state.js";
     await withButton(button, async () => {
       setSettingsStatus("正在获取模型列表…");
       try {
-        const body = { baseUrl, kind };
+        const body = {
+          baseUrl,
+          kind,
+          protocol: codex ? els.settingCodexProtocol.value : els.settingModelProtocol.value,
+        };
         if (keyInput.value.trim()) body.apiKey = keyInput.value.trim();
         const result = await request("/api/models", {
           method: "POST",
@@ -1140,8 +1602,10 @@ import { createAppState } from "./modules/state.js";
     const payload = {
       modelBaseUrl: els.settingModelBaseUrl.value.trim(),
       modelName: els.settingModelName.value.trim(),
+      modelProtocol: els.settingModelProtocol.value,
       codexBaseUrl: els.settingCodexBaseUrl.value.trim(),
       codexModel: els.settingCodexModel.value.trim(),
+      codexProtocol: els.settingCodexProtocol.value,
       codexMaxConcurrency: Number(els.settingCodexConcurrency.value || 10),
       codexSystemPrompt: els.settingCodexSystemPrompt.value.trim(),
       codexCtfSkillsEnabled: els.settingCodexCtfSkills.checked,
@@ -1156,6 +1620,7 @@ import { createAppState } from "./modules/state.js";
     if (els.settingModelApiKey.value) payload.modelApiKey = els.settingModelApiKey.value;
     if (els.settingCodexApiKey.value) payload.codexApiKey = els.settingCodexApiKey.value;
     await withButton(els.saveSettings, async () => {
+      invalidatePlatformAuthCheck();
       setSettingsStatus("正在保存…");
       try {
         const config = await request("/api/config", {
@@ -3195,7 +3660,13 @@ import { createAppState } from "./modules/state.js";
   }
 
   function closeCodexMoreMenu() {
-    els.codexMoreMenu.open = false;
+    closeCodexActionMenus();
+  }
+
+  function closeCodexActionMenus(except = null) {
+    document.querySelectorAll(".codex-task-detail-actions [data-codex-action-menu]").forEach((menu) => {
+      if (menu !== except) menu.open = false;
+    });
   }
 
   function renderCodexPendingMessage(task) {
@@ -3239,6 +3710,9 @@ import { createAppState } from "./modules/state.js";
       els.codexTaskCompose.disabled = true;
       els.codexTaskFollowUp.disabled = true;
       els.codexTaskSide.disabled = true;
+      els.codexWpDesensitized.disabled = true;
+      els.codexWpRaw.disabled = true;
+      els.codexWpMenu.querySelector("summary").setAttribute("aria-disabled", "true");
       els.codexLoadEarlier.disabled = true;
       renderCodexPendingMessage(null);
       return;
@@ -3260,11 +3734,15 @@ import { createAppState } from "./modules/state.js";
     els.codexPrimaryAction.querySelector("span").textContent = primaryLabel;
     els.codexPrimaryAction.className = `button ${task.status === "running" || task.status === "queued" ? "button-danger" : "button-primary"}`;
     els.codexPrimaryAction.disabled = task.status === "interrupted" ? !hasSession || task.processAlive : (!isCodexTerminal(task.status) ? false : !hasSession);
-    els.codexTaskCompose.disabled = !hasSession || task.status === "queued" || pending;
     const canFollowUp = hasSession && task.status !== "queued" && !pending;
     const canSide = canFollowUp && task.mode !== "side" && task.status !== "interrupted";
+    const canWp = canFollowUp && task.status !== "interrupted" && Boolean(task.mode === "side" ? task.parentTaskId : task.id);
+    els.codexTaskCompose.disabled = !canFollowUp;
     els.codexTaskFollowUp.disabled = !canFollowUp;
     els.codexTaskSide.disabled = !canSide;
+    els.codexWpDesensitized.disabled = !canWp;
+    els.codexWpRaw.disabled = !canWp;
+    els.codexWpMenu.querySelector("summary").setAttribute("aria-disabled", String(!canWp));
     els.codexTaskSide.title = task.mode === "side" ? "Side 对话可以再次输入，但不能继续创建 Side 对话" : "从当前会话创建独立分析分支";
     els.codexTaskMessage.disabled = pending;
     els.codexLoadEarlier.disabled = !state.codexHasMoreEvents.get(task.id);
@@ -3475,21 +3953,75 @@ import { createAppState } from "./modules/state.js";
     const message = els.codexTaskMessage.value.trim();
     if (!id || !message || task?.pendingMessage?.message) return;
     const button = side ? els.codexTaskSide : els.codexTaskFollowUp;
+    await sendCodexPrompt(message, {
+      side,
+      button,
+      clearComposer: true,
+      successMessage: side ? "Side 分支已创建" : (task?.status === "running" ? "消息已进入待处理队列" : "已开始新一轮对话"),
+      failureLabel: side ? "Side 提问" : "追加消息",
+    });
+  }
+
+  async function sendCodexPrompt(message, options = {}) {
+    const selectedId = state.codexSelectedTaskId;
+    const targetId = options.targetTaskId || selectedId;
+    const target = state.codexTasks.find((item) => item.id === targetId);
+    const normalized = String(message || "").trim();
+    if (!targetId || !normalized) return false;
+    if (target?.pendingMessage?.message) {
+      showToast("当前任务已有待处理消息，请稍后再发送", "warning");
+      return false;
+    }
+    const side = Boolean(options.side);
+    const button = options.button || (side ? els.codexTaskSide : els.codexTaskFollowUp);
+    let sent = false;
     await withButton(button, async () => {
       try {
-        const updated = await request(`/api/codex/tasks/${encodeURIComponent(id)}/message`, {
+        const updated = await request(`/api/codex/tasks/${encodeURIComponent(targetId)}/message`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message, side }),
+          body: JSON.stringify({ message: normalized, side }),
         });
-        els.codexTaskMessage.value = "";
+        sent = true;
+        if (options.clearComposer) els.codexTaskMessage.value = "";
         if (side && updated.id) state.codexSelectedTaskId = updated.id;
         await loadCodexTasks({ notify: true });
-        showToast(side ? "Side 分支已创建" : (task?.status === "running" ? "消息已进入待处理队列" : "已开始新一轮对话"), "success");
+        showToast(options.successMessage || (side ? "Side 分支已创建" : "消息已发送"), "success");
       } catch (error) {
-        showToast(`${side ? "Side 提问" : "追加消息"}失败：${error.message}`, "error");
+        showToast(`${options.failureLabel || (side ? "Side 提问" : "追加消息")}失败：${error.message}`, "error");
       }
     });
+    return sent;
+  }
+
+  async function sendCodexRecoveryPrompt() {
+    closeCodexActionMenus();
+    await sendCodexPrompt(CODEX_RECOVERY_PROMPT, {
+      button: els.codexTaskCompose,
+      successMessage: "恢复提示词已发送",
+      failureLabel: "恢复任务",
+    });
+  }
+
+  async function sendCodexWpPrompt(desensitized) {
+    closeCodexActionMenus();
+    const task = state.codexTasks.find((item) => item.id === state.codexSelectedTaskId);
+    if (!task) return;
+    const targetTaskId = task.mode === "side" ? task.parentTaskId : task.id;
+    if (!targetTaskId) {
+      showToast("Side 对话缺少父会话，无法创建 WP 分支", "warning");
+      return;
+    }
+    await sendCodexPrompt(
+      desensitized ? CODEX_WP_DESENSITIZED_PROMPT : CODEX_WP_RAW_PROMPT,
+      {
+        side: true,
+        targetTaskId,
+        button: desensitized ? els.codexWpDesensitized : els.codexWpRaw,
+        successMessage: desensitized ? "脱敏版 WP Side 分支已创建" : "未脱敏 WP Side 分支已创建",
+        failureLabel: "一键 WP",
+      },
+    );
   }
 
   async function editPendingCodexMessage(task) {
@@ -3968,13 +4500,19 @@ import { createAppState } from "./modules/state.js";
   }
 
   function bindSettingsEvents() {
-    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "password-login-form", "sms-login-form", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "model-options", "setting-codex-model", "codex-model-options"], () => {
+    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "login-mode-session", "password-login-form", "sms-login-form", "session-login-form", "session-request-packet", "copy-session-login", "copy-authenticated-session", "session-login", "session-login-status", "platform-authenticated-actions", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "setting-model-protocol", "model-options", "setting-codex-model", "setting-codex-protocol", "codex-model-options"], () => {
       els.openSettings.addEventListener("click", openSettingsDialog);
       els.matchBindForm.addEventListener("submit", (event) => { event.preventDefault(); void bindMatch(); });
       els.loginModePassword.addEventListener("click", () => setLoginMode("password"));
       els.loginModeSms.addEventListener("click", () => setLoginMode("sms"));
+      els.loginModeSession.addEventListener("click", () => setLoginMode("session"));
       els.passwordLoginForm.addEventListener("submit", passwordLogin);
       els.smsLoginForm.addEventListener("submit", smsLogin);
+      els.sessionLoginForm.addEventListener("submit", sessionLogin);
+      els.sessionLogin.addEventListener("click", sessionLogin);
+      els.copySessionLogin.addEventListener("click", copySessionLogin);
+      els.copyAuthenticatedSession.addEventListener("click", copyAuthenticatedSession);
+      els.sessionRequestPacket.addEventListener("input", updateSessionCopyButton);
       els.platformLogout.addEventListener("click", logoutPlatform);
       els.sendSmsCode.addEventListener("click", sendSmsCode);
       els.refreshPasswordCaptcha.addEventListener("click", () => refreshCaptcha("image"));
@@ -3989,12 +4527,17 @@ import { createAppState } from "./modules/state.js";
         if (event.target instanceof Element && event.target.closest(".model-picker")) return;
         els.modelOptions.hidden = true;
         els.codexModelOptions.hidden = true;
+        document.querySelectorAll(".model-provider-menu").forEach((menu) => {
+          menu.hidden = true;
+        });
       });
       $("close-settings").addEventListener("click", () => {
         els.settingPlatformToken.value = "";
         els.passwordValue.value = "";
         els.passwordImageCode.value = "";
         els.smsCode.value = "";
+        els.sessionRequestPacket.value = "";
+        updateSessionCopyButton();
         closeDialog(els.settingsDialog);
       });
       els.settingsDialog.addEventListener("close", () => {
@@ -4002,6 +4545,9 @@ import { createAppState } from "./modules/state.js";
         els.passwordValue.value = "";
         els.passwordImageCode.value = "";
         els.smsCode.value = "";
+        els.sessionRequestPacket.value = "";
+        portablePlatformSession = "";
+        updateSessionCopyButton();
         els.passwordCaptcha.removeAttribute("src");
         els.rotateCaptchaImage.removeAttribute("src");
       });
@@ -4019,6 +4565,25 @@ import { createAppState } from "./modules/state.js";
     });
   }
 
+  function bindModelRoutingEvents() {
+    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "model-retry-delays", "model-recovery-interval", "model-routing-status", "save-model-routing"], () => {
+      els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
+      els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
+      $("close-model-routing").addEventListener("click", closeModelRoutingPage);
+      els.addModelProvider.addEventListener("click", () => {
+        addProviderRow();
+        refreshIcons();
+      });
+      els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
+        button.addEventListener("click", () => setRoutingStrategy(button.dataset.routing || "round-robin"));
+      });
+      els.saveModelRouting.addEventListener("click", () => void saveModelRouting());
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !els.modelRoutingPage.hidden) closeModelRoutingPage();
+      });
+    });
+  }
+
   function bindAttachmentEvents() {
     bindModuleOnce("附件", ["open-attachment-manager", "close-attachment-manager", "attachment-manager-dialog", "check-attachments", "download-all-attachments", "pause-attachment-download", "resume-attachment-download", "cancel-attachment-download"], () => {
       $("open-attachment-manager").addEventListener("click", openAttachmentManager);
@@ -4032,10 +4597,22 @@ import { createAppState } from "./modules/state.js";
   }
 
   function bindCodexEvents() {
-    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-dialog", "codex-primary-action", "codex-task-compose", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
+    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-dialog", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
       els.openCodexTasks.addEventListener("click", openCodexTaskDialog);
       els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
-      els.codexTaskCompose.addEventListener("click", focusCodexMessage);
+      els.codexTaskCompose.addEventListener("click", () => void sendCodexRecoveryPrompt());
+      els.codexWpDesensitized.addEventListener("click", () => void sendCodexWpPrompt(true));
+      els.codexWpRaw.addEventListener("click", () => void sendCodexWpPrompt(false));
+      els.codexWpMenu.addEventListener("toggle", () => {
+        if (els.codexWpMenu.open) closeCodexActionMenus(els.codexWpMenu);
+      });
+      els.codexMoreMenu.addEventListener("toggle", () => {
+        if (els.codexMoreMenu.open) closeCodexActionMenus(els.codexMoreMenu);
+      });
+      document.addEventListener("click", (event) => {
+        if (event.target instanceof Element && event.target.closest("[data-codex-action-menu]")) return;
+        closeCodexActionMenus();
+      });
       els.deleteCodexTask.addEventListener("click", deleteCodexTask);
       els.renameCodexTask.addEventListener("click", renameCodexTask);
       els.codexReturnParent.addEventListener("click", returnToCodexParent);
@@ -4090,6 +4667,7 @@ import { createAppState } from "./modules/state.js";
       bindSettingsEvents();
       updateCaptchaRotation();
     });
+    await runInitModule("模型路由", async () => bindModelRoutingEvents());
     await runInitModule("工具管理", async () => bindToolEvents());
     await runInitModule("附件", async () => bindAttachmentEvents());
     await runInitModule("Codex", async () => bindCodexEvents());

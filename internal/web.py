@@ -11,7 +11,7 @@ from typing import Any, Callable, Literal, Protocol, TypeGuard, TypeVar
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -19,6 +19,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from .agent import APIError, PlatformNotConfigured
 from .attachment_tasks import DownloadTaskBusy, DownloadTaskNotFound
 from .codex import CodexError, CodexUnavailable, ErrPrompt, TaskNotFound
+from .codex_compat import build_chat_bridge, build_response_sse, complete_with_chat
 from .download import (
     AttachmentNotFound,
     DownloadFailed,
@@ -35,9 +36,11 @@ from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
 from .config import Config, ConfigError, RuntimeConfigStore
 from .ichunqiu_api import AuthStatus, BindResult, CaptchaImage, LoginResult
+from .ichunqiu_session import encode_portable_session
 
 MAX_REQUEST_BYTES = 2048
 MAX_PLATFORM_REQUEST_BYTES = 16 * 1024
+MAX_SESSION_IMPORT_BYTES = 64 * 1024
 MAX_GO_INT64 = (1 << 63) - 1
 ATTACHMENT_ACTION_HEADER = "X-GCSIS-Action"
 ATTACHMENT_ACTION_PURPOSE = "attachment-manager"
@@ -48,7 +51,17 @@ LOGGER = logging.getLogger("gcsis-tools.web")
 
 
 class AgentProtocol(Protocol):
-    def bind_match(self, match_url: str, supplied_token: str = "") -> BindResult: ...
+    def bind_match(
+        self,
+        match_url: str,
+        supplied_token: str = "",
+        supplied_match_key: str = "",
+        cookie_header: str = "",
+    ) -> BindResult: ...
+
+    def import_session(
+        self, match_url: str, raw_request: str
+    ) -> tuple[BindResult, Any]: ...
 
     def auth_status(self) -> AuthStatus: ...
 
@@ -202,6 +215,19 @@ class FlagRequest(BaseModel):
     flag: str = Field(min_length=1, max_length=256)
 
 
+class ModelProviderPatch(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,64}$")
+    name: str = Field(default="", max_length=128)
+    base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
+    api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
+    model: str = Field(min_length=1, max_length=256)
+    protocol: Literal["openai-responses", "openai-chat", "anthropic"]
+    enabled: bool = True
+
+
 class RuntimeConfigPatch(BaseModel):
     """Web-editable settings; omitted secrets keep their current value."""
 
@@ -213,9 +239,27 @@ class RuntimeConfigPatch(BaseModel):
     model_base_url: str | None = Field(default=None, alias="modelBaseUrl")
     model_api_key: str | None = Field(default=None, alias="modelApiKey")
     model_name: str | None = Field(default=None, alias="modelName")
+    model_protocol: Literal[
+        "openai-responses", "openai-chat", "anthropic"
+    ] | None = Field(default=None, alias="modelProtocol")
+    model_providers: list[ModelProviderPatch] | None = Field(
+        default=None, alias="modelProviders", max_length=16
+    )
+    model_routing_strategy: Literal["round-robin", "failover"] | None = Field(
+        default=None, alias="modelRoutingStrategy"
+    )
+    model_retry_delays: list[float] | None = Field(
+        default=None, alias="modelRetryDelays", max_length=10
+    )
+    model_recovery_interval: int | None = Field(
+        default=None, alias="modelRecoveryInterval", ge=10, le=3600
+    )
     codex_base_url: str | None = Field(default=None, alias="codexBaseUrl")
     codex_api_key: str | None = Field(default=None, alias="codexApiKey")
     codex_model: str | None = Field(default=None, alias="codexModel")
+    codex_protocol: Literal[
+        "openai-responses", "openai-chat", "anthropic"
+    ] | None = Field(default=None, alias="codexProtocol")
     codex_max_concurrency: int | None = Field(
         default=None, alias="codexMaxConcurrency", ge=1, le=16
     )
@@ -228,8 +272,6 @@ class RuntimeConfigPatch(BaseModel):
     codex_auto_resume_interrupted: bool | None = Field(
         default=None, alias="codexAutoResumeInterrupted"
     )
-
-
 class ModelListRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid", populate_by_name=True, str_strip_whitespace=True
@@ -237,6 +279,10 @@ class ModelListRequest(BaseModel):
     base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
     api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
     kind: Literal["model", "codex"] = "model"
+    provider_id: str | None = Field(default=None, alias="providerId", max_length=64)
+    protocol: Literal[
+        "openai-responses", "openai-chat", "anthropic"
+    ] = "openai-chat"
 
 
 class CodexStartRequest(BaseModel):
@@ -270,6 +316,18 @@ class MatchBindRequest(BaseModel):
     )
     match_url: str = Field(alias="matchUrl", min_length=1, max_length=2048)
     platform_token: str = Field(default="", alias="platformToken", max_length=4096)
+
+
+class SessionImportRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    match_url: str = Field(
+        default="", alias="matchUrl", max_length=2048
+    )
+    raw_request: str = Field(
+        alias="rawRequest", min_length=1, max_length=MAX_SESSION_IMPORT_BYTES
+    )
 
 
 class PasswordLoginRequest(BaseModel):
@@ -439,6 +497,65 @@ def create_app(
     app.include_router(create_realtime_router(event_broker))
 
     @app.api_route(
+        "/codex-proxy/v1/responses",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def codex_responses_proxy(request: Request) -> Response:
+        if not _method(request, "POST"):
+            return _method_error("POST")
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        current = config_store.get()
+        expected_key = current.codex_api_key.strip()
+        authorization = request.headers.get("authorization", "").strip()
+        if not expected_key or authorization != f"Bearer {expected_key}":
+            return _error_response(401, "CODEX_PROXY_UNAUTHORIZED", "Codex 代理鉴权失败")
+        try:
+            body = await request.body()
+            if len(body) > 16 * 1024 * 1024:
+                raise ValueError
+            payload = json.loads(body.decode("utf-8"))
+            if not isinstance(payload, Mapping):
+                raise ValueError
+        except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            return _error_response(400, "INVALID_REQUEST", "Codex 请求格式无效")
+        upstream_base_url, upstream_api_key = _codex_chat_upstream(current)
+        if not upstream_base_url or not upstream_api_key:
+            return _error_response(
+                503, "CODEX_CHAT_UPSTREAM_UNAVAILABLE", "Codex Chat 上游未配置"
+            )
+        bridge = build_chat_bridge(payload, current.codex_model)
+        try:
+            message = await asyncio.wait_for(
+                asyncio.to_thread(
+                    complete_with_chat,
+                    bridge,
+                    base_url=upstream_base_url,
+                    api_key=upstream_api_key,
+                ),
+                timeout=150,
+            )
+        except TimeoutError:
+            return _error_response(504, "CODEX_CHAT_TIMEOUT", "Codex Chat 上游响应超时")
+        except Exception as exc:
+            LOGGER.warning("Codex Chat compatibility request failed: %s", exc.__class__.__name__)
+            return _error_response(502, "CODEX_CHAT_FAILED", "Codex Chat 上游请求失败")
+        stream = build_response_sse(
+            message,
+            model=bridge.model,
+            tool_names=bridge.tool_names,
+        )
+        return StreamingResponse(
+            iter((stream,)),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-store",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @app.api_route(
         "/api/config",
         methods=["GET", "PUT", "POST", "PATCH", "DELETE", "OPTIONS", "HEAD"],
     )
@@ -451,7 +568,7 @@ def create_app(
             return _method_error("GET, PUT")
         try:
             body = await request.body()
-            if len(body) > 32 * 1024:
+            if len(body) > 96 * 1024:
                 raise ValueError
             value = json.loads(body.decode("utf-8"))
             patch = RuntimeConfigPatch.model_validate(value)
@@ -464,9 +581,10 @@ def create_app(
         ):
             return _error_response(400, "INVALID_CONFIG", "配置格式无效")
         try:
+            values = _runtime_patch_values(patch, config_store.get())
             updated = await asyncio.to_thread(
                 config_store.update,
-                patch.model_dump(exclude_unset=True),
+                values,
             )
         except ConfigError as exc:
             return _error_response(400, "INVALID_CONFIG", str(exc))
@@ -485,15 +603,89 @@ def create_app(
             return error
         assert parsed is not None
         api_key = parsed.api_key or ""
+        base_url = parsed.base_url
+        protocol: str = parsed.protocol
         if not api_key and config_store is not None:
             current = config_store.get()
-            api_key = (
-                current.codex_api_key
-                if parsed.kind == "codex"
-                else current.model_api_key
-            )
+            if parsed.provider_id:
+                try:
+                    providers = json.loads(current.model_providers_json or "[]")
+                except json.JSONDecodeError:
+                    providers = []
+                provider = next(
+                    (
+                        item
+                        for item in providers
+                        if isinstance(item, Mapping)
+                        and str(item.get("id", "")) == parsed.provider_id
+                    ),
+                    None,
+                )
+                if not isinstance(provider, Mapping):
+                    return _error_response(
+                        404, "MODEL_PROVIDER_NOT_FOUND", "模型提供商不存在"
+                    )
+                provider_base_url = str(provider.get("baseUrl", "") or "").rstrip("/")
+                provider_protocol = str(provider.get("protocol", "") or "")
+                if (
+                    parsed.base_url.rstrip("/") != provider_base_url
+                    or parsed.protocol != provider_protocol
+                ):
+                    return _error_response(
+                        400,
+                        "MODEL_PROVIDER_MISMATCH",
+                        "修改提供商地址或协议后，请重新填写 API Key",
+                    )
+                api_key = (
+                    str(provider.get("apiKey", "") or "")
+                    if isinstance(provider, Mapping)
+                    else ""
+                )
+                base_url = provider_base_url
+                protocol = provider_protocol
+            else:
+                saved_base_url = (
+                    current.codex_base_url
+                    if parsed.kind == "codex"
+                    else current.model_base_url
+                )
+                saved_protocol = (
+                    current.codex_protocol
+                    if parsed.kind == "codex"
+                    else current.model_protocol
+                )
+                saved_key = (
+                    current.codex_api_key
+                    if parsed.kind == "codex"
+                    else current.model_api_key
+                )
+                if (
+                    saved_base_url
+                    and saved_key
+                    and (
+                        parsed.base_url.rstrip("/") != saved_base_url.rstrip("/")
+                        or parsed.protocol != saved_protocol
+                    )
+                ):
+                    return _error_response(
+                        400,
+                        "MODEL_PROVIDER_MISMATCH",
+                        "修改模型地址或协议后，请重新填写 API Key",
+                    )
+                if (
+                    saved_base_url
+                    and saved_key
+                    and parsed.base_url.rstrip("/") == saved_base_url.rstrip("/")
+                    and parsed.protocol == saved_protocol
+                ):
+                    api_key = saved_key
         try:
-            models = await asyncio.to_thread(fetch_models, parsed.base_url, api_key)
+            models = await asyncio.to_thread(
+                fetch_models,
+                base_url,
+                api_key,
+                protocol,
+            )
         except ModelListError as exc:
             return _error_response(502, "MODEL_LIST_FAILED", str(exc))
         return _success_response({"models": models, "kind": parsed.kind})
@@ -532,6 +724,9 @@ def create_app(
                     "match_url": result.match_url,
                     "match_key": result.match_key,
                     "platform_token": result.platform_token,
+                    "platform_cookies": (
+                        current.platform_cookies if same_match else ""
+                    ),
                     "match_title": str(result.match.get("title", "") or ""),
                     "match_login_type": int(result.match.get("login_type", 0) or 0),
                     "match_source_id": _match_source_id(result.match),
@@ -542,7 +737,112 @@ def create_app(
             return _platform_error(exc)
         app.state.config = updated
         public = config_store.public()
-        public["authenticated"] = result.authenticated
+        result_status = result.auth_status
+        if result.authenticated and not result_status.authenticated:
+            result_status = AuthStatus(True)
+        status = _runtime_login_status(result_status, config_store)
+        public["authenticated"] = status.authenticated
+        public["authStatus"] = status
+        return _success_response(public)
+
+    @app.api_route(
+        "/api/platform/session-export",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def export_platform_session(request: Request) -> JSONResponse:
+        if not _method(request, "GET"):
+            return _method_error("GET")
+        if not _trusted_platform_request(request):
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "平台操作缺少同源凭据"
+            )
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        current = config_store.get()
+        if not _is_login_token(current.platform_token):
+            return _error_response(
+                409, "PLATFORM_NOT_AUTHENTICATED", "当前还没有可导出的登录态"
+            )
+        return _success_response(
+            {
+                "session": encode_portable_session(
+                    match_url=current.match_url,
+                    match_key=current.match_key,
+                    token=current.platform_token,
+                    cookies=current.platform_cookies,
+                )
+            }
+        )
+
+    @app.api_route(
+        "/api/platform/import-session",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def import_platform_session(request: Request) -> JSONResponse:
+        if not _method(request, "POST"):
+            return _method_error("POST")
+        if not _trusted_platform_request(request):
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "平台操作缺少同源凭据"
+            )
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        try:
+            body = await request.body()
+            if len(body) > MAX_SESSION_IMPORT_BYTES:
+                raise ValueError
+            parsed = SessionImportRequest.model_validate(
+                json.loads(body.decode("utf-8"))
+            )
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+            ValidationError,
+        ):
+            return _error_response(400, "INVALID_REQUEST", "请求格式无效")
+        try:
+            current = config_store.get()
+            target_url = parsed.match_url or current.match_url
+            importer = getattr(services.agent, "import_session", None)
+            if not callable(importer):
+                return _error_response(
+                    503, "SESSION_IMPORT_UNAVAILABLE", "当前平台适配器不支持请求包导入"
+                )
+            result, imported = await asyncio.to_thread(
+                importer, target_url, parsed.raw_request
+            )
+            status = _imported_login_status(
+                result.auth_status, result.platform_token
+            )
+            if not status.authenticated:
+                return _error_response(
+                    401,
+                    "INVALID_SESSION",
+                    status.message or "请求包中的登录态无效或已过期",
+                )
+            updated = await asyncio.to_thread(
+                config_store.update,
+                {
+                    "match_url": result.match_url,
+                    "match_key": result.match_key,
+                    "platform_token": result.platform_token,
+                    "platform_cookies": imported.cookies,
+                    "match_title": str(result.match.get("title", "") or ""),
+                    "match_login_type": int(
+                        result.match.get("login_type", 0) or 0
+                    ),
+                    "match_source_id": _match_source_id(result.match),
+                },
+            )
+        except Exception as exc:
+            return _platform_error(exc)
+        app.state.config = updated
+        services.agent.invalidate()
+        public = config_store.public()
+        public["authenticated"] = True
+        public["authStatus"] = status
         return _success_response(public)
 
     @app.api_route(
@@ -555,8 +855,17 @@ def create_app(
         if config_store is None:
             return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
         try:
-            status = await asyncio.to_thread(services.agent.auth_status)
+            status = await asyncio.wait_for(
+                asyncio.to_thread(services.agent.auth_status),
+                timeout=10,
+            )
             status = _runtime_login_status(status, config_store)
+        except TimeoutError:
+            return _error_response(
+                504,
+                "AUTH_CHECK_TIMEOUT",
+                "登录态验证超时，请直接使用密码或请求包登录",
+            )
         except Exception as exc:
             return _platform_error(exc)
         return _success_response(status)
@@ -668,6 +977,7 @@ def create_app(
                 {
                     "platform_token": login.platform_token,
                     "match_key": login.match_key,
+                    "platform_cookies": "",
                 },
             )
             services.agent.invalidate()
@@ -734,6 +1044,7 @@ def create_app(
                 {
                     "platform_token": login.platform_token,
                     "match_key": login.match_key,
+                    "platform_cookies": "",
                 },
             )
             services.agent.invalidate()
@@ -1605,7 +1916,11 @@ def _match_source_id(match: Mapping[str, Any]) -> str:
 def _login_result_status(status: AuthStatus) -> AuthStatus:
     if status.authenticated:
         return status
-    return AuthStatus(True, message="已登录，队伍信息暂不可用")
+    if status.error_code == "101":
+        return AuthStatus(True, message="已登录，比赛信息暂不可用")
+    if status.error_code == "116" or _is_source_context_error(status.message):
+        return AuthStatus(True, message="已登录，队伍信息暂不可用")
+    return status
 
 
 def _runtime_login_status(
@@ -1616,11 +1931,111 @@ def _runtime_login_status(
         if _is_source_context_error(status.message):
             return AuthStatus(False, message="尚未登录")
         return status
-    if status.error_code in {"8", "116", "203"} or _is_source_context_error(
+    if status.error_code == "101":
+        return AuthStatus(True, message="已登录，比赛信息暂不可用")
+    if status.error_code == "116" or _is_source_context_error(
         status.message
     ):
         return AuthStatus(True, message="已登录，队伍信息暂不可用")
     return status
+
+
+def _codex_chat_upstream(config: Config) -> tuple[str, str]:
+    try:
+        providers = json.loads(config.model_providers_json or "[]")
+    except json.JSONDecodeError:
+        providers = []
+    enabled = [
+        item
+        for item in providers
+        if isinstance(item, Mapping)
+        and bool(item.get("enabled", True))
+        and str(item.get("protocol", "") or "") == "openai-chat"
+    ]
+    matching = next(
+        (
+            item
+            for item in enabled
+            if str(item.get("model", "") or "") == config.codex_model
+        ),
+        None,
+    )
+    selected = matching or (enabled[0] if enabled else None)
+    if isinstance(selected, Mapping):
+        return (
+            str(selected.get("baseUrl", "") or "").strip().rstrip("/"),
+            str(selected.get("apiKey", "") or "").strip(),
+        )
+    if (
+        config.model_protocol == "openai-chat"
+        and config.model_base_url
+        and config.model_api_key
+    ):
+        return config.model_base_url.rstrip("/"), config.model_api_key
+    return "", ""
+
+
+def _runtime_patch_values(
+    patch: RuntimeConfigPatch, current: Config
+) -> dict[str, Any]:
+    values = patch.model_dump(exclude_unset=True)
+    providers = values.pop("model_providers", None)
+    delays = values.pop("model_retry_delays", None)
+    if delays is not None:
+        values["model_retry_delays"] = ",".join(
+            str(int(delay) if float(delay).is_integer() else delay)
+            for delay in delays
+        )
+    if providers is not None:
+        try:
+            existing_raw = json.loads(current.model_providers_json or "[]")
+        except json.JSONDecodeError:
+            existing_raw = []
+        existing = {
+            str(item.get("id", "")): item
+            for item in existing_raw
+            if isinstance(item, Mapping)
+        }
+        serialized: list[dict[str, Any]] = []
+        for provider in providers:
+            provider_data = (
+                provider
+                if isinstance(provider, Mapping)
+                else provider.model_dump(exclude_unset=True)
+            )
+            provider_id = str(provider_data.get("id", "") or "")
+            old = existing.get(provider_id, {})
+            base_url = str(provider_data.get("base_url", "") or "")
+            protocol = str(provider_data.get("protocol", "") or "")
+            api_key = (
+                str(old.get("apiKey", "") or "")
+                if provider_data.get("api_key") is None
+                else str(provider_data.get("api_key", ""))
+            )
+            if (
+                not api_key
+                and not old
+                and provider_data.get("api_key") is None
+                and current.model_api_key
+                and base_url.rstrip("/") == current.model_base_url.rstrip("/")
+                and protocol == current.model_protocol
+            ):
+                api_key = current.model_api_key
+            serialized.append(
+                {
+                    "id": provider_id,
+                    "name": str(provider_data.get("name", "") or ""),
+                    "baseUrl": base_url,
+                    "apiKey": api_key,
+                    "model": str(provider_data.get("model", "") or ""),
+                    "protocol": protocol,
+                    "enabled": bool(provider_data.get("enabled", True)),
+                }
+            )
+        values["model_providers_json"] = json.dumps(
+            serialized, ensure_ascii=False, separators=(",", ":")
+        )
+    return values
 
 
 def _is_source_context_error(message: str) -> bool:
@@ -1674,6 +2089,7 @@ def _refresh_anonymous_match_context(
             "match_url": result.match_url,
             "match_key": result.match_key,
             "platform_token": result.platform_token,
+            "platform_cookies": "",
             "match_title": str(result.match.get("title", "") or ""),
             "match_login_type": int(result.match.get("login_type", 0) or 0),
             "match_source_id": _match_source_id(result.match),
@@ -1711,6 +2127,7 @@ def _logout_and_refresh_context(
             "match_url": "",
             "match_key": "",
             "platform_token": "",
+            "platform_cookies": "",
             "match_title": "",
             "match_login_type": 0,
             "match_source_id": "",
@@ -1721,7 +2138,19 @@ def _logout_and_refresh_context(
 
 
 def _is_login_token(token: str) -> bool:
-    return token.strip().startswith("login:")
+    return token.strip().startswith(("login:", "cookie:"))
+
+
+def _imported_login_status(status: AuthStatus, token: str) -> AuthStatus:
+    if status.authenticated:
+        return status
+    if token.strip() and status.error_code == "101":
+        return AuthStatus(True, message="已导入登录态，比赛信息暂不可用")
+    if token.strip() and (
+        status.error_code == "116" or _is_source_context_error(status.message)
+    ):
+        return AuthStatus(True, message="已导入登录态，队伍信息暂不可用")
+    return status
 
 
 def _exception_type_chain(error: BaseException) -> tuple[str, ...]:

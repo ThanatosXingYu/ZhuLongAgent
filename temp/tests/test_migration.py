@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -45,10 +46,12 @@ from internal.codex import (
     build_command,
     build_interactive_command,
     parse_event_line,
+    prepare_model_catalog,
 )
 from internal.codex_skills import CTF_SKILL_NAMES, prepare_codex_skills
 from internal.config import (
     DEFAULT_CODEX_MAX_CONCURRENCY,
+    DEFAULT_CODEX_SYSTEM_PROMPT,
     Config,
     RuntimeConfigStore,
     load,
@@ -203,6 +206,7 @@ def test_platform_settings_are_not_loaded_from_environment(
 def test_config_can_start_empty_and_runtime_store_masks_secrets(tmp_path: Path) -> None:
     assert load(tmp_path / "missing.env") == Config()
     store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
+    assert store.public()["matchUrl"] == "https://match.ichunqiu.com/2026qwbs10"
     updated = store.update(
         {
             "match_url": "https://match.ichunqiu.com/demo-match",
@@ -230,6 +234,37 @@ def test_config_can_start_empty_and_runtime_store_masks_secrets(tmp_path: Path) 
     )
     assert persisted["match_key"] == "demo-match-key"
     assert persisted["platform_token"] == "login:demo:not-a-real-token"
+
+
+def test_runtime_store_persists_model_protocol_and_platform_cookies(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ".runtime-config.json"
+    store = RuntimeConfigStore(Config(), path)
+    updated = store.update(
+        {
+            "match_url": "https://match.ichunqiu.com/demo-match",
+            "match_key": "demo-match-key",
+            "platform_token": "login:demo:not-a-real-token",
+            "platform_cookies": "PHPSESSID=session-value",
+            "model_base_url": "https://api.anthropic.com/v1",
+            "model_name": "claude-demo",
+            "model_protocol": "anthropic",
+            "codex_protocol": "anthropic",
+        }
+    )
+
+    assert updated.model_protocol == "anthropic"
+    assert updated.platform_cookies == "PHPSESSID=session-value"
+    assert updated.codex_protocol == "anthropic"
+    assert store.public()["modelProtocol"] == "anthropic"
+    assert store.public()["codexProtocol"] == "anthropic"
+    assert store.public()["platformCookiesConfigured"] is True
+    assert "PHPSESSID" not in json.dumps(store.public())
+    reloaded = RuntimeConfigStore(Config(), path).get()
+    assert reloaded.model_protocol == "anthropic"
+    assert reloaded.codex_protocol == "anthropic"
+    assert reloaded.platform_cookies == "PHPSESSID=session-value"
 
 
 def test_runtime_store_persists_ctf_skill_toggle(tmp_path: Path) -> None:
@@ -344,7 +379,10 @@ def test_model_catalog_endpoint_returns_provider_models(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
-    monkeypatch.setattr("internal.web.fetch_models", lambda base_url, api_key: ["alpha", "beta"])
+    monkeypatch.setattr(
+        "internal.web.fetch_models",
+        lambda base_url, api_key, protocol: ["alpha", "beta"],
+    )
     app = create_app(Source(), config_store=store)
     with TestClient(app) as client:
         response = client.post(
@@ -353,6 +391,146 @@ def test_model_catalog_endpoint_returns_provider_models(
         )
     assert response.status_code == 200
     assert response.json()["data"] == {"models": ["alpha", "beta"], "kind": "model"}
+
+
+def test_model_catalog_never_sends_saved_key_to_changed_endpoint(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = RuntimeConfigStore(
+        Config(
+            model_base_url="https://model.example.test/v1",
+            model_api_key="saved-secret",
+            model_name="solver",
+            model_protocol="openai-chat",
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(
+        "internal.web.fetch_models",
+        lambda base_url, _api_key, _protocol: calls.append(base_url) or ["alpha"],
+    )
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/models",
+            json={"baseUrl": "https://attacker.example/v1", "protocol": "openai-chat"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "MODEL_PROVIDER_MISMATCH"
+    assert calls == []
+
+
+def test_runtime_config_rejects_non_finite_retry_delays(tmp_path: Path) -> None:
+    store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/config",
+            content='{"modelRetryDelays":[NaN]}',
+            headers={"Content-Type": "application/json"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_CONFIG"
+
+
+def test_runtime_config_accepts_multi_provider_routing_without_echoing_keys(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / ".runtime-config.json"
+    store = RuntimeConfigStore(Config(), path)
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/config",
+            json={
+                "modelProviders": [
+                    {
+                        "id": "provider-a",
+                        "name": "Provider A",
+                        "baseUrl": "https://a.example/v1",
+                        "apiKey": "secret-a",
+                        "model": "model-a",
+                        "protocol": "openai-chat",
+                        "enabled": True,
+                    },
+                    {
+                        "id": "provider-b",
+                        "name": "Provider B",
+                        "baseUrl": "https://b.example/v1",
+                        "apiKey": "secret-b",
+                        "model": "model-b",
+                        "protocol": "anthropic",
+                        "enabled": False,
+                    },
+                ],
+                "modelRoutingStrategy": "failover",
+                "modelRetryDelays": [1, 5, 10, 10, 15],
+                "modelRecoveryInterval": 60,
+            },
+        )
+        kept = client.put(
+            "/api/config",
+            json={
+                "modelProviders": [
+                    {
+                        "id": "provider-a",
+                        "name": "Provider A",
+                        "baseUrl": "https://a.example/v1",
+                        "model": "model-a",
+                        "protocol": "openai-chat",
+                        "enabled": True,
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert kept.status_code == 200
+    data = response.json()["data"]
+    assert data["modelRoutingStrategy"] == "failover"
+    assert data["modelRetryDelays"] == [1, 5, 10, 10, 15]
+    assert len(data["modelProviders"]) == 2
+    assert data["modelProviders"][0]["apiKeyConfigured"] is True
+    assert "secret-a" not in response.text
+    persisted = path.read_text(encoding="utf-8")
+    assert "secret-a" in persisted
+
+
+def test_model_provider_migration_preserves_legacy_api_key(tmp_path: Path) -> None:
+    store = RuntimeConfigStore(
+        Config(
+            model_base_url="https://legacy.example/v1",
+            model_api_key="legacy-secret",
+            model_name="legacy-model",
+            model_protocol="openai-chat",
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        response = client.put(
+            "/api/config",
+            json={
+                "modelProviders": [
+                    {
+                        "id": "legacy-provider",
+                        "name": "Legacy",
+                        "baseUrl": "https://legacy.example/v1",
+                        "model": "legacy-model",
+                        "protocol": "openai-chat",
+                        "enabled": True,
+                    }
+                ]
+            },
+        )
+
+    assert response.status_code == 200
+    providers = json.loads(store.get().model_providers_json)
+    assert providers[0]["apiKey"] == "legacy-secret"
+    assert "legacy-secret" not in response.text
 
 
 def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:
@@ -1745,6 +1923,77 @@ def test_codex_requeues_persisted_tasks_when_configuration_becomes_available(
     manager.close()
 
 
+def test_codex_existing_task_uses_new_model_on_next_round(tmp_path: Path) -> None:
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult("prompt", False, "", exercise_id, "Web", "hot reload")
+
+    class Runner:
+        def __init__(self) -> None:
+            self.configs: list[ProcessConfig] = []
+
+        def run(
+            self, config: ProcessConfig, _prompt: str, _on_event, _cancel
+        ) -> ProcessResult:
+            self.configs.append(config)
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("done", encoding="utf-8")
+            return ProcessResult(0, "done", "session-hot-reload")
+
+    runner = Runner()
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig(
+                "codex",
+                str(tmp_path),
+                "https://old.example/v1",
+                "old-key",
+                "old-model",
+            ),
+            Prompt(),
+            runner,
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    task = manager.start(7)
+    for _ in range(100):
+        if manager.get(task.id).status == "completed":
+            break
+        time.sleep(0.01)
+
+    manager.configure(
+        ProcessConfig(
+            "codex",
+            str(tmp_path),
+            "https://new.example/v1",
+            "new-key",
+            "new-model",
+            protocol="openai-responses",
+        )
+    )
+    manager.follow_up(task.id, "继续")
+    for _ in range(100):
+        if len(runner.configs) >= 2 and manager.get(task.id).status == "completed":
+            break
+        time.sleep(0.01)
+
+    assert runner.configs[-1].base_url == "https://new.example/v1"
+    assert runner.configs[-1].api_key == "new-key"
+    assert runner.configs[-1].model == "new-model"
+    side = manager.side(task.id, "生成 WP")
+    for _ in range(100):
+        if manager.get(side.id).status == "completed":
+            break
+        time.sleep(0.01)
+    assert runner.configs[-1].model == "new-model"
+    manager.close()
+
+
 def test_codex_tasks_over_limit_are_queued_without_pausing_running_task(
     tmp_path: Path,
 ) -> None:
@@ -1826,6 +2075,62 @@ def test_codex_command_supports_resume_and_fork(tmp_path: Path) -> None:
         assert "--sandbox" not in command
         assert "--cd" not in command
         assert 'sandbox_mode="danger-full-access"' in command
+
+    responses_command = build_command(base)
+    chat_command = build_command(
+        ProcessConfig(**{**base.__dict__, "protocol": "openai-chat"})
+    )
+    anthropic_command = build_command(
+        ProcessConfig(**{**base.__dict__, "protocol": "anthropic"})
+    )
+    catalog_command = build_command(
+        ProcessConfig(
+            **{
+                **base.__dict__,
+                "model_catalog_path": str(tmp_path / "model-catalog.json"),
+            }
+        )
+    )
+    assert 'model_providers.gcsis-codex.wire_api="responses"' in responses_command
+    assert 'model_providers.gcsis-codex.wire_api="responses"' in chat_command
+    assert 'model_providers.gcsis-codex.wire_api="responses"' in anthropic_command
+    assert (
+        f'model_catalog_json="{tmp_path / "model-catalog.json"}"'
+        in catalog_command
+    )
+
+
+def test_default_codex_prompt_returns_flag_before_writeup() -> None:
+    assert "最终回复首先把完整flag内容输出给我" in DEFAULT_CODEX_SYSTEM_PROMPT
+    assert "tools/dictionaries/" not in DEFAULT_CODEX_SYSTEM_PROMPT
+
+
+def test_prepare_model_catalog_keeps_bundled_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    bundled = {
+        "models": [
+            {
+                "slug": "gpt-5.6-luna",
+                "display_name": "GPT-5.6 Luna",
+                "description": "bundled",
+            }
+        ]
+    }
+
+    def fake_run(*_args: Any, **_kwargs: Any) -> subprocess.CompletedProcess[str]:
+        return subprocess.CompletedProcess([], 0, json.dumps(bundled), "")
+
+    monkeypatch.setattr("internal.codex.subprocess.run", fake_run)
+    path = prepare_model_catalog(
+        "codex", tmp_path / "model-catalog.json", "deepseek-v4.1-flash"
+    )
+    models = json.loads(Path(path).read_text(encoding="utf-8"))["models"]
+
+    assert [model["slug"] for model in models] == [
+        "gpt-5.6-luna",
+        "deepseek-v4.1-flash",
+    ]
 
 
 def test_codex_interactive_resume_uses_only_supported_options(tmp_path: Path) -> None:

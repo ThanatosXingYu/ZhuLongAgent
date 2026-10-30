@@ -40,6 +40,7 @@ from .ichunqiu_api import (
     Transport,
 )
 from .ichunqiu_crypto import MATCH_ORIGIN, parse_match_url
+from .ichunqiu_session import ImportedSession, parse_session_request
 
 MAX_QUESTION_COUNT = 10_000
 PAGE_SIZE = 100
@@ -76,8 +77,34 @@ class AgentClient:
         self._pending_environments: dict[int, str] = {}
         self._opened_platform_questions: set[str] = set()
 
-    def bind_match(self, match_url: str, supplied_token: str = "") -> BindResult:
-        return self._api.bind_match(match_url, supplied_token)
+    def bind_match(
+        self,
+        match_url: str,
+        supplied_token: str = "",
+        supplied_match_key: str = "",
+        cookie_header: str = "",
+    ) -> BindResult:
+        return self._api.bind_match(
+            match_url,
+            supplied_token,
+            supplied_match_key,
+            cookie_header,
+        )
+
+    def import_session(
+        self, match_url: str, raw_request: str
+    ) -> tuple[BindResult, ImportedSession]:
+        imported = parse_session_request(raw_request)
+        target_url = imported.match_url or match_url.strip()
+        if not target_url:
+            raise ValueError("请求包中未找到比赛地址")
+        result = self._api.bind_match(
+            target_url,
+            imported.token,
+            imported.match_key,
+            imported.cookies,
+        )
+        return result, imported
 
     def auth_status(self) -> AuthStatus:
         return self._api.auth_status()
@@ -104,6 +131,7 @@ class AgentClient:
 
     def invalidate(self) -> None:
         with self._lock:
+            self._api.invalidate_auth_cache()
             self._question_by_id.clear()
             self._notice_by_id.clear()
             self._pending_environments.clear()

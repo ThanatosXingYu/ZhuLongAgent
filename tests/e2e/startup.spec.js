@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { emitSse, openWorkbench, task } from "./fixtures.js";
+import { emitSse, installApiMock, openWorkbench, success, task } from "./fixtures.js";
 
 test("首次打开自动加载题目、公告并支持搜索与组合筛选", async ({ page }) => {
   const pageErrors = [];
@@ -112,4 +112,251 @@ test("Codex 警告分级、Side 请求正文与 SSE 增量更新保持正确", a
   });
   await expect(page.locator("#codex-task-events")).toContainText("SSE 已送达");
   await expect(page.locator("#realtime-status")).toHaveText("实时");
+});
+
+test("Codex 顶部恢复与一键 WP 发送内置提示词", async ({ page }) => {
+  const main = task();
+  const side = task({
+    id: "task-side",
+    title: "侧分支",
+    mode: "side",
+    parentTaskId: main.id,
+    sourceMessage: "侧分支",
+    sessionId: "session-side",
+  });
+  const { requests } = await openWorkbench(page, { state: { codexTasks: [main, side] } });
+  await page.locator("#open-codex-tasks").click();
+  await page.locator(".codex-tree-row", { hasText: "侧分支" }).locator(".codex-tree-item").click();
+
+  await page.locator("#codex-task-message").fill("不要覆盖的草稿");
+  await page.locator("#codex-task-compose").click();
+  await expect.poll(() => requests.find((entry) => entry.path === "/api/codex/tasks/task-side/message")?.body).toEqual({
+    message: "刚才程序意外退出了，请你核对上下文，接着之前的进度继续执行任务。",
+    side: false,
+  });
+  await expect(page.locator("#codex-task-message")).toHaveValue("不要覆盖的草稿");
+
+  await page.locator("#codex-wp-menu summary").click();
+  await expect(page.locator("#codex-wp-menu")).toHaveAttribute("open", "");
+  await page.locator("#codex-wp-desensitized").click();
+  await expect.poll(() => requests.find((entry) => entry.path === "/api/codex/tasks/task-main/message")?.body).toMatchObject({
+    side: true,
+  });
+  const wpRequest = requests.find((entry) => entry.path === "/api/codex/tasks/task-main/message")?.body;
+  expect(wpRequest.message).toContain("脱敏版WriteUp");
+  expect(wpRequest.message).toContain("不得写出该题目的靶机和端口信息");
+  await expect(page.locator("#codex-wp-menu")).not.toHaveAttribute("open", "");
+  await expect(page.locator(".toast.success", { hasText: "脱敏版 WP Side 分支已创建" })).toBeVisible();
+});
+
+test("设置页支持默认比赛、三种模型协议与请求包登录", async ({ page }) => {
+  const config = {
+    configured: true,
+    matchUrl: "",
+    matchTitle: "Regression CTF",
+    modelBaseUrl: "",
+    modelName: "",
+    modelProtocol: "openai-chat",
+    codexBaseUrl: "http://model",
+    codexModel: "deepseek-v4-flash",
+    codexProtocol: "openai-responses",
+    codexMaxConcurrency: 10,
+    codexSystemPrompt: "",
+    codexCtfSkillsEnabled: true,
+    codexAutoResumeInterrupted: false,
+    modelApiKeyConfigured: false,
+    codexApiKeyConfigured: true,
+  };
+  let importedRequest = null;
+  const { requests } = await openWorkbench(page, {
+    handler: async ({ route, url, body }) => {
+      if (url.pathname === "/api/config") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success(config)),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/platform/logout") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({ ...config, authenticated: false })),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/platform/import-session") {
+        importedRequest = body;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({
+            ...config,
+            matchUrl: "https://match.ichunqiu.com/2026qwbs10",
+            authenticated: true,
+            authStatus: { authenticated: true, teamName: "QA Team" },
+          })),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/platform/session-export") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({
+            session: "ichunqiu-login-v1:portable-session-value",
+          })),
+        });
+        return true;
+      }
+      return false;
+    },
+  });
+
+  await page.locator("#open-settings").click();
+  await expect(page.locator("#setting-match-url")).toHaveValue("https://match.ichunqiu.com/2026qwbs10");
+  await expect(page.locator("#setting-model-protocol option")).toHaveCount(3);
+  await expect(page.locator("#setting-codex-protocol option")).toHaveCount(3);
+  await page.locator("#setting-codex-protocol").selectOption("openai-chat");
+  await expect(page.locator("#setting-codex-protocol")).toHaveValue("openai-chat");
+  await page.locator("#fetch-codex-models").click();
+  await expect.poll(() => requests.find((request) => request.path === "/api/models")?.body?.protocol).toBe("openai-chat");
+  await expect(page.locator('#login-mode-password, #login-mode-sms, #login-mode-session')).toHaveCount(3);
+
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#platform-logout").click();
+  await expect(page.locator("#platform-login")).toBeVisible();
+  const loginModeRows = await page.locator("#login-mode-password, #login-mode-sms, #login-mode-session").evaluateAll(
+    (buttons) => buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
+  );
+  expect(new Set(loginModeRows).size).toBe(1);
+  await page.locator("#login-mode-session").click();
+  await expect(page.locator("#session-login-form")).toBeVisible();
+  await expect(page.locator("#session-request-packet")).toHaveValue("");
+  await page.locator("#session-request-packet").fill(
+    "POST /match/team/info HTTP/1.1\nCookie: PHPSESSID=session-value\nReferer: https://match.ichunqiu.com/2026qwbs10\n\n{\"k\":\"match-key\",\"token\":\"login:test\"}",
+  );
+  await page.locator("#session-login").click();
+
+  await expect.poll(() => importedRequest?.rawRequest).toContain("PHPSESSID=session-value");
+  expect(importedRequest?.matchUrl).toBe("https://match.ichunqiu.com/2026qwbs10");
+  await expect(page.locator("#session-login-status")).toHaveText("登录态导入成功");
+  await expect(page.locator("#platform-auth-status")).toContainText("已登录");
+  await expect(page.locator("#session-request-packet")).toHaveValue("ichunqiu-login-v1:portable-session-value");
+  await expect(page.locator("#copy-session-login")).toBeEnabled();
+  await expect(page.locator("#platform-authenticated-actions")).toBeVisible();
+  await expect(page.locator("#copy-authenticated-session")).toBeEnabled();
+});
+
+test("模型配置全屏页面支持多提供商、轮询和重试策略", async ({ page }) => {
+  const { requests } = await openWorkbench(page);
+  await page.locator("#open-model-routing").click();
+  const routingPage = page.locator("#model-routing-page");
+  await expect(routingPage).toBeVisible();
+  await expect(page.locator("dialog#model-routing-dialog")).toHaveCount(0);
+  await expect(page.locator(".model-provider-item")).toHaveCount(1);
+
+  const rows = page.locator(".model-provider-item");
+  await rows.nth(0).locator(".provider-name").fill("Provider A");
+  await rows.nth(0).locator(".provider-base-url").fill("https://a.example/v1");
+  await rows.nth(0).locator(".provider-model").fill("model-a");
+  await rows.nth(0).locator(".provider-protocol").selectOption("anthropic");
+
+  await page.locator("#add-model-provider").click();
+  await expect(rows).toHaveCount(2);
+  await rows.nth(1).locator(".provider-name").fill("Provider B");
+  await rows.nth(1).locator(".provider-base-url").fill("https://b.example/v1");
+  await rows.nth(1).locator(".provider-model").fill("model-b");
+  await rows.nth(1).locator(".provider-protocol").selectOption("openai-responses");
+  await rows.nth(1).locator(".provider-enabled").uncheck();
+
+  await page.locator('[data-routing="failover"]').click();
+  await page.locator("#model-retry-delays").fill("1,5,10,10,15");
+  await page.locator("#model-recovery-interval").fill("60");
+  await page.locator("#save-model-routing").click();
+
+  await expect.poll(() => requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body).toMatchObject({
+    modelRoutingStrategy: "failover",
+    modelRetryDelays: [1, 5, 10, 10, 15],
+    modelRecoveryInterval: 60,
+  });
+  const saved = requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body;
+  expect(saved.modelProviders).toHaveLength(2);
+  expect(saved.modelProviders[0]).toMatchObject({ name: "Provider A", protocol: "anthropic", enabled: true });
+  expect(saved.modelProviders[1]).toMatchObject({ name: "Provider B", protocol: "openai-responses", enabled: false });
+  await expect(page.locator("#model-routing-status")).toContainText("已保存");
+  await page.locator("#close-model-routing").click();
+  await expect(routingPage).toBeHidden();
+});
+
+test("登录态验证较慢时仍可绑定并进入登录", async ({ page }) => {
+  let releaseAuth = () => {};
+  let markAuthStarted = () => {};
+  const authStarted = new Promise((resolve) => {
+    markAuthStarted = resolve;
+  });
+  const authGate = new Promise((resolve) => {
+    releaseAuth = resolve;
+  });
+  const config = {
+    configured: true,
+    matchUrl: "https://match.ichunqiu.com/2026qwbs10",
+    matchTitle: "Regression CTF",
+    modelBaseUrl: "",
+    modelName: "",
+    modelProtocol: "openai-chat",
+    codexBaseUrl: "http://model",
+    codexModel: "deepseek-v4-flash",
+    codexProtocol: "openai-responses",
+    codexMaxConcurrency: 10,
+    codexSystemPrompt: "",
+    codexCtfSkillsEnabled: true,
+    codexAutoResumeInterrupted: false,
+    modelApiKeyConfigured: false,
+    codexApiKeyConfigured: true,
+  };
+  await installApiMock(page, {
+    handler: async ({ route, url }) => {
+      if (url.pathname === "/api/platform/auth") {
+        markAuthStarted();
+        await authGate;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({ authenticated: true, teamName: "Late Auth" })),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/platform/bind") {
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({
+            ...config,
+            authenticated: false,
+            authStatus: { authenticated: false, message: "尚未登录" },
+          })),
+        });
+        return true;
+      }
+      return false;
+    },
+  });
+  await page.goto("/");
+
+  await page.waitForSelector("#open-settings");
+  await authStarted;
+  await page.locator("#open-settings").click();
+  await expect(page.locator("#settings-dialog")).toHaveAttribute("open", "");
+  await expect(page.locator("#platform-login")).toBeVisible();
+  await expect(page.locator("#platform-auth-status")).toHaveText("正在验证登录态");
+
+  await page.locator("#bind-match").click();
+  await expect(page.locator("#platform-login")).toBeVisible();
+  await expect(page.locator("#platform-auth-status")).toHaveText("待登录");
+  releaseAuth();
+  await page.waitForTimeout(200);
+  await expect(page.locator("#platform-login")).toBeVisible();
+  await expect(page.locator("#platform-auth-status")).toHaveText("待登录");
 });

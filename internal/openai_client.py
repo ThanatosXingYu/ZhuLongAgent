@@ -1,4 +1,4 @@
-"""Small OpenAI Chat Completions compatible client used by the solver."""
+"""Small multi-protocol model client used by the solver."""
 
 from __future__ import annotations
 
@@ -11,25 +11,52 @@ from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+SUPPORTED_PROTOCOLS = frozenset({"openai-responses", "openai-chat", "anthropic"})
+DEFAULT_PROTOCOL = "openai-chat"
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_MAX_TOKENS = 8192
+USER_AGENT = "gcsis-tools/1.0"
 
 
 class ModelListError(RuntimeError):
     """Raised when an OpenAI-compatible provider cannot list its models."""
 
 
-def fetch_models(base_url: str, api_key: str = "", timeout: float = 20.0) -> list[str]:
-    """Fetch model IDs from an OpenAI-compatible ``/models`` endpoint."""
+class ModelCallError(RuntimeError):
+    """Provider call failure with retryability information."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status: int = 0,
+        retryable: bool = True,
+        timed_out: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status = status
+        self.retryable = retryable
+        self.timed_out = timed_out
+
+
+def fetch_models(
+    base_url: str,
+    api_key: str = "",
+    protocol: str = DEFAULT_PROTOCOL,
+    timeout: float = 20.0,
+) -> list[str]:
+    """Fetch model IDs from an OpenAI- or Anthropic-compatible provider."""
     normalized = base_url.strip().rstrip("/")
+    selected_protocol = normalize_protocol(protocol)
     parsed = urlsplit(normalized)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise ModelListError("模型地址必须是 http 或 https URL")
     request = Request(
         f"{normalized}/models",
         method="GET",
-        headers={"Accept": "application/json", "User-Agent": "gcsis-tools/1.0"},
+        headers={"Accept": "application/json", "User-Agent": USER_AGENT},
     )
-    if api_key.strip():
-        request.add_header("Authorization", f"Bearer {api_key.strip()}")
+    _add_auth_headers(request, selected_protocol, api_key)
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - operator-supplied model endpoint.
             status = int(response.status)
@@ -150,38 +177,60 @@ class Tool:
 
 
 class OpenAIClient:
-    def __init__(self, base_url: str, api_key: str = "", timeout: float = 120.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str = "",
+        timeout: float = 120.0,
+        protocol: str = DEFAULT_PROTOCOL,
+    ) -> None:
         self.endpoint = ""
         self.api_key = ""
+        self.protocol = DEFAULT_PROTOCOL
         self.timeout = timeout
-        self.configure(base_url, api_key)
+        self.configure(base_url, api_key, protocol)
 
-    def configure(self, base_url: str, api_key: str = "") -> None:
-        self.endpoint = f"{base_url.rstrip('/')}/chat/completions" if base_url.strip() else ""
+    def configure(
+        self,
+        base_url: str,
+        api_key: str = "",
+        protocol: str = DEFAULT_PROTOCOL,
+    ) -> None:
         self.api_key = api_key.strip()
+        self.protocol = normalize_protocol(protocol)
+        suffix = {
+            "openai-chat": "/chat/completions",
+            "openai-responses": "/responses",
+            "anthropic": "/messages",
+        }[self.protocol]
+        self.endpoint = f"{base_url.rstrip('/')}{suffix}" if base_url.strip() else ""
 
     def enabled(self) -> bool:
         return bool(self.endpoint)
 
-    def complete(self, model: str, messages: list[Message], tools: list[Tool] | None = None) -> Message:
+    def complete(
+        self, model: str, messages: list[Message], tools: list[Tool] | None = None
+    ) -> Message:
         if not self.enabled():
             raise RuntimeError("model endpoint is not configured")
         selected_tools = tools or []
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": [message.to_dict() for message in messages],
-        }
-        if selected_tools:
-            payload["tools"] = [tool.to_dict() for tool in selected_tools]
-            payload["tool_choice"] = "auto"
+        if self.protocol == "openai-chat":
+            payload = _chat_payload(model, messages, selected_tools)
+        elif self.protocol == "openai-responses":
+            payload = _responses_payload(model, messages, selected_tools)
+        else:
+            payload = _anthropic_payload(model, messages, selected_tools)
         request = Request(
             self.endpoint,
             data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
             method="POST",
-            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": USER_AGENT,
+            },
         )
-        if self.api_key:
-            request.add_header("Authorization", f"Bearer {self.api_key}")
+        _add_auth_headers(request, self.protocol, self.api_key)
         try:
             with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - endpoint is operator configuration.
                 status = int(response.status)
@@ -189,20 +238,282 @@ class OpenAIClient:
         except HTTPError as error:
             status = int(error.code)
             data = error.read(MAX_RESPONSE_BYTES + 1)
-        except (URLError, TimeoutError, socket.timeout, OSError) as exc:
-            raise RuntimeError(f"call model: {exc}") from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise ModelCallError(
+                f"call model timed out: {exc}", timed_out=True
+            ) from exc
+        except (URLError, OSError) as exc:
+            raise ModelCallError(f"call model: {exc}") from exc
         if len(data) > MAX_RESPONSE_BYTES:
             raise RuntimeError("model response is too large")
         if status < 200 or status >= 300:
-            raise RuntimeError(f"model returned status {status}")
+            raise ModelCallError(
+                f"model returned status {status}",
+                status=status,
+                retryable=status in {408, 429} or status >= 500,
+            )
         try:
             result = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"decode model response: {exc}") from exc
-        choices = result.get("choices") if isinstance(result, Mapping) else None
-        if not isinstance(choices, list) or not choices:
-            raise RuntimeError("model response has no choice")
-        first = choices[0]
-        if not isinstance(first, Mapping) or not isinstance(first.get("message"), Mapping):
-            raise RuntimeError("model response has no choice")
-        return Message.from_dict(first["message"])
+            raise ModelCallError(f"decode model response: {exc}") from exc
+        if not isinstance(result, Mapping):
+            raise ModelCallError("model response is invalid")
+        if self.protocol == "openai-chat":
+            return _parse_chat_response(result)
+        if self.protocol == "openai-responses":
+            return _parse_responses_response(result)
+        return _parse_anthropic_response(result)
+
+
+def normalize_protocol(value: str) -> str:
+    protocol = value.strip().lower()
+    aliases = {
+        "": DEFAULT_PROTOCOL,
+        "openai": DEFAULT_PROTOCOL,
+        "chat": "openai-chat",
+        "responses": "openai-responses",
+        "response": "openai-responses",
+        "anthro": "anthropic",
+        "anthropic-messages": "anthropic",
+    }
+    normalized = aliases.get(protocol, protocol)
+    if normalized not in SUPPORTED_PROTOCOLS:
+        raise ValueError(f"unsupported model protocol: {value}")
+    return normalized
+
+
+def _add_auth_headers(request: Request, protocol: str, api_key: str) -> None:
+    key = api_key.strip()
+    if not key:
+        return
+    if protocol == "anthropic":
+        request.add_header("x-api-key", key)
+        request.add_header("anthropic-version", ANTHROPIC_VERSION)
+        return
+    request.add_header("Authorization", f"Bearer {key}")
+
+
+def _chat_payload(
+    model: str, messages: list[Message], tools: list[Tool]
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [message.to_dict() for message in messages],
+    }
+    if tools:
+        payload["tools"] = [tool.to_dict() for tool in tools]
+        payload["tool_choice"] = "auto"
+    return payload
+
+
+def _responses_payload(
+    model: str, messages: list[Message], tools: list[Tool]
+) -> dict[str, Any]:
+    instructions = "\n\n".join(
+        message.content
+        for message in messages
+        if message.role == "system" and message.content
+    )
+    payload: dict[str, Any] = {
+        "model": model,
+        "input": _responses_input(messages),
+    }
+    if instructions:
+        payload["instructions"] = instructions
+    if tools:
+        payload["tools"] = [
+            {
+                "type": "function",
+                "name": tool.function.name,
+                "description": tool.function.description,
+                "parameters": dict(tool.function.parameters),
+                **({"strict": True} if tool.function.strict else {}),
+            }
+            for tool in tools
+        ]
+        payload["tool_choice"] = "auto"
+    return payload
+
+
+def _responses_input(messages: list[Message]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "system":
+            continue
+        if message.role == "tool":
+            items.append(
+                {
+                    "type": "function_call_output",
+                    "call_id": message.tool_call_id,
+                    "output": message.content,
+                }
+            )
+            continue
+        if message.content:
+            items.append({"role": message.role, "content": message.content})
+        for call in message.tool_calls:
+            items.append(
+                {
+                    "type": "function_call",
+                    "call_id": call.id,
+                    "name": call.function.name,
+                    "arguments": call.function.arguments,
+                }
+            )
+    return items
+
+
+def _anthropic_payload(
+    model: str, messages: list[Message], tools: list[Tool]
+) -> dict[str, Any]:
+    system = "\n\n".join(
+        message.content
+        for message in messages
+        if message.role == "system" and message.content
+    )
+    payload: dict[str, Any] = {
+        "model": model,
+        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "messages": _anthropic_messages(messages),
+    }
+    if system:
+        payload["system"] = system
+    if tools:
+        payload["tools"] = [
+            {
+                "name": tool.function.name,
+                "description": tool.function.description,
+                "input_schema": dict(tool.function.parameters),
+            }
+            for tool in tools
+        ]
+    return payload
+
+
+def _anthropic_messages(messages: list[Message]) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for message in messages:
+        if message.role == "system":
+            continue
+        if message.role == "tool":
+            result.append(
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": message.tool_call_id,
+                            "content": message.content,
+                        }
+                    ],
+                }
+            )
+            continue
+        content: list[dict[str, Any]] = []
+        if message.content:
+            content.append({"type": "text", "text": message.content})
+        if message.role == "assistant":
+            for call in message.tool_calls:
+                try:
+                    arguments = json.loads(call.function.arguments or "{}")
+                except json.JSONDecodeError:
+                    arguments = {"_raw": call.function.arguments}
+                content.append(
+                    {
+                        "type": "tool_use",
+                        "id": call.id,
+                        "name": call.function.name,
+                        "input": arguments if isinstance(arguments, Mapping) else {},
+                    }
+                )
+        role = "assistant" if message.role == "assistant" else "user"
+        if content:
+            result.append({"role": role, "content": content})
+    return result
+
+
+def _parse_chat_response(result: Mapping[str, Any]) -> Message:
+    choices = result.get("choices")
+    if not isinstance(choices, list) or not choices:
+        raise RuntimeError("model response has no choice")
+    first = choices[0]
+    if not isinstance(first, Mapping) or not isinstance(first.get("message"), Mapping):
+        raise RuntimeError("model response has no choice")
+    return Message.from_dict(first["message"])
+
+
+def _parse_responses_response(result: Mapping[str, Any]) -> Message:
+    output = result.get("output")
+    if not isinstance(output, list):
+        output_text = result.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            return Message("assistant", output_text.strip())
+        raise RuntimeError("model response has no output")
+    texts: list[str] = []
+    calls: list[ToolCall] = []
+    for item in output:
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("type", "") or "") == "function_call":
+            calls.append(
+                ToolCall(
+                    str(item.get("call_id", item.get("id", "")) or ""),
+                    "function",
+                    FunctionCall(
+                        str(item.get("name", "") or ""),
+                        str(item.get("arguments", "") or ""),
+                    ),
+                )
+            )
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, Mapping):
+                continue
+            if str(block.get("type", "") or "") in {"output_text", "text"}:
+                text = str(block.get("text", "") or "").strip()
+                if text:
+                    texts.append(text)
+    if not texts and not calls:
+        output_text = result.get("output_text")
+        if isinstance(output_text, str) and output_text.strip():
+            texts.append(output_text.strip())
+        else:
+            raise RuntimeError("model response has no text or tool call")
+    return Message("assistant", "\n".join(texts), tool_calls=tuple(calls))
+
+
+def _parse_anthropic_response(result: Mapping[str, Any]) -> Message:
+    content = result.get("content")
+    if not isinstance(content, list):
+        raise RuntimeError("model response has no content")
+    texts: list[str] = []
+    calls: list[ToolCall] = []
+    for block in content:
+        if not isinstance(block, Mapping):
+            continue
+        block_type = str(block.get("type", "") or "")
+        if block_type == "text":
+            text = str(block.get("text", "") or "").strip()
+            if text:
+                texts.append(text)
+        elif block_type == "tool_use":
+            calls.append(
+                ToolCall(
+                    str(block.get("id", "") or ""),
+                    "function",
+                    FunctionCall(
+                        str(block.get("name", "") or ""),
+                        json.dumps(
+                            block.get("input", {}),
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
+                    ),
+                )
+            )
+    if not texts and not calls:
+        raise RuntimeError("model response has no text or tool call")
+    return Message("assistant", "\n".join(texts), tool_calls=tuple(calls))

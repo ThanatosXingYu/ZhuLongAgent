@@ -10,13 +10,19 @@ from fastapi import FastAPI
 
 from internal.attachment_tasks import AttachmentTaskManager
 from internal.cached import CachedService
-from internal.codex import CodexManager, ManagerConfig, ProcessConfig, ProcessRunner
+from internal.codex import (
+    CodexManager,
+    ManagerConfig,
+    ProcessConfig,
+    ProcessRunner,
+    prepare_model_catalog,
+)
 from internal.codex_skills import prepare_codex_skills
 from internal.config import Config, RuntimeConfigStore, load
 from internal.download import DownloadService
 from internal.events import EventBroker
 from internal.ichunqiu import AgentClient
-from internal.openai_client import OpenAIClient
+from internal.model_router import ModelRouter
 from internal.solver import SolverService
 from internal.tool_manager import ToolManager
 from internal.web import create_app
@@ -53,9 +59,9 @@ def build_application(config: Config | None = None) -> FastAPI:
         downloads, event_publisher=event_broker.publish
     )
     tools = ToolManager(workspace, event_publisher=event_broker.publish)
-    model = OpenAIClient(runtime.model_base_url, runtime.model_api_key, timeout=120.0)
+    model = ModelRouter(runtime)
     solver = SolverService(
-        cached, downloads, model, runtime.model_name, workspace / "writeups", workspace
+        cached, downloads, model, "auto", workspace / "writeups", workspace
     )
     binary = shutil.which("codex") or ""
     codex_home = runtime_root / "codex"
@@ -69,6 +75,9 @@ def build_application(config: Config | None = None) -> FastAPI:
             except OSError:
                 LOGGER.warning("无法迁移旧 Codex 数据目录，将继续使用新的目录")
     prepare_codex_skills(workspace, codex_home, runtime.codex_ctf_skills_enabled)
+    model_catalog_path = prepare_model_catalog(
+        binary, codex_home / "model-catalog.json", runtime.codex_model
+    )
     process_config = ProcessConfig(
         binary,
         str(workspace),
@@ -76,6 +85,8 @@ def build_application(config: Config | None = None) -> FastAPI:
         runtime.codex_api_key,
         runtime.codex_model,
         home=str(codex_home),
+        protocol=runtime.codex_protocol,
+        model_catalog_path=model_catalog_path,
     )
     codex = CodexManager(
         ManagerConfig(
@@ -111,9 +122,12 @@ def build_application(config: Config | None = None) -> FastAPI:
     def apply_runtime_config(updated: Config) -> None:
         cached.invalidate()
         attachment_tasks.reset_probe()
-        model.configure(updated.model_base_url, updated.model_api_key)
-        solver.configure_model(model, updated.model_name)
+        model.configure(updated)
+        solver.configure_model(model, "auto")
         prepare_codex_skills(workspace, codex_home, updated.codex_ctf_skills_enabled)
+        model_catalog_path = prepare_model_catalog(
+            binary, codex_home / "model-catalog.json", updated.codex_model
+        )
         codex.configure(
             ProcessConfig(
                 binary,
@@ -122,6 +136,8 @@ def build_application(config: Config | None = None) -> FastAPI:
                 updated.codex_api_key,
                 updated.codex_model,
                 home=str(codex_home),
+                protocol=updated.codex_protocol,
+                model_catalog_path=model_catalog_path,
             ),
             updated.codex_max_concurrency,
             updated.codex_system_prompt,

@@ -441,7 +441,10 @@ def render_exercise_block(data: _ExerciseData, workspace_root: Path) -> str:
             absolute = absolute_prompt_path(workspace_root, item.path)
             state = f"（已下载，{item.size} 字节）" if item.exists else "（尚未下载）"
             lines.append(f"- [{item.index}] {absolute}{state}\n")
-    lines.append("所有文件路径均为绝对路径。\n")
+    lines.append(
+        "所有文件路径均为绝对路径。附件下载状态是任务启动时的快照；"
+        "如果之后用户手动下载，请直接检查对应路径是否存在，不要只依赖状态文字。\n"
+    )
     return "".join(lines)
 
 

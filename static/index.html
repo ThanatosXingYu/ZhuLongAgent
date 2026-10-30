@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=20261031-auth12">
 </head>
 <body>
   <header class="topbar">
@@ -58,6 +58,9 @@
           <i data-lucide="terminal-square" aria-hidden="true"></i>
           <span>Codex</span>
           <span id="codex-active-count" class="codex-active-count">0/10</span>
+        </button>
+        <button id="open-model-routing" class="icon-button" type="button" title="模型提供商与轮询" aria-label="模型提供商与轮询">
+          <i data-lucide="route" aria-hidden="true"></i>
         </button>
         <button id="open-settings" class="icon-button" type="button" title="配置平台与模型" aria-label="配置平台与模型">
           <i data-lucide="settings-2" aria-hidden="true"></i>
@@ -250,7 +253,7 @@
       </button>
     </header>
     <div class="settings-form">
-      <p class="settings-hint">配置仅保存在当前目录。登录 Token 不会在页面回显，账号、密码与验证码不会保存。</p>
+      <p class="settings-hint">配置仅保存在当前目录。Token、Cookie 与粘贴的请求包不会在页面回显，账号、密码与验证码不会保存。</p>
       <section class="settings-section">
         <div class="settings-section-heading">
           <h3>i春秋比赛</h3>
@@ -265,7 +268,7 @@
         <form id="match-bind-form" class="platform-binding" novalidate>
           <label class="settings-field" for="setting-match-url">
             <span>比赛地址</span>
-            <input id="setting-match-url" name="matchUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://match.ichunqiu.com/wanqubei">
+            <input id="setting-match-url" name="matchUrl" type="url" inputmode="url" autocomplete="url" value="https://match.ichunqiu.com/2026qwbs10" placeholder="https://match.ichunqiu.com/2026qwbs10">
           </label>
           <label class="settings-field" for="setting-platform-token">
             <span>已有登录 Token</span>
@@ -307,10 +310,19 @@
           </div>
         </dl>
 
+        <div id="platform-authenticated-actions" class="platform-authenticated-actions" hidden>
+          <span>当前账号可生成跨电脑复用的登录态，请勿发送给他人。</span>
+          <button id="copy-authenticated-session" class="button button-ghost" type="button">
+            <i data-lucide="copy" aria-hidden="true"></i>
+            <span>复制登录态</span>
+          </button>
+        </div>
+
         <div id="platform-login" class="platform-login" hidden>
           <div class="login-mode" role="group" aria-label="登录方式">
             <button id="login-mode-password" class="login-mode-button is-active" type="button" aria-pressed="true">密码登录</button>
             <button id="login-mode-sms" class="login-mode-button" type="button" aria-pressed="false">短信验证码</button>
+            <button id="login-mode-session" class="login-mode-button" type="button" aria-pressed="false">粘贴登录</button>
           </div>
 
           <form id="password-login-form" class="login-panel" novalidate>
@@ -381,6 +393,25 @@
               </button>
             </div>
           </form>
+
+          <form id="session-login-form" class="login-panel" novalidate hidden>
+            <label class="settings-field session-import-field" for="session-request-packet">
+              <span>登录态</span>
+              <textarea id="session-request-packet" name="rawRequest" rows="8" maxlength="65536" spellcheck="false" placeholder="登录成功后会自动显示可跨电脑复用的登录态；也可粘贴其他 Agent 的登录态"></textarea>
+            </label>
+            <p class="captcha-help">当前账号登录成功后会自动生成可复制的登录态，也可粘贴其他 Agent 的登录态、cURL 或包含 token 的文本。该字符串包含登录凭据，请勿发送给他人。</p>
+            <div class="login-actions">
+              <span id="session-login-status" class="settings-status" role="status"></span>
+              <button id="copy-session-login" class="button button-ghost" type="button" disabled>
+                <i data-lucide="copy" aria-hidden="true"></i>
+                <span>复制登录态</span>
+              </button>
+              <button id="session-login" class="button button-primary" type="button">
+                <i data-lucide="clipboard-paste" aria-hidden="true"></i>
+                <span>导入登录态</span>
+              </button>
+            </div>
+          </form>
         </div>
       </section>
       <form id="settings-form" novalidate>
@@ -395,6 +426,18 @@
             <span>Codex 地址 <em class="required-mark">必填</em></span>
             <input id="setting-codex-base-url" name="codexBaseUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1">
           </label>
+          <div class="settings-field">
+            <span>模型协议</span>
+            <span class="select-wrap">
+              <select id="setting-codex-protocol" name="codexProtocol">
+                <option value="openai-responses" selected>OpenAI Responses</option>
+                <option value="openai-chat">OpenAI Chat</option>
+                <option value="anthropic">Anthropic Messages</option>
+              </select>
+              <i data-lucide="chevron-down" aria-hidden="true"></i>
+            </span>
+          </div>
+          <p class="settings-section-note">Codex CLI 原生使用 OpenAI Responses。选择 Chat 或 Anthropic 时，请填写可提供 OpenAI Responses 兼容入口的网关地址。</p>
           <label class="settings-field" for="setting-codex-model">
             <span>Codex 模型 <em class="required-mark">必填</em></span>
             <span class="model-picker">
@@ -429,24 +472,28 @@
           <p class="settings-section-note">默认关闭。开启后仅恢复仍有 Session ID 且原 Codex 子进程已经消失的任务，并继续沿用原任务与会话记录。</p>
         </section>
         <section class="settings-section settings-section-optional">
-          <h3>快捷 AI 调用 <span class="optional-badge">可选</span></h3>
-          <p class="settings-section-note">用于“AI 提示词”窗口中的一次性分析，和 Codex CLI 配置相互独立。</p>
-          <label class="settings-field" for="setting-model-base-url">
-            <span>模型地址</span>
-            <input id="setting-model-base-url" name="modelBaseUrl" type="url" inputmode="url" autocomplete="url" placeholder="https://api.example.com/v1">
-          </label>
-          <label class="settings-field" for="setting-model-name">
-            <span>模型名称</span>
-            <span class="model-picker">
-              <input id="setting-model-name" name="modelName" type="text" autocomplete="off" placeholder="先填写地址和 Key，再点击获取模型">
-              <button id="fetch-models" class="button button-ghost button-compact" type="button">获取模型</button>
-              <div id="model-options" class="model-options-menu" role="listbox" hidden aria-label="可用模型"></div>
-            </span>
-          </label>
-          <label class="settings-field" for="setting-model-api-key">
-            <span>模型 API Key</span>
-            <input id="setting-model-api-key" name="modelApiKey" type="password" autocomplete="new-password" placeholder="未配置">
-          </label>
+          <div class="settings-section-heading">
+            <div>
+              <h3>模型提供商与轮询 <span class="optional-badge">可选</span></h3>
+              <p class="settings-section-note">多提供商、轮询、重试和恢复策略已独立配置。</p>
+            </div>
+            <button id="open-model-routing-settings" class="button button-ghost" type="button">
+              <i data-lucide="route" aria-hidden="true"></i>
+              <span>打开模型配置</span>
+            </button>
+          </div>
+          <div hidden>
+            <input id="setting-model-base-url" name="modelBaseUrl" type="url">
+            <input id="setting-model-name" name="modelName" type="text">
+            <select id="setting-model-protocol" name="modelProtocol">
+              <option value="openai-responses">OpenAI Responses</option>
+              <option value="openai-chat" selected>OpenAI Chat</option>
+              <option value="anthropic">Anthropic Messages</option>
+            </select>
+            <input id="setting-model-api-key" name="modelApiKey" type="password">
+            <button id="fetch-models" type="button">获取模型</button>
+            <div id="model-options"></div>
+          </div>
         </section>
         <footer class="settings-actions">
           <span id="settings-status" class="settings-status" role="status"></span>
@@ -458,6 +505,61 @@
       </form>
     </div>
   </dialog>
+
+  <section id="model-routing-page" class="model-routing-page" aria-labelledby="model-routing-title" tabindex="-1" hidden>
+    <header class="model-routing-page-header">
+      <div>
+        <p class="eyebrow">Model Routing</p>
+        <h2 id="model-routing-title">模型提供商与轮询</h2>
+      </div>
+      <button id="close-model-routing" class="icon-button" type="button" title="关闭" aria-label="关闭模型配置">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="model-routing-page-body">
+      <div class="settings-form model-routing-form">
+      <p class="settings-hint">勾选参与轮询的提供商。API Key 不会在页面回显，留空表示保留原值。</p>
+      <section class="settings-section">
+        <div class="settings-section-heading">
+          <div>
+            <h3>路由策略</h3>
+            <p class="settings-section-note">每次请求轮询适合分散负载；故障转移会先重试当前提供商，再切换下一家。</p>
+          </div>
+          <button id="add-model-provider" class="button button-ghost button-compact" type="button">
+            <i data-lucide="plus" aria-hidden="true"></i>
+            <span>添加提供商</span>
+          </button>
+        </div>
+        <div class="settings-field">
+          <span>策略</span>
+          <div class="login-mode routing-mode" role="group" aria-label="模型轮询策略">
+            <button class="login-mode-button is-active" type="button" data-routing="round-robin" aria-pressed="true">每次请求轮询</button>
+            <button class="login-mode-button" type="button" data-routing="failover" aria-pressed="false">错误后故障转移</button>
+          </div>
+        </div>
+        <label class="settings-field" for="model-retry-delays">
+          <span>重试间隔（秒）</span>
+          <input id="model-retry-delays" type="text" inputmode="decimal" value="1,5,10,10,15" placeholder="1,5,10,10,15">
+        </label>
+        <label class="settings-field" for="model-recovery-interval">
+          <span>恢复检测（秒）</span>
+          <input id="model-recovery-interval" type="number" min="10" max="3600" step="1" value="60">
+        </label>
+      </section>
+      <section class="settings-section">
+        <h3>提供商</h3>
+        <div id="model-provider-list" class="model-provider-list"></div>
+      </section>
+      <footer class="settings-actions">
+        <span id="model-routing-status" class="settings-status" role="status"></span>
+        <button id="save-model-routing" class="button button-primary" type="button">
+          <i data-lucide="save" aria-hidden="true"></i>
+          <span>保存模型路由</span>
+        </button>
+      </footer>
+      </div>
+    </div>
+  </section>
 
   <dialog id="attachment-manager-dialog" class="attachment-manager-dialog" aria-labelledby="attachment-manager-title">
     <header class="dialog-header attachment-manager-header">
@@ -639,11 +741,27 @@
               <i data-lucide="play" aria-hidden="true"></i>
               <span>继续</span>
             </button>
-            <button id="codex-task-compose" class="button button-ghost" type="button" disabled>
-              <i data-lucide="message-square-plus" aria-hidden="true"></i>
-              <span>再次输入</span>
+            <button id="codex-task-compose" class="button button-ghost" type="button" title="发送内置恢复提示词" disabled>
+              <i data-lucide="rotate-ccw" aria-hidden="true"></i>
+              <span>恢复</span>
             </button>
-            <details id="codex-more-menu" class="codex-more-menu">
+            <details id="codex-wp-menu" class="codex-more-menu codex-wp-menu" data-codex-action-menu>
+              <summary class="button button-ghost" aria-label="一键生成 WriteUp">
+                <i data-lucide="file-text" aria-hidden="true"></i>
+                <span>一键WP</span>
+              </summary>
+              <div class="codex-more-menu-popover">
+                <button id="codex-wp-desensitized" type="button" disabled>
+                  <i data-lucide="shield-check"></i>
+                  <span>脱敏版 WP</span>
+                </button>
+                <button id="codex-wp-raw" type="button" disabled>
+                  <i data-lucide="file-text"></i>
+                  <span>未脱敏 WP</span>
+                </button>
+              </div>
+            </details>
+            <details id="codex-more-menu" class="codex-more-menu" data-codex-action-menu>
               <summary class="button button-ghost" aria-label="更多 Codex 操作">
                 <i data-lucide="more-horizontal" aria-hidden="true"></i>
                 <span>更多</span>
@@ -739,6 +857,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script type="module" src="/app.js"></script>
+  <script type="module" src="/app.js?v=20261031-auth12"></script>
 </body>
 </html>

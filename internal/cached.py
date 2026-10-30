@@ -18,6 +18,7 @@ from .agent import (
     Overview,
 )
 from .ichunqiu_api import AuthStatus, BindResult, CaptchaImage, LoginResult
+from .ichunqiu_session import ImportedSession
 
 MAX_RATE_LIMIT_RETRIES = 5
 RETRY_BASE_DELAY = 0.250
@@ -27,7 +28,17 @@ K = TypeVar("K")
 
 
 class SourceProtocol(Protocol):
-    def bind_match(self, match_url: str, supplied_token: str = "") -> BindResult: ...
+    def bind_match(
+        self,
+        match_url: str,
+        supplied_token: str = "",
+        supplied_match_key: str = "",
+        cookie_header: str = "",
+    ) -> BindResult: ...
+
+    def import_session(
+        self, match_url: str, raw_request: str
+    ) -> tuple[BindResult, ImportedSession]: ...
 
     def auth_status(self) -> AuthStatus: ...
 
@@ -146,8 +157,24 @@ class CachedService:
         with self._cache_lock:
             self._reset_caches()
 
-    def bind_match(self, match_url: str, supplied_token: str = "") -> BindResult:
-        return self.source.bind_match(match_url, supplied_token)
+    def bind_match(
+        self,
+        match_url: str,
+        supplied_token: str = "",
+        supplied_match_key: str = "",
+        cookie_header: str = "",
+    ) -> BindResult:
+        return self.source.bind_match(
+            match_url,
+            supplied_token,
+            supplied_match_key,
+            cookie_header,
+        )
+
+    def import_session(
+        self, match_url: str, raw_request: str
+    ) -> tuple[BindResult, ImportedSession]:
+        return self.source.import_session(match_url, raw_request)
 
     def auth_status(self) -> AuthStatus:
         return self.source.auth_status()

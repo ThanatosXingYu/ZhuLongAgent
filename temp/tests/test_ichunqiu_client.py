@@ -22,6 +22,7 @@ from internal.ichunqiu_api import (
     LoginResult,
 )
 from internal.ichunqiu_crypto import API_ORIGIN, request_signature
+from internal.ichunqiu_session import ImportedSession
 from internal.web import AgentProtocol, create_app
 
 
@@ -251,7 +252,7 @@ def test_api_encrypts_login_fields_and_proxies_only_fixed_captcha_path() -> None
 
     api = IChunQiuAPI(lambda: config, transport=transport)
     login = api.login_password("demo-account", "password123")
-    assert login == LoginResult("login:not-a-real-token", "authenticated-match-key")
+    assert login == LoginResult("login:not-a-real-token", "resolved-match-key")
     assert captured["account"] == "CNApD92V5OkjpA-c0ok3hw"
     assert captured["password"] == "vVRhIPfcDM3_avGchWcaqw"
     assert "demo-account" not in json.dumps(captured)
@@ -280,6 +281,47 @@ def test_api_uses_match_source_id_for_sms_area() -> None:
     )
 
     assert captured["area_id"] == "Gk_hVuLTvTg"
+
+
+def test_api_reuses_sms_send_context_when_global_context_changes() -> None:
+    initial = Config(
+        match_url="https://match.ichunqiu.com/demo-match",
+        match_key="send-match-key",
+        platform_token="anonymous:send-token",
+        match_source_id="Gk_hVuLTvTg",
+    )
+    current = [initial]
+    payloads: list[dict[str, Any]] = []
+
+    def transport(request: Request, _timeout: float, _maximum: int) -> HTTPResponse:
+        path = urlsplit(request.full_url).path
+        payload = _payload(request)
+        _assert_signed_request(request, payload)
+        payloads.append(payload)
+        if path == "/common/sms/send_code":
+            return _json_response({"code": 0, "message": "", "data": None})
+        assert path == "/match/p_login"
+        return _json_response(
+            {
+                "code": 0,
+                "message": "登录成功",
+                "data": {"token": "login:sms-token", "url_key": "account-key"},
+            }
+        )
+
+    api = IChunQiuAPI(lambda: current[0], transport=transport)
+    api.send_sms_code("86", "13800138000", 180)
+    current[0] = Config(
+        match_url=initial.match_url,
+        match_key="refreshed-match-key",
+        platform_token="anonymous:refreshed-token",
+        match_source_id=initial.match_source_id,
+    )
+    login = api.login_sms("13800138000", "123456")
+
+    assert payloads[0]["k"] == payloads[1]["k"] == "send-match-key"
+    assert payloads[0]["token"] == payloads[1]["token"] == "anonymous:send-token"
+    assert login == LoginResult("login:sms-token", "refreshed-match-key")
 
 
 def test_api_logout_uses_authenticated_match_context() -> None:
@@ -365,6 +407,91 @@ def test_api_maps_authenticated_team_information() -> None:
         "rank": 7,
         "memberCount": 3,
     }
+
+
+def test_api_reuses_recent_authentication_status_for_rapid_checks() -> None:
+    calls = 0
+    config = Config(
+        match_url="https://match.ichunqiu.com/demo-match",
+        match_key="resolved-match-key",
+        platform_token="login:not-a-real-token",
+    )
+
+    def transport(request: Request, timeout: float, _maximum: int) -> HTTPResponse:
+        nonlocal calls
+        assert urlsplit(request.full_url).path == "/match/team/info"
+        assert timeout == 8.0
+        calls += 1
+        return _json_response(
+            {
+                "code": 0,
+                "message": "",
+                "data": {"team_name": "缓存测试队", "team_rank": 2},
+            }
+        )
+
+    api = IChunQiuAPI(lambda: config, transport=transport)
+
+    first = api.auth_status()
+    second = api.auth_status()
+
+    assert first.authenticated is True
+    assert second == first
+    assert calls == 1
+
+
+def test_agent_imports_cookies_token_and_match_key_from_request_packet() -> None:
+    calls: list[str] = []
+
+    def transport(request: Request, _timeout: float, _maximum: int) -> HTTPResponse:
+        path = urlsplit(request.full_url).path
+        payload = _payload(request)
+        calls.append(path)
+        assert payload["k"] == "imported-match-key"
+        assert payload["token"] == "login:imported-token"
+        assert "PHPSESSID=session-value" in str(request.get_header("Cookie", ""))
+        if path == "/match/detail":
+            return _json_response(
+                {
+                    "code": 0,
+                    "message": "",
+                    "data": {
+                        "url_key": "imported-match-key",
+                        "title": "导入比赛",
+                        "login_type": 4,
+                    },
+                }
+            )
+        if path == "/match/team/info":
+            return _json_response(
+                {
+                    "code": 0,
+                    "message": "",
+                    "data": {"team_name": "导入队伍", "team_rank": 1},
+                }
+            )
+        raise AssertionError(path)
+
+    agent = AgentClient(config_provider=lambda: Config(), transport=transport)
+    raw_request = """POST /match/team/info HTTP/1.1
+Host: apiterminator.ichunqiu.com
+Cookie: PHPSESSID=session-value
+Referer: https://match.ichunqiu.com/2026qwbs10
+Content-Type: application/json
+
+{"k":"imported-match-key","token":"login:imported-token","team_id":""}"""
+
+    result, imported = agent.import_session(
+        "https://match.ichunqiu.com/2026qwbs10",
+        raw_request,
+    )
+
+    assert calls == ["/match/detail", "/match/team/info"]
+    assert imported.cookies == "PHPSESSID=session-value"
+    assert result.match_key == "imported-match-key"
+    assert result.platform_token == "login:imported-token"
+    assert result.authenticated is True
+    assert result.auth_status.team_name == "导入队伍"
 
 
 def test_agent_maps_questions_flags_notices_and_environments() -> None:
@@ -826,6 +953,100 @@ def test_platform_web_flows_persist_but_never_return_tokens(tmp_path: Path) -> N
     assert source.invalidations == 5
 
 
+def test_platform_exports_portable_session_only_after_login(tmp_path: Path) -> None:
+    store = RuntimeConfigStore(
+        Config(
+            match_url="https://match.ichunqiu.com/demo-match",
+            match_key="resolved-match-key",
+            platform_token="login:portable-token",
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    app = create_app(cast(AgentProtocol, PlatformStub()), config_store=store)
+    with TestClient(app) as client:
+        rejected = client.get("/api/platform/session-export")
+        exported = client.get(
+            "/api/platform/session-export",
+            headers={"X-GCSIS-Action": "platform-auth"},
+        )
+
+    assert rejected.status_code == 403
+    assert exported.status_code == 200
+    session = exported.json()["data"]["session"]
+    assert session.startswith("ichunqiu-login-v1:")
+    assert "login:portable-token" not in exported.text
+
+    anonymous_store = RuntimeConfigStore(
+        Config(
+            match_url="https://match.ichunqiu.com/demo-match",
+            match_key="resolved-match-key",
+            platform_token="anonymous:not-a-real-token",
+        ),
+        tmp_path / "anonymous.json",
+    )
+    anonymous_app = create_app(
+        cast(AgentProtocol, PlatformStub()), config_store=anonymous_store
+    )
+    with TestClient(anonymous_app) as client:
+        anonymous = client.get(
+            "/api/platform/session-export",
+            headers={"X-GCSIS-Action": "platform-auth"},
+        )
+    assert anonymous.status_code == 409
+    assert anonymous.json()["error"]["code"] == "PLATFORM_NOT_AUTHENTICATED"
+
+
+def test_platform_session_import_persists_extracted_material_without_echo(
+    tmp_path: Path,
+) -> None:
+    class ImportStub(PlatformStub):
+        def import_session(
+            self, match_url: str, raw_request: str
+        ) -> tuple[BindResult, ImportedSession]:
+            assert match_url == "https://match.ichunqiu.com/2026qwbs10"
+            assert "login:imported-token" in raw_request
+            return (
+                BindResult(
+                    match_url,
+                    "imported-match-key",
+                    "login:imported-token",
+                    {"title": "导入比赛", "login_type": 4},
+                    True,
+                    AuthStatus(True, "导入队伍"),
+                ),
+                ImportedSession(
+                    "login:imported-token",
+                    "PHPSESSID=session-value",
+                    "imported-match-key",
+                    match_url,
+                ),
+            )
+
+    store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
+    app = create_app(
+        cast(AgentProtocol, ImportStub()),
+        config_store=store,
+    )
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/platform/import-session",
+            headers={"X-GCSIS-Action": "platform-auth"},
+            json={
+                "matchUrl": "https://match.ichunqiu.com/2026qwbs10",
+                "rawRequest": "Cookie: PHPSESSID=session-value\ntoken=login:imported-token",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["authenticated"] is True
+    assert response.json()["data"]["authStatus"]["teamName"] == "导入队伍"
+    assert "login:imported-token" not in response.text
+    assert "PHPSESSID" not in response.text
+    persisted = store.get()
+    assert persisted.platform_token == "login:imported-token"
+    assert persisted.platform_cookies == "PHPSESSID=session-value"
+
+
 def test_platform_logout_replaces_login_with_anonymous_context(tmp_path: Path) -> None:
     source = PlatformStub()
     store = RuntimeConfigStore(
@@ -1256,6 +1477,28 @@ def test_platform_rejects_expired_login_token(tmp_path: Path) -> None:
     assert response.json()["data"]["message"] == "token已失效"
 
 
+def test_platform_does_not_treat_ended_match_as_authenticated(tmp_path: Path) -> None:
+    class EndedMatchStub(PlatformStub):
+        def auth_status(self) -> AuthStatus:
+            return AuthStatus(False, message="比赛已结束", error_code="203")
+
+    store = RuntimeConfigStore(
+        Config(
+            match_url="https://match.ichunqiu.com/demo-match",
+            match_key="resolved-match-key",
+            platform_token="login:individual:not-a-real-token",
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    app = create_app(cast(AgentProtocol, EndedMatchStub()), config_store=store)
+    with TestClient(app) as client:
+        response = client.get("/api/platform/auth")
+
+    assert response.status_code == 200
+    assert response.json()["data"]["authenticated"] is False
+    assert response.json()["data"]["message"] == "比赛已结束"
+
+
 def test_platform_login_keeps_token_when_team_context_is_unavailable(
     tmp_path: Path,
 ) -> None:
@@ -1292,4 +1535,60 @@ def test_platform_login_keeps_token_when_team_context_is_unavailable(
         "rank": None,
         "memberCount": None,
     }
+
+
+def test_platform_login_does_not_hide_form_after_token_rejection(
+    tmp_path: Path,
+) -> None:
+    class RejectedLoginStub(PlatformStub):
+        def auth_status(self) -> AuthStatus:
+            return AuthStatus(False, message="token已失效", error_code="114")
+
+    store = RuntimeConfigStore(
+        Config(
+            match_url="https://match.ichunqiu.com/demo-match",
+            match_key="resolved-match-key",
+            platform_token="anonymous:not-a-real-token",
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    app = create_app(cast(AgentProtocol, RejectedLoginStub()), config_store=store)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/platform/login/sms",
+            headers={"X-GCSIS-Action": "platform-auth"},
+            json={"phone": "13800138000", "smsCode": "123456"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["authenticated"] is False
+    assert response.json()["data"]["message"] == "token已失效"
+
+
+def test_platform_login_succeeds_when_match_context_is_temporarily_missing(
+    tmp_path: Path,
+) -> None:
+    class MissingMatchStub(PlatformStub):
+        def auth_status(self) -> AuthStatus:
+            return AuthStatus(False, message="暂无比赛信息", error_code="101")
+
+    store = RuntimeConfigStore(
+        Config(
+            match_url="https://match.ichunqiu.com/demo-match",
+            match_key="resolved-match-key",
+            platform_token="anonymous:not-a-real-token",
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+    app = create_app(cast(AgentProtocol, MissingMatchStub()), config_store=store)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/platform/login/sms",
+            headers={"X-GCSIS-Action": "platform-auth"},
+            json={"phone": "13800138000", "smsCode": "123456"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["authenticated"] is True
+    assert response.json()["data"]["message"] == "已登录，比赛信息暂不可用"
     assert store.get().platform_token == "login:sms:not-a-real-token"

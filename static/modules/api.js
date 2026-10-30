@@ -17,8 +17,11 @@ export function createApiClient({
     let response;
     try {
       response = await fetch(path, { credentials: "same-origin", ...options });
-    } catch {
+    } catch (error) {
       onConnection("error");
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new RequestError("请求超时，请重试", "REQUEST_TIMEOUT");
+      }
       throw new RequestError("无法连接到本地服务", "NETWORK_ERROR");
     }
 

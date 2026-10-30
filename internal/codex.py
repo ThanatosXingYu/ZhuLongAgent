@@ -80,6 +80,8 @@ class ProcessConfig:
     home: str = ""
     resume_session_id: str = ""
     fork_session: bool = False
+    protocol: str = "openai-responses"
+    model_catalog_path: str = ""
 
 
 @dataclass(frozen=True)
@@ -233,6 +235,8 @@ class ProcessRunner:
                 for line in iter(stream.readline, ""):
                     if not line.strip():
                         continue
+                    if kind_override == "stderr" and _ignore_stderr_line(line):
+                        continue
                     event = parse_event_line(line, datetime.now(timezone.utc), redactor)
                     if kind_override == "stderr":
                         kind = _stderr_event_kind(event.summary)
@@ -356,13 +360,24 @@ def build_command(
             "-c",
             f"model_providers.gcsis-codex.env_key={quote(API_KEY_ENVIRONMENT)}",
             "-c",
-            f"model_providers.gcsis-codex.wire_api={quote('responses')}",
+            f"model_providers.gcsis-codex.wire_api={quote(_codex_wire_api(config.protocol))}",
+            *(
+                ["-c", f"model_catalog_json={quote(config.model_catalog_path)}"]
+                if config.model_catalog_path
+                else []
+            ),
             "-o",
             config.output_path,
             "-",
         ]
     )
     return command
+
+
+def _codex_wire_api(_protocol: str) -> str:
+    # Codex CLI natively speaks Responses. Anthropic deployments therefore
+    # need to expose an OpenAI Responses-compatible gateway.
+    return "responses"
 
 
 def build_interactive_command(
@@ -399,7 +414,12 @@ def build_interactive_command(
             "-c",
             f"model_providers.gcsis-codex.env_key={quote(API_KEY_ENVIRONMENT)}",
             "-c",
-            f"model_providers.gcsis-codex.wire_api={quote('responses')}",
+            f"model_providers.gcsis-codex.wire_api={quote(_codex_wire_api(config.protocol))}",
+            *(
+                ["-c", f"model_catalog_json={quote(config.model_catalog_path)}"]
+                if config.model_catalog_path
+                else []
+            ),
             "resume",
             session_id,
         ]
@@ -485,6 +505,75 @@ def _prepare_codex_home(config: ProcessConfig) -> str:
     return str(home)
 
 
+def prepare_model_catalog(binary: str, path: str | Path, model: str) -> str:
+    """Create a Codex model catalog containing all bundled and custom models."""
+
+    selected_model = model.strip()
+    if not binary or not selected_model:
+        return ""
+    try:
+        completed = subprocess.run(
+            [binary, "debug", "models", "--bundled"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        payload = json.loads(completed.stdout)
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        LOGGER.warning("无法读取 Codex 内置模型目录", exc_info=exc)
+        return ""
+    models = payload.get("models") if isinstance(payload, Mapping) else None
+    if not isinstance(models, list) or not models:
+        return ""
+    normalized = [dict(item) for item in models if isinstance(item, Mapping)]
+    existing = next(
+        (
+            item
+            for item in normalized
+            if str(item.get("slug", "") or "") == selected_model
+        ),
+        None,
+    )
+    if existing is None:
+        template = next(
+            (
+                item
+                for item in normalized
+                if str(item.get("slug", "") or "") == "gpt-5.6-luna"
+            ),
+            normalized[0],
+        )
+        custom = json.loads(json.dumps(template))
+        custom["slug"] = selected_model
+        custom["display_name"] = selected_model
+        custom["description"] = "Custom OpenAI Chat model routed by the local workbench."
+        normalized.append(custom)
+    target = Path(path)
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{target.name}.", dir=str(target.parent)
+        )
+        temporary = Path(temporary_name)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                json.dump(
+                    {"models": normalized},
+                    handle,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            temporary.chmod(0o600)
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+    except OSError as exc:
+        LOGGER.warning("无法保存 Codex 模型目录", exc_info=exc)
+        return ""
+    return str(target.resolve())
+
+
 def _process_environment(api_key: str, codex_home: str) -> dict[str, str]:
     private_keys = {API_KEY_ENVIRONMENT, CODEX_HOME_ENVIRONMENT}
     env = {key: value for key, value in os.environ.items() if key not in private_keys}
@@ -508,6 +597,17 @@ def _stderr_event_kind(message: str) -> str:
     if any(marker in normalized for marker in warning_markers):
         return "warning"
     return "stderr"
+
+
+def _ignore_stderr_line(message: str) -> bool:
+    normalized = " ".join(message.casefold().split())
+    ignored_markers = (
+        "codex_core_plugins::manager: remote installed plugin bundle sync failed",
+        "codex_core_plugins::manager: failed to warm featured plugin ids cache",
+        "codex_core_plugins::startup_sync: git sync failed",
+        "codex_core_plugins::manifest: ignoring interface.defaultprompt",
+    )
+    return any(marker in normalized for marker in ignored_markers)
 
 
 class Redactor:
@@ -913,7 +1013,7 @@ class CodexManager:
         system_prompt: str | None = None,
         auto_resume_interrupted: bool | None = None,
     ) -> None:
-        """Apply provider settings for tasks started after the update."""
+        """Apply provider settings and refresh tasks before their next process."""
 
         with self._condition:
             was_enabled = self.enabled()
@@ -923,6 +1023,8 @@ class CodexManager:
             self.config = replace(
                 self.config, process=process, max_concurrency=selected_limit
             )
+            for task in self._tasks.values():
+                task.config = self._runtime_process_config_locked(task.config)
             if system_prompt is not None:
                 self.system_prompt = (
                     system_prompt.strip() or DEFAULT_CODEX_SYSTEM_PROMPT
@@ -946,6 +1048,7 @@ class CodexManager:
                     if task.snapshot.status == "queued":
                         self._queue.put(task.snapshot.id)
             self._auto_resume_interrupted_locked()
+            self._persist_tasks_locked()
             self._condition.notify_all()
 
     def _auto_resume_interrupted_locked(self) -> None:
@@ -1172,6 +1275,8 @@ class CodexManager:
                 raise CodexError("Codex 会话尚未建立，暂时不能打开对话")
             if task.snapshot.status == "running":
                 raise CodexError("任务正在运行，请停止后再打开对话")
+            task.config = self._runtime_process_config_locked(task.config)
+            self._persist_tasks_locked()
             config = task.config
 
         workspace = Path(config.workspace).resolve()
@@ -1306,7 +1411,7 @@ class CodexManager:
                 snapshot,
                 normalized,
                 replace(
-                    parent.config,
+                    self._runtime_process_config_locked(parent.config),
                     output_path=str(output_path),
                     resume_session_id="",
                     fork_session=False,
@@ -1389,6 +1494,8 @@ class CodexManager:
                 process.model,
                 str(output_path),
                 process.home,
+                protocol=process.protocol,
+                model_catalog_path=process.model_catalog_path,
             ),
         )
         with self._condition:
@@ -1708,9 +1815,10 @@ class CodexManager:
             Path(task.config.output_path).parent.mkdir(
                 parents=True, exist_ok=True, mode=0o700
             )
-            redactor = Redactor(self.config.process.api_key)
             while True:
                 with self._condition:
+                    task.config = self._runtime_process_config_locked(task.config)
+                    redactor = Redactor(task.config.api_key)
                     round_number = task.snapshot.rounds_started + 1
                     now = datetime.now(timezone.utc)
                     pending_processing = bool(task.snapshot.pending_message)
@@ -2192,15 +2300,17 @@ class CodexManager:
         restored_config = ProcessConfig(
             binary=current.binary,
             workspace=current.workspace,
-            base_url=str(config_data.get("baseUrl", "") or current.base_url),
+            base_url=current.base_url,
             api_key=current.api_key,
-            model=str(config_data.get("model", "") or current.model),
+            model=current.model,
             output_path=output_path,
             home=current.home,
+            model_catalog_path=current.model_catalog_path,
             resume_session_id=str(
                 config_data.get("resumeSessionId", "") or snapshot.session_id
             ),
             fork_session=bool(config_data.get("forkSession", False)),
+            protocol=current.protocol,
         )
         pending_followup = str(entry.get("pendingFollowup", "") or "")
         stop_reason = (
@@ -2214,6 +2324,19 @@ class CodexManager:
             restored_config,
             pending_followup=pending_followup,
             stop_reason=stop_reason,
+        )
+
+    def _runtime_process_config_locked(self, task_config: ProcessConfig) -> ProcessConfig:
+        current = self.config.process
+        return replace(
+            task_config,
+            binary=current.binary,
+            base_url=current.base_url,
+            api_key=current.api_key,
+            model=current.model,
+            home=current.home,
+            protocol=current.protocol,
+            model_catalog_path=current.model_catalog_path,
         )
 
     def _persist_tasks_locked(self) -> None:
@@ -2281,8 +2404,10 @@ class CodexManager:
                 "workspace": config.workspace,
                 "baseUrl": config.base_url,
                 "model": config.model,
+                "protocol": config.protocol,
                 "outputPath": config.output_path,
                 "home": config.home,
+                "modelCatalogPath": config.model_catalog_path,
                 "resumeSessionId": config.resume_session_id,
                 "forkSession": config.fork_session,
             },

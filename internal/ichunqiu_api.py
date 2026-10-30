@@ -10,9 +10,10 @@ import os
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from http.cookiejar import CookieJar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http import HTTPStatus
 from pathlib import Path
 from datetime import datetime, timezone
@@ -41,6 +42,9 @@ from .ichunqiu_crypto import (
 
 MAX_JSON_RESPONSE_BYTES = 4 * 1024 * 1024
 MAX_CAPTCHA_BYTES = 2 * 1024 * 1024
+AUTH_CACHE_TTL_SECONDS = 20.0
+AUTH_TIMEOUT_SECONDS = 8.0
+COOKIE_SESSION_TOKEN = "cookie:"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -69,13 +73,20 @@ class HTTPResponse:
 Transport = Callable[[Request, float, int], HTTPResponse]
 
 
-@dataclass(frozen=True)
-class BindResult:
-    match_url: str
-    match_key: str
-    platform_token: str
-    match: Mapping[str, Any]
-    authenticated: bool
+class _LockedCookieProcessor(HTTPCookieProcessor):
+    """Serialize CookieJar access without serializing network requests."""
+
+    def __init__(self, jar: CookieJar, lock: threading.RLock) -> None:
+        super().__init__(jar)
+        self._lock = lock
+
+    def http_request(self, request: Request) -> Request:
+        with self._lock:
+            return super().http_request(request)
+
+    def http_response(self, request: Request, response: Any) -> Any:
+        with self._lock:
+            return super().http_response(request, response)
 
 
 @dataclass(frozen=True)
@@ -112,6 +123,16 @@ class AuthStatus:
 
 
 @dataclass(frozen=True)
+class BindResult:
+    match_url: str
+    match_key: str
+    platform_token: str
+    match: Mapping[str, Any]
+    authenticated: bool
+    auth_status: AuthStatus = field(default_factory=lambda: AuthStatus(False))
+
+
+@dataclass(frozen=True)
 class CaptchaImage:
     body: bytes
     content_type: str
@@ -135,26 +156,59 @@ class IChunQiuAPI:
         # between captcha, SMS and login requests, matching browser behavior.
         self._cookies = CookieJar()
         self._session_lock = threading.RLock()
+        self._cookie_local = threading.local()
+        self._auth_lock = threading.RLock()
+        self._auth_cache: tuple[tuple[str, str, str], float, AuthStatus] | None = None
+        self._sms_context: tuple[str, str, float] | None = None
         self._schema_path = Path(schema_path) if schema_path else None
         self._schema_lock = threading.RLock()
         self._schema_state: dict[str, dict[str, Any]] = {}
         self._schema_changes: list[dict[str, Any]] = []
         self._load_schema_state()
 
-    def bind_match(self, match_url: str, supplied_token: str = "") -> BindResult:
+    def bind_match(
+        self,
+        match_url: str,
+        supplied_token: str = "",
+        supplied_match_key: str = "",
+        cookie_header: str = "",
+    ) -> BindResult:
+        with self._cookie_scope(cookie_header):
+            return self._bind_match(
+                match_url,
+                supplied_token,
+                supplied_match_key,
+                bool(cookie_header.strip()),
+            )
+
+    def _bind_match(
+        self,
+        match_url: str,
+        supplied_token: str,
+        supplied_match_key: str,
+        cookie_login: bool,
+    ) -> BindResult:
         address = parse_match_url(match_url)
         config = self._config_provider()
+        requested_match_key = supplied_match_key.strip()
+        existing_match_key = config.match_key.strip()
         reuse_existing_context = bool(
             supplied_token.strip()
-            and config.match_key.strip()
-            and config.match_url.rstrip("/") == address.normalized_url.rstrip("/")
+            and (
+                requested_match_key
+                or (
+                    existing_match_key
+                    and config.match_url.rstrip("/")
+                    == address.normalized_url.rstrip("/")
+                )
+            )
         )
-        existing_match_key = config.match_key.strip()
+        effective_match_key = requested_match_key or existing_match_key
         if reuse_existing_context:
             match = self.post(
                 "/match/detail",
-                {"url_key": existing_match_key, "is_encrypt": 1},
-                match_key=existing_match_key,
+                {"url_key": effective_match_key, "is_encrypt": 1},
+                match_key=effective_match_key,
                 token=supplied_token.strip(),
             )
         elif address.encrypted_binding:
@@ -172,7 +226,7 @@ class IChunQiuAPI:
         # ``url_key`` field, but that value is not interchangeable with the
         # query access key and using it breaks the authenticated context.
         match_key = (
-            existing_match_key
+            effective_match_key
             if reuse_existing_context
             else address.entry_key
             or str(match_data.get("url_key", "") or "").strip()
@@ -181,6 +235,8 @@ class IChunQiuAPI:
             raise APIError("INVALID_MATCH", "比赛接口未返回有效访问参数")
 
         token = supplied_token.strip()
+        if not token and cookie_login:
+            token = COOKIE_SESSION_TOKEN
         supplied_login = bool(token)
         if not supplied_login:
             token_data = _mapping(
@@ -205,10 +261,36 @@ class IChunQiuAPI:
             platform_token=token,
             match=match_data,
             authenticated=status.authenticated,
+            auth_status=status,
         )
 
     def auth_status(
         self, *, match_key: str | None = None, token: str | None = None
+    ) -> AuthStatus:
+        config = self._config_provider()
+        selected_key = (
+            config.match_key.strip() if match_key is None else match_key.strip()
+        )
+        selected_token = (
+            config.platform_token.strip() if token is None else token.strip()
+        )
+        cache_key = (selected_key, selected_token, config.platform_cookies.strip())
+        now = time.monotonic()
+        with self._auth_lock:
+            cached = self._auth_cache
+            if cached is not None and cached[0] == cache_key and cached[1] > now:
+                return cached[2]
+        status = self._fetch_auth_status(match_key, token)
+        with self._auth_lock:
+            self._auth_cache = (
+                cache_key,
+                time.monotonic() + AUTH_CACHE_TTL_SECONDS,
+                status,
+            )
+        return status
+
+    def _fetch_auth_status(
+        self, match_key: str | None, token: str | None
     ) -> AuthStatus:
         try:
             data = _mapping(
@@ -217,6 +299,7 @@ class IChunQiuAPI:
                     {"team_id": ""},
                     match_key=match_key,
                     token=token,
+                    timeout=min(self._timeout, AUTH_TIMEOUT_SECONDS),
                 )
             )
         except APIError as exc:
@@ -246,6 +329,10 @@ class IChunQiuAPI:
             ),
         )
 
+    def invalidate_auth_cache(self) -> None:
+        with self._auth_lock:
+            self._auth_cache = None
+
     def login_password(
         self, account: str, password: str, image_code: str = ""
     ) -> LoginResult:
@@ -263,6 +350,7 @@ class IChunQiuAPI:
 
     def send_sms_code(self, area_id: str, phone: str, rotation: int) -> None:
         area_id = self._resolve_sms_area_id(area_id)
+        match_key, token = self._settings()
         self.post(
             "/common/sms/send_code",
             {
@@ -270,7 +358,11 @@ class IChunQiuAPI:
                 "phone": encrypt_login_field(phone),
                 "img_code": str(rotation),
             },
+            match_key=match_key,
+            token=token,
         )
+        with self._session_lock:
+            self._sms_context = (match_key, token, time.monotonic())
 
     def _resolve_sms_area_id(self, requested: str) -> str:
         config = self._config_provider()
@@ -299,6 +391,14 @@ class IChunQiuAPI:
         return requested
 
     def login_sms(self, phone: str, sms_code: str) -> LoginResult:
+        with self._session_lock:
+            sms_context = self._sms_context
+        context_valid = (
+            sms_context is not None
+            and time.monotonic() - sms_context[2] <= 10 * 60
+        )
+        context_match_key = sms_context[0] if context_valid and sms_context else None
+        context_token = sms_context[1] if context_valid and sms_context else None
         data = _mapping(
             self.post(
                 "/match/p_login",
@@ -307,8 +407,12 @@ class IChunQiuAPI:
                     "sms_code": encrypt_login_field(sms_code),
                     "img_code": "",
                 },
+                match_key=context_match_key,
+                token=context_token,
             )
         )
+        with self._session_lock:
+            self._sms_context = None
         return self._login_result(data)
 
     def logout(self) -> None:
@@ -347,6 +451,7 @@ class IChunQiuAPI:
         *,
         match_key: str | None = None,
         token: str | None = None,
+        timeout: float | None = None,
     ) -> Any:
         if not path.startswith("/") or "?" in path or "#" in path:
             raise ValueError("invalid fixed API path")
@@ -354,7 +459,8 @@ class IChunQiuAPI:
             configured_key, configured_token = self._settings()
             match_key = configured_key if match_key is None else match_key
             token = configured_token if token is None else token
-        payload = build_request_payload(values, match_key, token)
+        wire_token = "" if token == COOKIE_SESSION_TOKEN else token
+        payload = build_request_payload(values, match_key, wire_token)
         body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
             "utf-8"
         )
@@ -363,7 +469,11 @@ class IChunQiuAPI:
         request.add_header("Content-Type", "application/json;charset=UTF-8")
         request.add_header("SIGN", request_signature(payload))
         try:
-            response = self._send(request, MAX_JSON_RESPONSE_BYTES)
+            response = self._send(
+                request,
+                MAX_JSON_RESPONSE_BYTES,
+                timeout=self._timeout if timeout is None else timeout,
+            )
         except (HTTPError, URLError, TimeoutError, socket.timeout, OSError) as exc:
             raise RuntimeError("请求 i春秋接口失败") from exc
         return self._decode_json(response, path=path, payload=payload)
@@ -398,9 +508,11 @@ class IChunQiuAPI:
         token = str(data.get("token", "") or "").strip()
         if not token:
             raise APIError("INVALID_TOKEN", "登录成功响应中没有 Token")
-        match_key = str(data.get("url_key", "") or "").strip()
+        # Login responses return an account-specific ``url_key`` that is not
+        # interchangeable with the competition ``k`` used by the bound page.
+        match_key = self._config_provider().match_key.strip()
         if not match_key:
-            match_key = self._config_provider().match_key.strip()
+            match_key = str(data.get("url_key", "") or "").strip()
         if not match_key:
             raise APIError("INVALID_MATCH", "登录成功响应中没有比赛访问参数")
         LOGGER.info(
@@ -419,19 +531,21 @@ class IChunQiuAPI:
             raise PlatformNotConfigured("比赛尚未绑定")
         return match_key, token
 
-    def _send(self, request: Request, maximum: int) -> HTTPResponse:
+    def _send(
+        self, request: Request, maximum: int, *, timeout: float | None = None
+    ) -> HTTPResponse:
+        selected_timeout = self._timeout if timeout is None else timeout
         if self._transport is not None:
-            response = self._transport(request, self._timeout, maximum)
+            response = self._transport(request, selected_timeout, maximum)
             if len(response.body) > maximum:
                 raise RuntimeError("i春秋响应体过大")
             return response
         try:
-            with self._session_lock:
-                opener = build_opener(
-                    ProxyHandler(getproxies()),
-                    HTTPCookieProcessor(self._cookies),
-                )
-                response = opener.open(request, timeout=self._timeout)  # noqa: S310 - origin is fixed above.
+            opener = build_opener(
+                ProxyHandler(getproxies()),
+                _LockedCookieProcessor(self._cookies, self._session_lock),
+            )
+            response = opener.open(request, timeout=selected_timeout)  # noqa: S310 - origin is fixed above.
             with response:
                 body = response.read(maximum + 1)
                 if len(body) > maximum:
@@ -571,14 +685,41 @@ class IChunQiuAPI:
         except OSError:
             LOGGER.warning("无法保存平台接口字段诊断", exc_info=True)
 
-    @staticmethod
-    def _add_browser_headers(request: Request) -> None:
+    def _add_browser_headers(self, request: Request) -> None:
         request.add_header("Accept", "application/json, text/plain, */*")
         request.add_header("Accept-Language", "zh-CN,zh;q=0.9")
         request.add_header("Origin", MATCH_ORIGIN)
         request.add_header("Referer", f"{MATCH_ORIGIN}/")
         request.add_header("User-Agent", USER_AGENT)
         request.add_header("X-Lang", "zh-CN")
+        self._add_cookie_header(request)
+
+    def _add_cookie_header(self, request: Request) -> None:
+        with self._session_lock:
+            self._cookies.add_cookie_header(request)
+        session_cookie = str(request.get_header("Cookie", "") or "")
+        imported_cookie = str(getattr(self._cookie_local, "override", "") or "")
+        if imported_cookie:
+            # A pasted request is the newest source during import. Afterwards,
+            # cookies refreshed by captcha/login responses take precedence.
+            combined = _merge_cookie_headers(session_cookie, imported_cookie)
+        else:
+            combined = _merge_cookie_headers(
+                self._config_provider().platform_cookies,
+                session_cookie,
+            )
+        if combined:
+            request.add_header("Cookie", combined)
+
+    @contextmanager
+    def _cookie_scope(self, cookie_header: str) -> Iterator[None]:
+        normalized = cookie_header.strip()
+        previous = str(getattr(self._cookie_local, "override", "") or "")
+        self._cookie_local.override = normalized
+        try:
+            yield
+        finally:
+            self._cookie_local.override = previous
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:
@@ -633,6 +774,16 @@ def _schema_fields(data: Any) -> set[str]:
                 fields.update(str(key) for key in item)
         return fields
     return set()
+
+
+def _merge_cookie_headers(*values: str) -> str:
+    cookies: dict[str, str] = {}
+    for value in values:
+        for part in value.split(";"):
+            name, separator, cookie_value = part.strip().partition("=")
+            if separator and name and len(name) <= 256 and len(cookie_value) <= 4096:
+                cookies[name] = cookie_value
+    return "; ".join(f"{name}={value}" for name, value in cookies.items())
 
 
 def datetime_now_wire() -> str:
