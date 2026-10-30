@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261031-auth12">
+  <link rel="stylesheet" href="/styles.css?v=20261031-auth13">
 </head>
 <body>
   <header class="topbar">
@@ -715,8 +715,8 @@
     </footer>
   </dialog>
 
-  <dialog id="codex-task-dialog" class="codex-task-dialog" aria-labelledby="codex-task-title">
-    <header class="dialog-header">
+  <section id="codex-task-page" class="codex-task-page" aria-labelledby="codex-task-title" tabindex="-1" hidden>
+    <header class="dialog-header codex-task-page-header">
       <div>
         <p class="eyebrow">Local Codex Runner</p>
         <h2 id="codex-task-title">Codex 会话树</h2>
@@ -813,7 +813,7 @@
         </div>
       </section>
     </div>
-  </dialog>
+  </section>
 
 
   <dialog id="codex-task-details-dialog" class="codex-task-details-dialog" aria-labelledby="codex-task-details-title">
@@ -857,6 +857,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script type="module" src="/app.js?v=20261031-auth12"></script>
+  <script type="module" src="/app.js?v=20261031-auth13"></script>
 </body>
 </html>

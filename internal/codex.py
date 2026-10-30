@@ -558,6 +558,10 @@ def prepare_model_catalog(
         custom["slug"] = candidate_model
         custom["display_name"] = candidate_model
         custom["description"] = "Custom OpenAI Chat model routed by the local workbench."
+        custom["context_window"] = 128_000
+        custom["max_context_window"] = 128_000
+        custom["auto_compact_token_limit"] = 110_000
+        custom["effective_context_window_percent"] = 90
         normalized.append(custom)
         existing_slugs.add(candidate_model)
     target = Path(path)
@@ -1764,7 +1768,12 @@ class CodexManager:
                         if process_alive
                         else "程序退出导致任务运行被中断"
                     ),
+                    pending_message="",
+                    pending_status="",
+                    pending_created_at=None,
+                    pending_started_at=None,
                 )
+                task.pending_followup = ""
                 self._append_event_locked(
                     task,
                     Event(
@@ -1832,22 +1841,15 @@ class CodexManager:
                     redactor = Redactor(task.config.api_key)
                     round_number = task.snapshot.rounds_started + 1
                     now = datetime.now(timezone.utc)
-                    pending_processing = bool(task.snapshot.pending_message)
                     task.snapshot = _replace_snapshot(
                         task.snapshot,
                         status="running",
                         current_round=round_number,
                         rounds_started=round_number,
-                        pending_status=(
-                            "processing"
-                            if pending_processing
-                            else task.snapshot.pending_status
-                        ),
-                        pending_started_at=(
-                            now
-                            if pending_processing
-                            else task.snapshot.pending_started_at
-                        ),
+                        pending_message="",
+                        pending_status="",
+                        pending_created_at=None,
+                        pending_started_at=None,
                     )
                     self._append_event_locked(
                         task,
@@ -1949,6 +1951,16 @@ class CodexManager:
                     continue
 
                 if reason == "shutdown":
+                    with self._condition:
+                        task.pending_followup = ""
+                        task.snapshot = _replace_snapshot(
+                            task.snapshot,
+                            pending_message="",
+                            pending_status="",
+                            pending_created_at=None,
+                            pending_started_at=None,
+                        )
+                        self._persist_tasks_locked()
                     return
 
                 if reason == "followup_canceled" and (

@@ -2164,6 +2164,7 @@ def test_prepare_model_catalog_keeps_bundled_models(
         "gpt-5.6-luna",
         "deepseek-v4.1-flash",
     ]
+    assert models[1]["auto_compact_token_limit"] == 110_000
 
 
 def test_codex_interactive_resume_uses_only_supported_options(tmp_path: Path) -> None:
@@ -2647,6 +2648,70 @@ def test_codex_pending_message_can_be_edited_and_canceled(tmp_path: Path) -> Non
     assert "user.followup_queued" in kinds
     assert "user.followup_updated" in kinds
     assert "user.followup_canceled" in kinds
+    manager.close()
+
+
+def test_codex_pending_message_clears_when_next_round_starts(tmp_path: Path) -> None:
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult("prompt", False, "", exercise_id, "Web", "pending")
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.first_started = threading.Event()
+            self.release_first = threading.Event()
+            self.second_started = threading.Event()
+            self.release_second = threading.Event()
+
+        def run(
+            self, config: ProcessConfig, _prompt: str, on_event, _cancel
+        ) -> ProcessResult:
+            self.calls += 1
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("done", encoding="utf-8")
+            on_event(
+                Event(
+                    datetime.now(timezone.utc),
+                    "thread.started",
+                    "session",
+                    session_id="session-pending-clear",
+                )
+            )
+            if self.calls == 1:
+                self.first_started.set()
+                assert self.release_first.wait(timeout=5)
+            else:
+                self.second_started.set()
+                assert self.release_second.wait(timeout=5)
+            return ProcessResult(0, "done", "session-pending-clear")
+
+    runner = Runner()
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            runner,
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    task = manager.start(7)
+    assert runner.first_started.wait(timeout=2)
+    queued = manager.follow_up(task.id, "next question")
+    assert queued.pending_message == "next question"
+    runner.release_first.set()
+    assert runner.second_started.wait(timeout=2)
+    running = manager.get(task.id)
+    assert running.status == "running"
+    assert running.pending_message == ""
+    assert running.pending_status == ""
+    manager.follow_up(task.id, "third question")
+    runner.release_second.set()
     manager.close()
 
 

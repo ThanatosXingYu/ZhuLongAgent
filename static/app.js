@@ -45,6 +45,7 @@ import { createAppState } from "./modules/state.js";
   let modelRoutingStrategy = "round-robin";
   let modelProviderSequence = 0;
   let modelRoutingTrigger = null;
+  let codexTaskTrigger = null;
 
   const $ = (id) => document.getElementById(id);
   let dialogLayerSequence = 0;
@@ -190,7 +191,7 @@ import { createAppState } from "./modules/state.js";
     installSelectedTools: $("install-selected-tools"),
     installAllTools: $("install-all-tools"),
     saveSettings: $("save-settings"),
-    codexTaskDialog: $("codex-task-dialog"),
+    codexTaskPage: $("codex-task-page"),
     codexTaskList: $("codex-task-list"),
     codexTaskStatus: $("codex-task-status"),
     codexTaskMeta: $("codex-task-meta"),
@@ -3800,7 +3801,7 @@ import { createAppState } from "./modules/state.js";
 
   function stopCodexPollingIfIdle() {
     const active = state.codexTasks.some((task) => ["running", "queued"].includes(task.status));
-    if (!active && !els.codexTaskDialog.open && state.codexPollTimer) {
+    if (!active && els.codexTaskPage.hidden && state.codexPollTimer) {
       window.clearInterval(state.codexPollTimer);
       state.codexPollTimer = null;
     }
@@ -3863,7 +3864,7 @@ import { createAppState } from "./modules/state.js";
         }
       }
       const active = state.codexTasks.some((task) => ["running", "queued"].includes(task.status));
-      if (active || els.codexTaskDialog.open) ensureCodexPolling();
+      if (active || !els.codexTaskPage.hidden) ensureCodexPolling();
       else stopCodexPollingIfIdle();
       return result;
     } catch (error) {
@@ -3900,10 +3901,32 @@ import { createAppState } from "./modules/state.js";
     });
   }
 
-  function openCodexTaskDialog() {
-    openDialog(els.codexTaskDialog);
+  function openCodexTaskPage(trigger = null) {
+    codexTaskTrigger = trigger instanceof HTMLElement ? trigger : document.activeElement;
+    if (!els.modelRoutingPage.hidden) closeModelRoutingPage();
+    els.codexTaskPage.hidden = false;
+    document.body.classList.add("codex-task-open");
+    document.querySelector(".topbar")?.setAttribute("inert", "");
+    document.querySelector("main.workspace")?.setAttribute("inert", "");
     ensureCodexPolling();
     void loadCodexTasks();
+    window.requestAnimationFrame(() => els.codexTaskPage.focus());
+  }
+
+  function closeCodexTaskPage() {
+    els.codexTaskPage.hidden = true;
+    document.body.classList.remove("codex-task-open");
+    document.querySelector(".topbar")?.removeAttribute("inert");
+    document.querySelector("main.workspace")?.removeAttribute("inert");
+    const focusTarget = codexTaskTrigger;
+    codexTaskTrigger = null;
+    if (
+      focusTarget instanceof HTMLElement
+      && focusTarget.isConnected
+      && focusTarget.offsetParent !== null
+    ) focusTarget.focus();
+    else els.openCodexTasks.focus();
+    stopCodexPollingIfIdle();
   }
 
   function openCodexPromptDialog(mode) {
@@ -3938,7 +3961,7 @@ import { createAppState } from "./modules/state.js";
           body: JSON.stringify({ systemPrompt }),
         });
         state.codexSelectedTaskId = task.taskId || task.id;
-        openCodexTaskDialog();
+        openCodexTaskPage();
         showToast(isPure ? "Codex 纯解题任务已提交" : "Codex 任务已提交", "success");
         await loadCodexTasks();
       } catch (error) {
@@ -4255,7 +4278,7 @@ import { createAppState } from "./modules/state.js";
       stopAttachmentSizePolling();
     } else {
       const activeCodex = state.codexTasks.some((task) => ["running", "queued"].includes(task.status));
-      if (activeCodex || els.codexTaskDialog?.open) ensureCodexPolling();
+      if (activeCodex || !els.codexTaskPage.hidden) ensureCodexPolling();
     }
   }
 
@@ -4447,7 +4470,6 @@ import { createAppState } from "./modules/state.js";
         dialog.addEventListener("close", () => {
           delete dialog.dataset.dialogLayer;
           syncToastRegionHost(dialog);
-          if (dialog === els.codexTaskDialog) stopCodexPollingIfIdle();
         });
         dialog.addEventListener("click", (event) => {
           if (event.target === dialog) closeDialog(dialog);
@@ -4597,8 +4619,8 @@ import { createAppState } from "./modules/state.js";
   }
 
   function bindCodexEvents() {
-    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-dialog", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
-      els.openCodexTasks.addEventListener("click", openCodexTaskDialog);
+    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-page", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
+      els.openCodexTasks.addEventListener("click", (event) => openCodexTaskPage(event.currentTarget));
       els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
       els.codexTaskCompose.addEventListener("click", () => void sendCodexRecoveryPrompt());
       els.codexWpDesensitized.addEventListener("click", () => void sendCodexWpPrompt(true));
@@ -4641,8 +4663,10 @@ import { createAppState } from "./modules/state.js";
       els.cancelCodexStart.addEventListener("click", () => closeDialog(els.codexPromptDialog));
       $("close-codex-prompt").addEventListener("click", () => closeDialog(els.codexPromptDialog));
       $("close-codex-tasks").addEventListener("click", () => {
-        closeDialog(els.codexTaskDialog);
-        stopCodexPollingIfIdle();
+        closeCodexTaskPage();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && !els.codexTaskPage.hidden) closeCodexTaskPage();
       });
     });
   }

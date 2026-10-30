@@ -81,8 +81,8 @@ class EventBroker:
     def publish(self, event_type: str, resource_id: str, data: EventData) -> None:
         """Publish without waiting for any browser subscriber."""
 
-        event = self._new_event(event_type, resource_id, data)
         with self._lock:
+            event = self._new_event_locked(event_type, resource_id, data)
             self._events.append(event)
             subscribers = tuple(self._subscribers.values())
         for subscriber in subscribers:
@@ -158,12 +158,17 @@ class EventBroker:
     def _new_event(
         self, event_type: str, resource_id: str, data: EventData
     ) -> RealtimeEvent:
+        with self._lock:
+            return self._new_event_locked(event_type, resource_id, data)
+
+    def _new_event_locked(
+        self, event_type: str, resource_id: str, data: EventData
+    ) -> RealtimeEvent:
         normalized_type = event_type.strip() or "message"
         normalized_resource = resource_id.strip()
-        with self._lock:
-            now_seed = int(time.time_ns() // 1_000_000) * 1000
-            self._next_id = max(self._next_id + 1, now_seed)
-            event_id = self._next_id
+        now_seed = int(time.time_ns() // 1_000_000) * 1000
+        self._next_id = max(self._next_id + 1, now_seed)
+        event_id = self._next_id
         return RealtimeEvent(
             id=event_id,
             type=normalized_type,

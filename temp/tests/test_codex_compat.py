@@ -1,8 +1,16 @@
 from __future__ import annotations
 
 import json
+from typing import Any
 
-from internal.codex_compat import build_chat_bridge, build_response_sse
+import pytest
+
+import internal.codex_compat as compat_module
+from internal.codex_compat import (
+    build_chat_bridge,
+    build_response_sse,
+    stream_chat_response,
+)
 from internal.openai_client import FunctionCall, Message, ToolCall
 
 
@@ -73,3 +81,67 @@ def test_codex_bridge_emits_text_and_function_call_sse() -> None:
         "function_call",
     ]
     assert completed["output"][1]["name"] == "exec_command"
+
+
+def test_codex_bridge_streams_chat_deltas(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def __iter__(self):
+            chunks = [
+                {
+                    "choices": [
+                        {"delta": {"reasoning_content": "thinking"}}
+                    ]
+                },
+                {"choices": [{"delta": {"content": "STREAM"}}]},
+                {"choices": [{"delta": {"content": "_OK"}}]},
+            ]
+            for chunk in chunks:
+                yield (
+                    "data: "
+                    + json.dumps(chunk, separators=(",", ":"))
+                    + "\n\n"
+                ).encode()
+            yield b"data: [DONE]\n\n"
+
+    monkeypatch.setattr(compat_module, "urlopen", lambda *_args, **_kwargs: Response())
+    bridge = build_chat_bridge(
+        {
+            "model": "deepseek-v4.1-flash",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                }
+            ],
+        },
+        "fallback",
+    )
+    stream = b"".join(
+        stream_chat_response(
+            bridge,
+            base_url="https://provider.example/v1",
+            api_key="secret",
+        )
+    ).decode()
+    events = [
+        json.loads(line.removeprefix("data: "))
+        for line in stream.splitlines()
+        if line.startswith("data: ")
+    ]
+    deltas = [
+        event["delta"]
+        for event in events
+        if event["type"] == "response.output_text.delta"
+    ]
+
+    assert deltas == ["STREAM", "_OK"]
+    assert events[-1]["type"] == "response.completed"

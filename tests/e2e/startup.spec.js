@@ -51,8 +51,10 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await openWorkbench(page, { state: { codexTasks: [main, side] } });
 
   await page.locator("#open-codex-tasks").click();
-  const dialog = page.locator("#codex-task-dialog");
-  await expect(dialog).toHaveAttribute("open", "");
+  const taskPage = page.locator("#codex-task-page");
+  await expect(taskPage).toBeVisible();
+  await expect(page.locator("body")).toHaveClass(/codex-task-open/);
+  await expect(page.locator(".topbar")).toHaveAttribute("inert", "");
 
   const sideRow = page.locator(".codex-tree-row", { hasText: "仅输出 123" });
   await sideRow.locator(".codex-tree-item").click();
@@ -64,10 +66,11 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await page.locator("#codex-more-menu summary").click();
   await page.locator("#open-codex-folder").click();
   await expect(page.locator(".toast.success")).toContainText("已打开题目目录");
-  await expect(page.locator("#toast-region")).toHaveJSProperty("parentElement", await dialog.elementHandle());
+  expect(await page.locator("#toast-region").evaluate((node) => node.parentElement === document.body)).toBeTruthy();
 
   await page.locator("#close-codex-tasks").click();
-  await expect(dialog).not.toHaveAttribute("open", "");
+  await expect(taskPage).toBeHidden();
+  await expect(page.locator("body")).not.toHaveClass(/codex-task-open/);
 
   await page.locator("#open-match-info").click();
   await expect(page.locator("#match-info-dialog")).toHaveAttribute("open", "");
@@ -79,6 +82,34 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await expect(settings).toHaveAttribute("open", "");
   await page.mouse.click(5, 5);
   await expect(settings).not.toHaveAttribute("open", "");
+});
+
+test("Codex 全屏会话页右侧整体可滚动到输入区", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  const events = Array.from({ length: 40 }, (_, index) => ({
+    sequence: index + 1,
+    roundNumber: 1,
+    at: `2026-09-15T01:00:${String(index % 60).padStart(2, "0")}Z`,
+    kind: "agent_message",
+    summary: `长日志 ${index + 1} ${"detail ".repeat(20)}`,
+  }));
+  const longTask = task({
+    events,
+    logCount: events.length,
+    output: "final output\n".repeat(120),
+  });
+  await openWorkbench(page, { state: { codexTasks: [longTask] } });
+  await page.locator("#open-codex-tasks").click();
+  await page.locator(".codex-final-output summary").click();
+
+  const detail = page.locator(".codex-task-detail");
+  expect(await detail.evaluate((node) => node.scrollHeight > node.clientHeight)).toBeTruthy();
+  await detail.evaluate((node) => {
+    node.scrollTop = node.scrollHeight;
+  });
+  const inputBox = await page.locator("#codex-task-message").boundingBox();
+  expect(inputBox).not.toBeNull();
+  expect(inputBox.y + inputBox.height).toBeLessThanOrEqual(600);
 });
 
 test("Codex 警告分级、Side 请求正文与 SSE 增量更新保持正确", async ({ page }) => {
