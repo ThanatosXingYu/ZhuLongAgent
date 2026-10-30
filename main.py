@@ -80,6 +80,7 @@ def build_application(config: Config | None = None) -> FastAPI:
         codex_home / "model-catalog.json",
         runtime.codex_model,
         ("deepseek-v4-flash",),
+        runtime.codex_auto_compact_token_limit,
     )
     process_config = ProcessConfig(
         binary,
@@ -133,6 +134,7 @@ def build_application(config: Config | None = None) -> FastAPI:
             codex_home / "model-catalog.json",
             updated.codex_model,
             ("deepseek-v4-flash",),
+            updated.codex_auto_compact_token_limit,
         )
         codex.configure(
             ProcessConfig(

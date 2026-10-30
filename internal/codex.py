@@ -21,7 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Protocol, cast
 
-from .config import DEFAULT_CODEX_MAX_CONCURRENCY, DEFAULT_CODEX_SYSTEM_PROMPT
+from .config import (
+    DEFAULT_CODEX_AUTO_COMPACT_TOKEN_LIMIT,
+    DEFAULT_CODEX_CONTEXT_WINDOW,
+    DEFAULT_CODEX_MAX_CONCURRENCY,
+    DEFAULT_CODEX_SYSTEM_PROMPT,
+)
 from .events import EventPublisher
 from .solver import PromptResult, safe_writeup_segment
 
@@ -518,7 +523,11 @@ def _prepare_codex_home(config: ProcessConfig) -> str:
 
 
 def prepare_model_catalog(
-    binary: str, path: str | Path, model: str, aliases: tuple[str, ...] = ()
+    binary: str,
+    path: str | Path,
+    model: str,
+    aliases: tuple[str, ...] = (),
+    auto_compact_token_limit: int = DEFAULT_CODEX_AUTO_COMPACT_TOKEN_LIMIT,
 ) -> str:
     """Create a Codex model catalog containing all bundled and custom models."""
 
@@ -558,9 +567,9 @@ def prepare_model_catalog(
         custom["slug"] = candidate_model
         custom["display_name"] = candidate_model
         custom["description"] = "Custom OpenAI Chat model routed by the local workbench."
-        custom["context_window"] = 128_000
-        custom["max_context_window"] = 128_000
-        custom["auto_compact_token_limit"] = 110_000
+        custom["context_window"] = DEFAULT_CODEX_CONTEXT_WINDOW
+        custom["max_context_window"] = DEFAULT_CODEX_CONTEXT_WINDOW
+        custom["auto_compact_token_limit"] = auto_compact_token_limit
         custom["effective_context_window_percent"] = 90
         normalized.append(custom)
         existing_slugs.add(candidate_model)

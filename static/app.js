@@ -106,6 +106,7 @@ import { createAppState } from "./modules/state.js";
     addModelProvider: $("add-model-provider"),
     modelRetryDelays: $("model-retry-delays"),
     modelRecoveryInterval: $("model-recovery-interval"),
+    codexAutoCompactTokenLimit: $("codex-auto-compact-limit"),
     modelRoutingStatus: $("model-routing-status"),
     saveModelRouting: $("save-model-routing"),
     openToolManager: $("open-tool-manager"),
@@ -730,6 +731,7 @@ import { createAppState } from "./modules/state.js";
       setRoutingStrategy(config.modelRoutingStrategy || "round-robin");
       els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
       els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
+      els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
       setModelRoutingStatus("勾选参与轮询的提供商");
       refreshIcons();
     } catch (error) {
@@ -759,6 +761,7 @@ import { createAppState } from "./modules/state.js";
             modelRoutingStrategy,
             modelRetryDelays: delays,
             modelRecoveryInterval: Number(els.modelRecoveryInterval.value || 60),
+            codexAutoCompactTokenLimit: Number(els.codexAutoCompactTokenLimit.value || 500000),
           }),
         });
         fillRuntimeConfig(config);
@@ -4588,7 +4591,7 @@ import { createAppState } from "./modules/state.js";
   }
 
   function bindModelRoutingEvents() {
-    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "model-retry-delays", "model-recovery-interval", "model-routing-status", "save-model-routing"], () => {
+    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "model-retry-delays", "model-recovery-interval", "codex-auto-compact-limit", "model-routing-status", "save-model-routing"], () => {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);

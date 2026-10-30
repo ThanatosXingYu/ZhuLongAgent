@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261031-auth13">
+  <link rel="stylesheet" href="/styles.css?v=20261031-auth14">
 </head>
 <body>
   <header class="topbar">
@@ -547,6 +547,18 @@
         </label>
       </section>
       <section class="settings-section">
+        <div class="settings-section-heading">
+          <div>
+            <h3>Codex 自动压缩</h3>
+            <p class="settings-section-note">上下文达到该 token 数时由 Codex 自动压缩。上下文窗口上限或该阈值谁先触发，就先执行压缩。</p>
+          </div>
+        </div>
+        <label class="settings-field" for="codex-auto-compact-limit">
+          <span>自动压缩阈值（token）</span>
+          <input id="codex-auto-compact-limit" type="number" min="16384" max="872000" step="1000" value="500000">
+        </label>
+      </section>
+      <section class="settings-section">
         <h3>提供商</h3>
         <div id="model-provider-list" class="model-provider-list"></div>
       </section>
@@ -857,6 +869,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script type="module" src="/app.js?v=20261031-auth13"></script>
+  <script type="module" src="/app.js?v=20261031-auth14"></script>
 </body>
 </html>

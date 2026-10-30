@@ -67,7 +67,7 @@ export async function installApiMock(page, overrides = {}) {
         configured: true, matchUrl: "https://match.example/competition", matchTitle: "Regression CTF",
         modelBaseUrl: "", modelName: "", codexBaseUrl: "http://model", codexModel: "deepseek-v4-flash",
         modelProtocol: "openai-chat", codexProtocol: "openai-responses",
-        codexMaxConcurrency: 10, codexSystemPrompt: "", codexCtfSkillsEnabled: true,
+        codexMaxConcurrency: 10, codexAutoCompactTokenLimit: 500000, codexSystemPrompt: "", codexCtfSkillsEnabled: true,
         codexAutoResumeInterrupted: false, modelApiKeyConfigured: false, codexApiKeyConfigured: true,
       }; break;
       case "/api/platform/auth": data = { authenticated: true, teamName: "QA Team", userName: "Tester", score: 100, rank: 1, memberCount: 2, organization: "Lab" }; break;

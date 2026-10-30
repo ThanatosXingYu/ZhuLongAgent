@@ -305,12 +305,14 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator('[data-routing="failover"]').click();
   await page.locator("#model-retry-delays").fill("1,5,10,10,15");
   await page.locator("#model-recovery-interval").fill("60");
+  await expect(page.locator("#codex-auto-compact-limit")).toHaveValue("500000");
   await page.locator("#save-model-routing").click();
 
   await expect.poll(() => requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body).toMatchObject({
     modelRoutingStrategy: "failover",
     modelRetryDelays: [1, 5, 10, 10, 15],
     modelRecoveryInterval: 60,
+    codexAutoCompactTokenLimit: 500000,
   });
   const saved = requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body;
   expect(saved.modelProviders).toHaveLength(2);

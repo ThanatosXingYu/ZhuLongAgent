@@ -23,6 +23,8 @@ MODEL_PROTOCOLS = frozenset({"openai-responses", "openai-chat", "anthropic"})
 DEFAULT_MODEL_RETRY_DELAYS = "1,5,10,10,15"
 DEFAULT_MODEL_RECOVERY_INTERVAL = 60
 DEFAULT_CODEX_MAX_CONCURRENCY = 10
+DEFAULT_CODEX_AUTO_COMPACT_TOKEN_LIMIT = 500_000
+DEFAULT_CODEX_CONTEXT_WINDOW = 872_000
 DEFAULT_CODEX_SYSTEM_PROMPT = """你是通过本机 Codex CLI 启动的受限 CTF 解题代理。请只处理这一个题目。
 阅读项目中的 docs/api_doc.md，所有竞赛操作都通过已启动的本地 Web API 完成；禁止读取 runtime/config.json 或 .runtime-config.json，禁止直接访问 i春秋上游接口，也不要在终端输出、最终回答、WP 或文件中暴露任何凭据。
 如果存在，请先阅读 tools/installed-tools.txt，了解本工作台已经安装的工具、命令入口和基本用法；优先从 tools/ 目录调用工具。解题过程中产生的题目文件、脚本和临时文件必须保存到本题对应的题目工作目录，不能污染其他目录；如确需额外工具，可以从可信来源下载到该题目目录后使用，但不得写入系统目录。
@@ -62,6 +64,7 @@ class Config:
     codex_model: str = ""
     codex_protocol: str = DEFAULT_CODEX_PROTOCOL
     codex_max_concurrency: int = DEFAULT_CODEX_MAX_CONCURRENCY
+    codex_auto_compact_token_limit: int = DEFAULT_CODEX_AUTO_COMPACT_TOKEN_LIMIT
     codex_system_prompt: str = ""
     codex_ctf_skills_enabled: bool = True
     codex_auto_resume_interrupted: bool = False
@@ -146,6 +149,11 @@ class RuntimeConfigStore:
                 codex_max_concurrency=_int_value(
                     values, "codex_max_concurrency", current.codex_max_concurrency
                 ),
+                codex_auto_compact_token_limit=_int_value(
+                    values,
+                    "codex_auto_compact_token_limit",
+                    current.codex_auto_compact_token_limit,
+                ),
                 codex_system_prompt=_value(
                     values, "codex_system_prompt", current.codex_system_prompt
                 ),
@@ -194,6 +202,7 @@ class RuntimeConfigStore:
             "codexApiKeyConfigured": bool(config.codex_api_key),
             "codexApiKeyMasked": _mask_secret(config.codex_api_key),
             "codexMaxConcurrency": config.codex_max_concurrency,
+            "codexAutoCompactTokenLimit": config.codex_auto_compact_token_limit,
             "codexSystemPrompt": config.codex_system_prompt or DEFAULT_CODEX_SYSTEM_PROMPT,
             "codexCtfSkillsEnabled": config.codex_ctf_skills_enabled,
             "codexAutoResumeInterrupted": config.codex_auto_resume_interrupted,
@@ -263,6 +272,11 @@ class RuntimeConfigStore:
                 ),
                 codex_max_concurrency=_persisted_int(
                     raw, "codex_max_concurrency", current.codex_max_concurrency
+                ),
+                codex_auto_compact_token_limit=_persisted_int(
+                    raw,
+                    "codex_auto_compact_token_limit",
+                    current.codex_auto_compact_token_limit,
                 ),
                 codex_system_prompt=_persisted_value(
                     raw, "codex_system_prompt", current.codex_system_prompt
@@ -352,6 +366,8 @@ def validate_runtime_config(config: Config) -> None:
         _validate_http_url(config.codex_base_url, "codex baseurl")
     if not 1 <= config.codex_max_concurrency <= 16:
         raise ConfigError("codexmaxconcurrency must be between 1 and 16")
+    if not 16_384 <= config.codex_auto_compact_token_limit <= DEFAULT_CODEX_CONTEXT_WINDOW:
+        raise ConfigError("codex_auto_compact_token_limit is invalid")
     if len(config.codex_system_prompt) > 20_000:
         raise ConfigError("codexsystemprompt is invalid")
 

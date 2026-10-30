@@ -270,6 +270,12 @@ class RuntimeConfigPatch(BaseModel):
     codex_max_concurrency: int | None = Field(
         default=None, alias="codexMaxConcurrency", ge=1, le=16
     )
+    codex_auto_compact_token_limit: int | None = Field(
+        default=None,
+        alias="codexAutoCompactTokenLimit",
+        ge=16_384,
+        le=872_000,
+    )
     codex_system_prompt: str | None = Field(
         default=None, alias="codexSystemPrompt", max_length=20_000
     )

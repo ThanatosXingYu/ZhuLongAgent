@@ -200,6 +200,7 @@ def test_platform_settings_are_not_loaded_from_environment(
     assert config.model_base_url == ""
     assert config.model_name == ""
     assert config.codex_max_concurrency == DEFAULT_CODEX_MAX_CONCURRENCY == 10
+    assert config.codex_auto_compact_token_limit == 500_000
     assert config.listen_addr == "127.0.0.1:1"
 
 
@@ -207,6 +208,7 @@ def test_config_can_start_empty_and_runtime_store_masks_secrets(tmp_path: Path) 
     assert load(tmp_path / "missing.env") == Config()
     store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
     assert store.public()["matchUrl"] == "https://match.ichunqiu.com/2026qwbs10"
+    assert store.public()["codexAutoCompactTokenLimit"] == 500_000
     updated = store.update(
         {
             "match_url": "https://match.ichunqiu.com/demo-match",
@@ -2164,7 +2166,8 @@ def test_prepare_model_catalog_keeps_bundled_models(
         "gpt-5.6-luna",
         "deepseek-v4.1-flash",
     ]
-    assert models[1]["auto_compact_token_limit"] == 110_000
+    assert models[1]["auto_compact_token_limit"] == 500_000
+    assert models[1]["context_window"] == 872_000
 
 
 def test_codex_interactive_resume_uses_only_supported_options(tmp_path: Path) -> None:
