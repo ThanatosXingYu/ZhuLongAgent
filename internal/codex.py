@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import queue
+import re
 import secrets
 import shlex
 import shutil
@@ -2060,9 +2061,12 @@ class CodexManager:
                         result.output,
                     )
                     return
-                if _needs_auto_continue(result.output):
+                if _needs_auto_continue(result.output, task.snapshot.mode):
                     if task.auto_continue_count >= MAX_AUTO_CONTINUE_ROUNDS:
-                        error = "Codex 连续只返回计划或进度说明，未执行任务"
+                        error = (
+                            f"Codex 连续 {MAX_AUTO_CONTINUE_ROUNDS} 轮未返回"
+                            "可识别 Flag，任务已停止"
+                        )
                         with self._condition:
                             self._append_event_locked(
                                 task,
@@ -2080,7 +2084,7 @@ class CodexManager:
                         self._finish(
                             task,
                             "failed",
-                            "Codex 只返回了计划或进度说明，且没有可恢复的会话 ID",
+                            "Codex 未返回可识别 Flag，且没有可恢复的会话 ID",
                             result.output,
                         )
                         return
@@ -2883,47 +2887,24 @@ def _message_summary(message: str, max_length: int = 80) -> str:
     return collapsed[: max(1, max_length - 1)].rstrip() + "…"
 
 
-def _needs_auto_continue(output: str) -> bool:
-    """Detect a progress-only final message emitted before any task work."""
+def _needs_auto_continue(output: str, mode: str = "side") -> bool:
+    """Reject non-final CTF output until a concrete flag is present."""
 
     normalized = " ".join(output.strip().split())
-    if not normalized or len(normalized) > 2_000:
+    if mode not in {"full", "pure"}:
         return False
-    final_markers = (
-        "flag{",
-        "ctf{",
-        "qwb{",
-        "## ",
-        "```",
-        "题解摘要",
-        "flag 推导",
-        "环境清理",
-        "无法继续",
-        "不能继续",
-        "未能完成",
-        "未找到",
-        "请求失败",
-        "权限不足",
-        "阻塞",
-        "缺少",
+    return not _contains_ctf_flag(normalized)
+
+
+def _contains_ctf_flag(output: str) -> bool:
+    flag_patterns = (
+        r"(?i)\b(?:flag|ctf|qwb|isc|ecf|nssctf)\{[^{}\r\n]{1,512}\}",
+        r"(?i)\bflag\b[^\r\n]{0,96}\b[0-9a-f]{8}-"
+        r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+        r"(?i)\bflag\s*[`'\"=:]\s*[0-9a-f]{8}-"
+        r"[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
     )
-    lowered = normalized.casefold()
-    if any(marker in lowered for marker in final_markers):
-        return False
-    progress_markers = (
-        "我会先",
-        "我会用",
-        "我会让",
-        "我先",
-        "下一步",
-        "接下来",
-        "准备",
-        "即将",
-        "开始处理",
-        "开始分析",
-        "稍后",
-    )
-    return any(marker in lowered for marker in progress_markers)
+    return any(re.search(pattern, output) for pattern in flag_patterns)
 
 
 def _pid_exists(pid: int) -> bool:
