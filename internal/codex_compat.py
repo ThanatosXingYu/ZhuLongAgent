@@ -23,6 +23,14 @@ from .openai_client import (
 )
 from .openai_client import USER_AGENT
 
+RESPONDER_TOOL = "__gcsis_respond"
+TOOL_USE_INSTRUCTION = (
+    "You are executing inside an autonomous agent loop. On every model turn, "
+    f"call exactly one tool. Use {RESPONDER_TOOL} with the complete final answer "
+    "only when no more work is needed. Otherwise call the appropriate work tool "
+    "immediately. Never return a future-action plan as ordinary assistant text."
+)
+
 
 @dataclass(frozen=True)
 class ChatBridge:
@@ -78,6 +86,9 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
     instructions = str(body.get("instructions", "") or "").strip()
     if instructions:
         messages.append(Message("system", instructions))
+    if tools:
+        tools.append(_responder_tool())
+        messages.append(Message("system", TOOL_USE_INSTRUCTION))
     for item in _list(body.get("input")):
         if not isinstance(item, Mapping):
             continue
@@ -168,7 +179,12 @@ def complete_with_chat(
         timeout=timeout,
         protocol="openai-chat",
     )
-    return client.complete(bridge.model, bridge.messages, bridge.tools)
+    return client.complete(
+        bridge.model,
+        bridge.messages,
+        bridge.tools,
+        tool_choice="required",
+    )
 
 
 def stream_chat_response(
@@ -185,7 +201,7 @@ def stream_chat_response(
     }
     if bridge.tools:
         payload["tools"] = [tool.to_dict() for tool in bridge.tools]
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = "required"
     request = Request(
         f"{base_url.rstrip('/')}/chat/completions",
         data=json.dumps(
@@ -377,6 +393,61 @@ def stream_chat_response(
         output_items.append(text_item)
         output_index += 1
 
+    responder = next(
+        (call for call in tool_calls.values() if call["name"] == RESPONDER_TOOL),
+        None,
+    )
+    if responder is not None:
+        final_text = _responder_text(responder["arguments"])
+        if final_text:
+            if text_started:
+                # The responder is authoritative; replace any incidental text.
+                for index, item in enumerate(output_items):
+                    if item.get("type") == "message":
+                        output_items.pop(index)
+                        output_index -= 1
+                        break
+            text_item_id = f"msg_{uuid.uuid4().hex}"
+            text_item = {
+                "id": text_item_id,
+                "type": "message",
+                "status": "completed",
+                "role": "assistant",
+                "content": [
+                    {"type": "output_text", "text": final_text, "annotations": []}
+                ],
+            }
+            yield _sse_event(
+                {
+                    "type": "response.output_item.added",
+                    "output_index": output_index,
+                    "item": {**text_item, "status": "in_progress", "content": []},
+                }
+            )
+            yield _sse_event(
+                {
+                    "type": "response.output_text.done",
+                    "item_id": text_item_id,
+                    "output_index": output_index,
+                    "content_index": 0,
+                    "text": final_text,
+                }
+            )
+            yield _sse_event(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": text_item,
+                }
+            )
+            output_items.append(text_item)
+            output_index += 1
+        tool_calls = {
+            index: call
+            for index, call in tool_calls.items()
+            if call["name"] != RESPONDER_TOOL
+        }
+
     for _, call in sorted(tool_calls.items()):
         namespace, name = bridge.tool_names.get(call["name"], ("", call["name"]))
         if call["name"] in bridge.custom_tools:
@@ -507,10 +578,21 @@ def build_response_sse(
             ),
         },
     ]
+    response_text = message.content
+    responder = next(
+        (
+            call
+            for call in message.tool_calls
+            if call.function.name == RESPONDER_TOOL
+        ),
+        None,
+    )
+    if responder is not None:
+        response_text = _responder_text(responder.function.arguments)
     output_index = 0
-    if message.content:
+    if response_text:
         item_id = f"msg_{uuid.uuid4().hex}"
-        part = {"type": "output_text", "text": message.content, "annotations": []}
+        part = {"type": "output_text", "text": response_text, "annotations": []}
         text_item = {
             "id": item_id,
             "type": "message",
@@ -537,14 +619,14 @@ def build_response_sse(
                     "item_id": item_id,
                     "output_index": output_index,
                     "content_index": 0,
-                    "delta": message.content,
+                    "delta": response_text,
                 },
                 {
                     "type": "response.output_text.done",
                     "item_id": item_id,
                     "output_index": output_index,
                     "content_index": 0,
-                    "text": message.content,
+                    "text": response_text,
                 },
                 {
                     "type": "response.content_part.done",
@@ -564,6 +646,8 @@ def build_response_sse(
         output_index += 1
 
     for tool_call in message.tool_calls:
+        if tool_call.function.name == RESPONDER_TOOL:
+            continue
         namespace, name = tool_names.get(
             tool_call.function.name, ("", tool_call.function.name)
         )
@@ -749,6 +833,44 @@ def _chat_tool(name: str, item: Mapping[str, Any], *, custom: bool = False) -> T
             bool(item.get("strict", False)),
         ),
     )
+
+
+def _responder_tool() -> Tool:
+    return Tool(
+        "function",
+        ToolFunction(
+            RESPONDER_TOOL,
+            (
+                "Return the complete final answer to the user. Use this only "
+                "when no additional tool calls are required."
+            ),
+            {
+                "type": "object",
+                "properties": {
+                    "message": {
+                        "type": "string",
+                        "description": "Complete final response for the user.",
+                    }
+                },
+                "required": ["message"],
+                "additionalProperties": False,
+            },
+            False,
+        ),
+    )
+
+
+def _responder_text(arguments: Any) -> str:
+    raw = _serialize(arguments)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if isinstance(parsed, Mapping):
+        message = parsed.get("message")
+        if isinstance(message, str):
+            return message
+    return raw
 
 
 def _custom_tool_input(arguments: Any) -> str:

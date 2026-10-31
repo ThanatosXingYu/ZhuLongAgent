@@ -209,13 +209,23 @@ class OpenAIClient:
         return bool(self.endpoint)
 
     def complete(
-        self, model: str, messages: list[Message], tools: list[Tool] | None = None
+        self,
+        model: str,
+        messages: list[Message],
+        tools: list[Tool] | None = None,
+        *,
+        tool_choice: str | None = None,
     ) -> Message:
         if not self.enabled():
             raise RuntimeError("model endpoint is not configured")
         selected_tools = tools or []
         if self.protocol == "openai-chat":
-            payload = _chat_payload(model, messages, selected_tools)
+            payload = _chat_payload(
+                model,
+                messages,
+                selected_tools,
+                tool_choice=tool_choice,
+            )
         elif self.protocol == "openai-responses":
             payload = _responses_payload(model, messages, selected_tools)
         else:
@@ -294,7 +304,11 @@ def _add_auth_headers(request: Request, protocol: str, api_key: str) -> None:
 
 
 def _chat_payload(
-    model: str, messages: list[Message], tools: list[Tool]
+    model: str,
+    messages: list[Message],
+    tools: list[Tool],
+    *,
+    tool_choice: str | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -302,7 +316,7 @@ def _chat_payload(
     }
     if tools:
         payload["tools"] = [tool.to_dict() for tool in tools]
-        payload["tool_choice"] = "auto"
+        payload["tool_choice"] = tool_choice or "auto"
     return payload
 
 
