@@ -27,7 +27,8 @@ RESPONDER_TOOL = "__gcsis_respond"
 TOOL_USE_INSTRUCTION = (
     "You are executing inside an autonomous agent loop. On every model turn, "
     f"call exactly one tool. Use {RESPONDER_TOOL} with the complete final answer "
-    "only when no more work is needed. Otherwise call the appropriate work tool "
+    "only after at least one real work tool has returned and the entire task is "
+    "actually complete. If work remains, call the appropriate work tool "
     "immediately. Never return a future-action plan as ordinary assistant text."
 )
 
@@ -86,9 +87,6 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
     instructions = str(body.get("instructions", "") or "").strip()
     if instructions:
         messages.append(Message("system", instructions))
-    if tools:
-        tools.append(_responder_tool())
-        messages.append(Message("system", TOOL_USE_INSTRUCTION))
     for item in _list(body.get("input")):
         if not isinstance(item, Mapping):
             continue
@@ -163,6 +161,20 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
                     tool_call_id=call_id,
                 )
             )
+    if tools:
+        has_tool_output = any(message.role == "tool" for message in messages)
+        if not has_tool_output:
+            custom_work_tools = [
+                tool for tool in tools if tool.function.name in custom_tools
+            ]
+            if custom_work_tools:
+                tools = custom_work_tools
+        else:
+            tools.append(_responder_tool())
+        insert_at = 0
+        while insert_at < len(messages) and messages[insert_at].role == "system":
+            insert_at += 1
+        messages.insert(insert_at, Message("system", TOOL_USE_INSTRUCTION))
     return ChatBridge(model, messages, tools, tool_names, frozenset(custom_tools))
 
 
@@ -192,7 +204,7 @@ def stream_chat_response(
     *,
     base_url: str,
     api_key: str,
-    timeout: float = 100.0,
+    timeout: float = 300.0,
 ) -> Iterator[bytes]:
     payload: dict[str, Any] = {
         "model": bridge.model,
@@ -266,89 +278,93 @@ def stream_chat_response(
     output_index = 0
     tool_calls: dict[int, dict[str, str]] = {}
     usage: dict[str, Any] | None = None
-    with response:
-        for raw_line in response:
-            line = raw_line.decode("utf-8", errors="replace").strip()
-            if not line.startswith("data:"):
-                continue
-            data = line[5:].strip()
-            if not data or data == "[DONE]":
-                continue
-            try:
-                chunk = json.loads(data)
-            except json.JSONDecodeError:
-                continue
-            if isinstance(chunk, Mapping) and isinstance(chunk.get("usage"), Mapping):
-                usage = dict(chunk["usage"])
-            choices = chunk.get("choices") if isinstance(chunk, Mapping) else None
-            if not isinstance(choices, list) or not choices:
-                continue
-            first = choices[0]
-            if not isinstance(first, Mapping):
-                continue
-            delta = first.get("delta")
-            if not isinstance(delta, Mapping):
-                continue
-            if delta.get("reasoning_content"):
-                yield b": ping\n\n"
-            content = delta.get("content")
-            if isinstance(content, str) and content:
-                if not text_started:
-                    text_started = True
+    try:
+        with response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if not data or data == "[DONE]":
+                    continue
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(chunk, Mapping) and isinstance(chunk.get("usage"), Mapping):
+                    usage = dict(chunk["usage"])
+                choices = chunk.get("choices") if isinstance(chunk, Mapping) else None
+                if not isinstance(choices, list) or not choices:
+                    continue
+                first = choices[0]
+                if not isinstance(first, Mapping):
+                    continue
+                delta = first.get("delta")
+                if not isinstance(delta, Mapping):
+                    continue
+                if delta.get("reasoning_content"):
+                    yield b": ping\n\n"
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    if not text_started:
+                        text_started = True
+                        yield _sse_event(
+                            {
+                                "type": "response.output_item.added",
+                                "output_index": output_index,
+                                "item": {
+                                    "id": text_item_id,
+                                    "type": "message",
+                                    "status": "in_progress",
+                                    "role": "assistant",
+                                    "content": [],
+                                },
+                            }
+                        )
+                        yield _sse_event(
+                            {
+                                "type": "response.content_part.added",
+                                "item_id": text_item_id,
+                                "output_index": output_index,
+                                "content_index": 0,
+                                "part": {
+                                    "type": "output_text",
+                                    "text": "",
+                                    "annotations": [],
+                                },
+                            }
+                        )
+                    text_parts.append(content)
                     yield _sse_event(
                         {
-                            "type": "response.output_item.added",
-                            "output_index": output_index,
-                            "item": {
-                                "id": text_item_id,
-                                "type": "message",
-                                "status": "in_progress",
-                                "role": "assistant",
-                                "content": [],
-                            },
-                        }
-                    )
-                    yield _sse_event(
-                        {
-                            "type": "response.content_part.added",
+                            "type": "response.output_text.delta",
                             "item_id": text_item_id,
                             "output_index": output_index,
                             "content_index": 0,
-                            "part": {
-                                "type": "output_text",
-                                "text": "",
-                                "annotations": [],
-                            },
+                            "delta": content,
                         }
                     )
-                text_parts.append(content)
-                yield _sse_event(
-                    {
-                        "type": "response.output_text.delta",
-                        "item_id": text_item_id,
-                        "output_index": output_index,
-                        "content_index": 0,
-                        "delta": content,
-                    }
-                )
-            raw_tool_calls = delta.get("tool_calls")
-            if isinstance(raw_tool_calls, list):
-                for raw_call in raw_tool_calls:
-                    if not isinstance(raw_call, Mapping):
-                        continue
-                    index = int(raw_call.get("index", 0) or 0)
-                    state = tool_calls.setdefault(
-                        index, {"id": "", "name": "", "arguments": ""}
-                    )
-                    call_id = str(raw_call.get("id", "") or "")
-                    if call_id:
-                        state["id"] = call_id
-                    function = raw_call.get("function")
-                    if isinstance(function, Mapping):
-                        state["name"] += str(function.get("name", "") or "")
-                        state["arguments"] += str(
-                            function.get("arguments", "") or ""
+                raw_tool_calls = delta.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    for raw_call in raw_tool_calls:
+                        if not isinstance(raw_call, Mapping):
+                            continue
+                        index = int(raw_call.get("index", 0) or 0)
+                        state = tool_calls.setdefault(
+                            index, {"id": "", "name": "", "arguments": ""}
                         )
+                        call_id = str(raw_call.get("id", "") or "")
+                        if call_id:
+                            state["id"] = call_id
+                        function = raw_call.get("function")
+                        if isinstance(function, Mapping):
+                            state["name"] += str(function.get("name", "") or "")
+                            state["arguments"] += str(
+                                function.get("arguments", "") or ""
+                            )
+    except (HTTPError, URLError, TimeoutError, socket.timeout, OSError) as exc:
+        yield _failed_response_event(f"model stream interrupted: {exc}")
+        return
 
     if text_started:
         text = "".join(text_parts)
