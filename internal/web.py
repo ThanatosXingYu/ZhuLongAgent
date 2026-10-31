@@ -576,7 +576,7 @@ def create_app(
                     upstream_base_url,
                     upstream_api_key,
                 ),
-                timeout=300,
+                timeout=135,
             )
         except TimeoutError:
             return _error_response(504, "CODEX_CHAT_TIMEOUT", "Codex Chat 上游响应超时")
@@ -2043,17 +2043,22 @@ def _complete_codex_chat_with_retry(
     bridge: ChatBridge, base_url: str, api_key: str
 ) -> Message:
     last_error: Exception | None = None
-    for attempt in range(3):
+    for attempt in range(2):
         try:
             return complete_with_chat(
                 bridge,
                 base_url=base_url,
                 api_key=api_key,
-                timeout=300,
+                timeout=60,
             )
         except ModelCallError as exc:
             last_error = exc
-            if not exc.retryable or attempt >= 2:
+            LOGGER.warning(
+                "Codex Chat upstream attempt %d failed: %s",
+                attempt + 1,
+                exc,
+            )
+            if not exc.retryable or attempt >= 1:
                 raise
             time.sleep(1.0 if attempt == 0 else 3.0)
     assert last_error is not None
