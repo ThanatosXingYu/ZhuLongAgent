@@ -35,6 +35,11 @@ DEFAULT_EVENT_PAGE_SIZE = 64
 MAX_EVENT_PAGE_SIZE = 256
 MAX_TASK_HISTORY = 100
 CONTINUE_MESSAGE = "刚才程序意外退出了，请你仔细思考，继续未完成的操作"
+AUTO_CONTINUE_MESSAGE = (
+    "继续执行。不要只输出计划、承诺或进度说明；立即调用工具推进任务，"
+    "直到得到 Flag 和完整 WP，或明确说明阻止继续的具体原因。"
+)
+MAX_AUTO_CONTINUE_ROUNDS = 4
 API_KEY_ENVIRONMENT = "GCSIS_CODEX_API_KEY"
 CODEX_HOME_ENVIRONMENT = "CODEX_HOME"
 LOGGER = logging.getLogger("gcsis-tools.codex")
@@ -982,6 +987,7 @@ class _Task:
     cancel_event: threading.Event | None = None
     pending_followup: str = ""
     stop_reason: str = ""
+    auto_continue_count: int = 0
 
 
 class CodexManager:
@@ -2054,6 +2060,66 @@ class CodexManager:
                         result.output,
                     )
                     return
+                if _needs_auto_continue(result.output):
+                    if task.auto_continue_count >= MAX_AUTO_CONTINUE_ROUNDS:
+                        error = "Codex 连续只返回计划或进度说明，未执行任务"
+                        with self._condition:
+                            self._append_event_locked(
+                                task,
+                                Event(
+                                    datetime.now(timezone.utc),
+                                    "round.failed",
+                                    error,
+                                    status="failed",
+                                ),
+                                round_number=round_number,
+                            )
+                        self._finish(task, "failed", error, result.output)
+                        return
+                    if not session_id:
+                        self._finish(
+                            task,
+                            "failed",
+                            "Codex 只返回了计划或进度说明，且没有可恢复的会话 ID",
+                            result.output,
+                        )
+                        return
+                    task.auto_continue_count += 1
+                    with self._condition:
+                        self._append_event_locked(
+                            task,
+                            Event(
+                                datetime.now(timezone.utc),
+                                "round.auto_continue",
+                                "Codex 仅返回计划或进度说明，自动继续执行",
+                                status="interrupted",
+                                metadata={
+                                    "reason": "progress_only",
+                                    "attempt": task.auto_continue_count,
+                                    "maxAttempts": MAX_AUTO_CONTINUE_ROUNDS,
+                                },
+                            ),
+                            round_number=round_number,
+                        )
+                        task.prompt = AUTO_CONTINUE_MESSAGE
+                        task.config = replace(
+                            task.config,
+                            resume_session_id=session_id,
+                            fork_session=False,
+                        )
+                        task.cancel_event = threading.Event()
+                        task.stop_reason = ""
+                        task.snapshot = _replace_snapshot(
+                            task.snapshot,
+                            status="running",
+                            error="",
+                            output="",
+                            finished_at=None,
+                            process_id=0,
+                            process_alive=False,
+                        )
+                        self._persist_tasks_locked()
+                    continue
                 with self._condition:
                     self._append_event_locked(
                         task,
@@ -2356,6 +2422,9 @@ class CodexManager:
             restored_config,
             pending_followup=pending_followup,
             stop_reason=stop_reason,
+            auto_continue_count=_nonnegative_int(
+                entry.get("autoContinueCount", 0)
+            ),
         )
 
     def _runtime_process_config_locked(self, task_config: ProcessConfig) -> ProcessConfig:
@@ -2432,6 +2501,7 @@ class CodexManager:
             "prompt": task.prompt,
             "pendingFollowup": task.pending_followup,
             "stopReason": task.stop_reason,
+            "autoContinueCount": task.auto_continue_count,
             "config": {
                 "workspace": config.workspace,
                 "baseUrl": config.base_url,
@@ -2811,6 +2881,49 @@ def _message_summary(message: str, max_length: int = 80) -> str:
     if len(collapsed) <= max_length:
         return collapsed
     return collapsed[: max(1, max_length - 1)].rstrip() + "…"
+
+
+def _needs_auto_continue(output: str) -> bool:
+    """Detect a progress-only final message emitted before any task work."""
+
+    normalized = " ".join(output.strip().split())
+    if not normalized or len(normalized) > 2_000:
+        return False
+    final_markers = (
+        "flag{",
+        "ctf{",
+        "qwb{",
+        "## ",
+        "```",
+        "题解摘要",
+        "flag 推导",
+        "环境清理",
+        "无法继续",
+        "不能继续",
+        "未能完成",
+        "未找到",
+        "请求失败",
+        "权限不足",
+        "阻塞",
+        "缺少",
+    )
+    lowered = normalized.casefold()
+    if any(marker in lowered for marker in final_markers):
+        return False
+    progress_markers = (
+        "我会先",
+        "我会用",
+        "我会让",
+        "我先",
+        "下一步",
+        "接下来",
+        "准备",
+        "即将",
+        "开始处理",
+        "开始分析",
+        "稍后",
+    )
+    return any(marker in lowered for marker in progress_markers)
 
 
 def _pid_exists(pid: int) -> bool:

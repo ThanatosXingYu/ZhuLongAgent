@@ -2419,6 +2419,67 @@ def test_codex_manager_applies_original_constructor_defaults(tmp_path: Path) -> 
     manager.close()
 
 
+def test_codex_progress_only_output_is_auto_continued(tmp_path: Path) -> None:
+    from internal.codex import _needs_auto_continue
+
+    assert _needs_auto_continue("我会先读取题目附件，然后开始分析。")
+    assert not _needs_auto_continue("done")
+    assert not _needs_auto_continue("flag{example}\n\n## 题解摘要")
+
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult("prompt", False, "", exercise_id, "Web", "auto")
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls: list[tuple[ProcessConfig, str]] = []
+
+        def run(
+            self, config: ProcessConfig, prompt: str, _on_event, _cancel
+        ) -> ProcessResult:
+            self.calls.append((config, prompt))
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            if len(self.calls) == 1:
+                output = "我会先读取题目附件，然后开始分析。"
+            else:
+                output = "flag{example}\n\n## 题解摘要\n已完成。"
+            Path(config.output_path).write_text(output, encoding="utf-8")
+            return ProcessResult(0, output, "session-auto")
+
+    runner = Runner()
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            runner,
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    task = manager.start(7)
+    for _ in range(200):
+        if manager.get(task.id).status == "completed":
+            break
+        time.sleep(0.01)
+
+    completed = manager.get(task.id)
+    assert completed.status == "completed"
+    assert len(runner.calls) == 2
+    assert runner.calls[1][0].resume_session_id == "session-auto"
+    assert "继续执行" in runner.calls[1][1]
+    assert completed.rounds_started == 2
+    assert completed.output.startswith("flag{example}")
+    assert any(
+        event["kind"] == "round.auto_continue"
+        for event in manager.log_json(task.id)
+    )
+    manager.close()
+
+
 def test_codex_process_uses_workspace_local_home(tmp_path: Path) -> None:
     workspace = tmp_path / "workspace"
     workspace.mkdir()
