@@ -602,6 +602,7 @@ def create_app(
             message,
             model=bridge.model,
             tool_names=bridge.tool_names,
+            custom_tools=bridge.custom_tools,
         )
         return StreamingResponse(
             iter((stream,)),

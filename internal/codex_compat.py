@@ -30,10 +30,50 @@ class ChatBridge:
     messages: list[Message]
     tools: list[Tool]
     tool_names: Mapping[str, tuple[str, str]]
+    custom_tools: frozenset[str]
 
 
 def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge:
     model = str(body.get("model", "") or default_model).strip() or default_model
+    tools: list[Tool] = []
+    tool_names: dict[str, tuple[str, str]] = {}
+    custom_tools: set[str] = set()
+    for item in _list(body.get("tools")):
+        if not isinstance(item, Mapping):
+            continue
+        tool_type = str(item.get("type", "") or "")
+        if tool_type in {"function", "custom"}:
+            name = str(item.get("name", "") or "").strip()
+            if not name:
+                continue
+            tools.append(_chat_tool(name, item, custom=tool_type == "custom"))
+            tool_names[name] = ("", name)
+            if tool_type == "custom":
+                custom_tools.add(name)
+            continue
+        if tool_type == "namespace":
+            namespace = str(item.get("name", "") or "").strip()
+            for child in _list(item.get("tools")):
+                if not isinstance(child, Mapping):
+                    continue
+                child_type = str(child.get("type", "") or "")
+                if child_type not in {"function", "custom"}:
+                    continue
+                child_name = str(child.get("name", "") or "").strip()
+                if not namespace or not child_name:
+                    continue
+                chat_name = _namespace_name(namespace, child_name)
+                tools.append(
+                    _chat_tool(
+                        chat_name,
+                        child,
+                        custom=child_type == "custom",
+                    )
+                )
+                tool_names[chat_name] = (namespace, child_name)
+                if child_type == "custom":
+                    custom_tools.add(chat_name)
+
     messages: list[Message] = []
     instructions = str(body.get("instructions", "") or "").strip()
     if instructions:
@@ -51,8 +91,35 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
             continue
         if item_type == "function_call":
             name = str(item.get("name", "") or "")
+            namespace = str(item.get("namespace", "") or "").strip()
+            if namespace:
+                name = _namespace_name(namespace, name)
             call_id = str(item.get("call_id", item.get("id", "")) or "")
             arguments = _serialize(item.get("arguments"))
+            messages.append(
+                Message(
+                    "assistant",
+                    tool_calls=(
+                        ToolCall(
+                            call_id,
+                            "function",
+                            FunctionCall(name, arguments),
+                        ),
+                    ),
+                )
+            )
+            continue
+        if item_type == "custom_tool_call":
+            name = str(item.get("name", "") or "")
+            namespace = str(item.get("namespace", "") or "").strip()
+            if namespace:
+                name = _namespace_name(namespace, name)
+            call_id = str(item.get("call_id", item.get("id", "")) or "")
+            arguments = json.dumps(
+                {"input": str(item.get("input", "") or "")},
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
             messages.append(
                 Message(
                     "assistant",
@@ -75,32 +142,17 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
                     tool_call_id=call_id,
                 )
             )
-
-    tools: list[Tool] = []
-    tool_names: dict[str, tuple[str, str]] = {}
-    for item in _list(body.get("tools")):
-        if not isinstance(item, Mapping):
             continue
-        tool_type = str(item.get("type", "") or "")
-        if tool_type == "function":
-            name = str(item.get("name", "") or "").strip()
-            if not name:
-                continue
-            tools.append(_chat_tool(name, item))
-            tool_names[name] = ("", name)
-            continue
-        if tool_type == "namespace":
-            namespace = str(item.get("name", "") or "").strip()
-            for child in _list(item.get("tools")):
-                if not isinstance(child, Mapping):
-                    continue
-                child_name = str(child.get("name", "") or "").strip()
-                if not namespace or not child_name:
-                    continue
-                chat_name = _namespace_name(namespace, child_name)
-                tools.append(_chat_tool(chat_name, child))
-                tool_names[chat_name] = (namespace, child_name)
-    return ChatBridge(model, messages, tools, tool_names)
+        if item_type == "custom_tool_call_output":
+            call_id = str(item.get("call_id", "") or "")
+            messages.append(
+                Message(
+                    "tool",
+                    _message_text(item.get("output")),
+                    tool_call_id=call_id,
+                )
+            )
+    return ChatBridge(model, messages, tools, tool_names, frozenset(custom_tools))
 
 
 def complete_with_chat(
@@ -327,6 +379,55 @@ def stream_chat_response(
 
     for _, call in sorted(tool_calls.items()):
         namespace, name = bridge.tool_names.get(call["name"], ("", call["name"]))
+        if call["name"] in bridge.custom_tools:
+            input_value = _custom_tool_input(call["arguments"])
+            item = {
+                "id": f"ctc_{uuid.uuid4().hex}",
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call["id"] or f"call_{uuid.uuid4().hex}",
+                "name": name,
+                "input": input_value,
+            }
+            if namespace:
+                item["namespace"] = namespace
+            yield _sse_event(
+                {
+                    "type": "response.output_item.added",
+                    "output_index": output_index,
+                    "item": {
+                        **item,
+                        "status": "in_progress",
+                        "input": "",
+                    },
+                }
+            )
+            yield _sse_event(
+                {
+                    "type": "response.custom_tool_call_input.delta",
+                    "item_id": item["id"],
+                    "output_index": output_index,
+                    "delta": input_value,
+                }
+            )
+            yield _sse_event(
+                {
+                    "type": "response.custom_tool_call_input.done",
+                    "item_id": item["id"],
+                    "output_index": output_index,
+                    "input": input_value,
+                }
+            )
+            yield _sse_event(
+                {
+                    "type": "response.output_item.done",
+                    "output_index": output_index,
+                    "item": item,
+                }
+            )
+            output_items.append(item)
+            output_index += 1
+            continue
         item = {
             "id": f"fc_{uuid.uuid4().hex}",
             "type": "function_call",
@@ -387,6 +488,7 @@ def build_response_sse(
     *,
     model: str,
     tool_names: Mapping[str, tuple[str, str]],
+    custom_tools: frozenset[str] = frozenset(),
 ) -> bytes:
     response_id = f"resp_{uuid.uuid4().hex}"
     created_at = int(time.time())
@@ -466,6 +568,52 @@ def build_response_sse(
             tool_call.function.name, ("", tool_call.function.name)
         )
         call_id = tool_call.id or f"call_{uuid.uuid4().hex}"
+        if tool_call.function.name in custom_tools:
+            input_value = _custom_tool_input(tool_call.function.arguments)
+            item_id = f"ctc_{uuid.uuid4().hex}"
+            custom_item: dict[str, Any] = {
+                "id": item_id,
+                "type": "custom_tool_call",
+                "status": "completed",
+                "call_id": call_id,
+                "name": name,
+                "input": input_value,
+            }
+            if namespace:
+                custom_item["namespace"] = namespace
+            events.extend(
+                [
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": output_index,
+                        "item": {
+                            **custom_item,
+                            "status": "in_progress",
+                            "input": "",
+                        },
+                    },
+                    {
+                        "type": "response.custom_tool_call_input.delta",
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "delta": input_value,
+                    },
+                    {
+                        "type": "response.custom_tool_call_input.done",
+                        "item_id": item_id,
+                        "output_index": output_index,
+                        "input": input_value,
+                    },
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": output_index,
+                        "item": custom_item,
+                    },
+                ]
+            )
+            output.append(custom_item)
+            output_index += 1
+            continue
         item_id = f"fc_{uuid.uuid4().hex}"
         function_item: dict[str, Any] = {
             "id": item_id,
@@ -578,8 +726,20 @@ def _response_base(
     }
 
 
-def _chat_tool(name: str, item: Mapping[str, Any]) -> Tool:
+def _chat_tool(name: str, item: Mapping[str, Any], *, custom: bool = False) -> Tool:
     parameters = item.get("parameters")
+    if custom and not isinstance(parameters, Mapping):
+        parameters = {
+            "type": "object",
+            "properties": {
+                "input": {
+                    "type": "string",
+                    "description": "Complete raw input for this custom tool.",
+                }
+            },
+            "required": ["input"],
+            "additionalProperties": False,
+        }
     return Tool(
         "function",
         ToolFunction(
@@ -589,6 +749,19 @@ def _chat_tool(name: str, item: Mapping[str, Any]) -> Tool:
             bool(item.get("strict", False)),
         ),
     )
+
+
+def _custom_tool_input(arguments: Any) -> str:
+    raw = _serialize(arguments)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return raw
+    if isinstance(parsed, Mapping):
+        value = parsed.get("input")
+        if isinstance(value, str):
+            return value
+    return raw
 
 
 def _namespace_name(namespace: str, name: str) -> str:
