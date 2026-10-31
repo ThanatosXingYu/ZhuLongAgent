@@ -498,8 +498,15 @@ def stream_chat_response(
         }
 
     for _, call in sorted(tool_calls.items()):
-        namespace, name = bridge.tool_names.get(call["name"], ("", call["name"]))
-        if call["name"] in bridge.custom_tools:
+        resolved_name = _resolve_tool_name(
+            call["name"],
+            bridge.tool_names,
+            bridge.custom_tools,
+        )
+        namespace, name = bridge.tool_names.get(
+            resolved_name, ("", call["name"])
+        )
+        if resolved_name in bridge.custom_tools:
             input_value = _custom_tool_input(call["arguments"])
             item = {
                 "id": f"ctc_{uuid.uuid4().hex}",
@@ -697,11 +704,16 @@ def build_response_sse(
     for tool_call in message.tool_calls:
         if tool_call.function.name == RESPONDER_TOOL:
             continue
+        resolved_name = _resolve_tool_name(
+            tool_call.function.name,
+            tool_names,
+            custom_tools,
+        )
         namespace, name = tool_names.get(
-            tool_call.function.name, ("", tool_call.function.name)
+            resolved_name, ("", tool_call.function.name)
         )
         call_id = tool_call.id or f"call_{uuid.uuid4().hex}"
-        if tool_call.function.name in custom_tools:
+        if resolved_name in custom_tools:
             input_value = _custom_tool_input(tool_call.function.arguments)
             item_id = f"ctc_{uuid.uuid4().hex}"
             custom_item: dict[str, Any] = {
@@ -920,6 +932,21 @@ def _responder_text(arguments: Any) -> str:
         if isinstance(message, str):
             return message
     return raw
+
+
+def _resolve_tool_name(
+    name: str,
+    tool_names: Mapping[str, tuple[str, str]],
+    custom_tools: frozenset[str],
+) -> str:
+    if name in tool_names:
+        return name
+    short_matches = [
+        chat_name
+        for chat_name in custom_tools
+        if chat_name.rsplit("__", 1)[-1] == name
+    ]
+    return short_matches[0] if len(short_matches) == 1 else name
 
 
 def _custom_tool_input(arguments: Any) -> str:
