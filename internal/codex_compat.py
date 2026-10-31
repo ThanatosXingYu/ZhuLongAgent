@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import time
 import uuid
@@ -23,7 +24,27 @@ from .openai_client import (
 )
 from .openai_client import USER_AGENT
 
+LOGGER = logging.getLogger(__name__)
+
 RESPONDER_TOOL = "__gcsis_respond"
+DEFAULT_EXEC_TOOL: dict[str, Any] = {
+    "type": "namespace",
+    "name": "functions",
+    "description": "",
+    "tools": [
+        {
+            "type": "custom",
+            "name": "exec",
+            "description": (
+                "Run JavaScript in the agent orchestrator. Use the global tools "
+                "object to invoke nested tools, for example "
+                "`await tools.exec_command({cmd: \"pwd\"})`. Use this tool for all "
+                "real work. Do not merely describe future actions."
+            ),
+            "format": {"type": "text"},
+        }
+    ],
+}
 TOOL_USE_INSTRUCTION = (
     "You are executing inside an autonomous agent loop. On every model turn, "
     f"call exactly one tool. Use {RESPONDER_TOOL} with the complete final answer "
@@ -47,7 +68,8 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
     tools: list[Tool] = []
     tool_names: dict[str, tuple[str, str]] = {}
     custom_tools: set[str] = set()
-    for item in _list(body.get("tools")):
+    raw_tools = _list(body.get("tools")) or [DEFAULT_EXEC_TOOL]
+    for item in raw_tools:
         if not isinstance(item, Mapping):
             continue
         tool_type = str(item.get("type", "") or "")
@@ -175,6 +197,12 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
         while insert_at < len(messages) and messages[insert_at].role == "system":
             insert_at += 1
         messages.insert(insert_at, Message("system", TOOL_USE_INSTRUCTION))
+    LOGGER.info(
+        "Codex chat bridge prepared tools=%s custom=%s messages=%d",
+        [tool.function.name for tool in tools],
+        sorted(custom_tools),
+        len(messages),
+    )
     return ChatBridge(model, messages, tools, tool_names, frozenset(custom_tools))
 
 
@@ -412,6 +440,11 @@ def stream_chat_response(
     responder = next(
         (call for call in tool_calls.values() if call["name"] == RESPONDER_TOOL),
         None,
+    )
+    LOGGER.info(
+        "Codex chat upstream completed tool_calls=%s text=%s",
+        [call["name"] for call in tool_calls.values()],
+        bool(text_parts),
     )
     if responder is not None:
         final_text = _responder_text(responder["arguments"])

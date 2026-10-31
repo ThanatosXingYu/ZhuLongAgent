@@ -25,7 +25,6 @@ from .codex_compat import (
     build_chat_bridge,
     build_response_sse,
     complete_with_chat,
-    stream_chat_response,
 )
 from .download import (
     AttachmentNotFound,
@@ -569,20 +568,6 @@ def create_app(
                 503, "CODEX_CHAT_UPSTREAM_UNAVAILABLE", "Codex Chat 上游未配置"
             )
         bridge = build_chat_bridge(payload, current.codex_model)
-        if bool(payload.get("stream", True)):
-            return StreamingResponse(
-                stream_chat_response(
-                    bridge,
-                    base_url=upstream_base_url,
-                    api_key=upstream_api_key,
-                ),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-store",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
-                },
-            )
         try:
             message = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -2064,7 +2049,7 @@ def _complete_codex_chat_with_retry(
                 bridge,
                 base_url=base_url,
                 api_key=api_key,
-                timeout=100,
+                timeout=300,
             )
         except ModelCallError as exc:
             last_error = exc
