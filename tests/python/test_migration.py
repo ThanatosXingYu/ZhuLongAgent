@@ -72,7 +72,9 @@ from main import _listen_parts
 
 
 def test_frontend_waits_for_platform_configuration_before_loading_workspace() -> None:
-    script = (Path(__file__).parents[2] / "static" / "app.js").read_text(
+    static_root = Path(__file__).parents[2] / "static"
+    script = (static_root / "app.js").read_text(encoding="utf-8")
+    overview_script = (static_root / "modules" / "overview-notice-controller.js").read_text(
         encoding="utf-8"
     )
     assert "const config = await loadRuntimeConfig();" in script
@@ -81,7 +83,7 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert "els.settingMatchUrl.value = matchUrl;" in script
     assert "refreshWorkspaceAfterLogin({ notify: true })" in script
     assert "renderRichText(detail.description" in script
-    assert "renderRichText(detail.content" in script
+    assert "renderRichText(detail.content" in overview_script
     assert "innerHTML" not in script
     assert "copyCodexResumeCommand" not in script
     assert "renderCodexEvents" in script
@@ -94,7 +96,7 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert 'createElement("span", "meta-chip info", exerciseCategory(detail))' in script
     assert "混合题" not in script
     assert "persistCollapsedGroups" in script
-    assert 'second: "2-digit"' in script
+    assert 'second: "2-digit"' in overview_script
     assert "syncToastRegionHost" in script
     assert "els.runCodexPure.disabled = state.codexAvailable !== true;" in script
     assert 'dialog.addEventListener("close"' in script

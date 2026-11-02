@@ -1992,7 +1992,6 @@ import {
   }
 
   async function selectExercise(id) {
-    state.pollToken += 1;
     state.selectedExerciseId = id;
     state.detail = null;
     els.flagInput.value = "";
@@ -2961,8 +2960,7 @@ import {
     await withButton(button, async () => {
       try {
         await request(`/api/exercises/${encodeURIComponent(id)}/environment/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-        state.pollToken += 1;
-        const token = state.pollToken;
+        const token = beginEnvironmentPoll(id);
         if (state.detail) {
           state.detail = { ...state.detail, isNeedInit: false, isNeedCheck: true, endpoints: [], renewRemaining: 0 };
           observeEnvironment(state.detail);
@@ -2977,7 +2975,7 @@ import {
   }
 
   async function requestEnvironmentStop(id) {
-    if (state.selectedExerciseId === id) state.pollToken += 1;
+    cancelEnvironmentPoll(id);
     await request(`/api/exercises/${encodeURIComponent(id)}/environment/stop`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3093,13 +3091,27 @@ import {
     });
   }
 
+  function beginEnvironmentPoll(id) {
+    const token = Number(state.environmentPollTokens.get(id) || 0) + 1;
+    state.environmentPollTokens.set(id, token);
+    return token;
+  }
+
+  function cancelEnvironmentPoll(id) {
+    state.environmentPollTokens.set(id, Number(state.environmentPollTokens.get(id) || 0) + 1);
+  }
+
+  function isEnvironmentPollCurrent(id, token) {
+    return Number(state.environmentPollTokens.get(id) || 0) === token;
+  }
+
   async function pollEnvironment(id, token) {
     const deadline = Date.now() + BUILD_POLL_TIMEOUT_MS;
     let delayMs = BUILD_POLL_MS;
     let consecutiveFailures = 0;
     while (Date.now() < deadline) {
       await delay(delayMs);
-      if (token !== state.pollToken || !state.trackedEnvironmentIds.has(id)) return;
+      if (!isEnvironmentPollCurrent(id, token) || !state.trackedEnvironmentIds.has(id)) return;
       let detail = null;
       try {
         detail = await fetchExerciseDetail(id, { refresh: true, observe: true, silent: true });
@@ -3111,7 +3123,7 @@ import {
         }
         continue;
       }
-      if (token !== state.pollToken) return;
+      if (!isEnvironmentPollCurrent(id, token)) return;
       consecutiveFailures = 0;
       delayMs = BUILD_POLL_MS;
       if (state.selectedExerciseId === id) {
@@ -4883,7 +4895,7 @@ import {
     if (state.environmentCountdownTimer) window.clearInterval(state.environmentCountdownTimer);
     stopAttachmentTaskPolling();
     stopAttachmentSizePolling();
-    state.pollToken += 1;
+    state.environmentPollTokens.clear();
   });
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init, { once: true });
