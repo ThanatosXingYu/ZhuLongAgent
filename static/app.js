@@ -1,7 +1,25 @@
-import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261102-layout6";
-import { createApiClient } from "./modules/api.js?v=20261102-layout6";
-import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261102-layout6";
-import { createAppState } from "./modules/state.js?v=20261102-layout6";
+import {
+  codexEventDefaultExpanded,
+  codexEventPresentation,
+  codexEventStateKey,
+  codexModeLabel,
+  codexStatusClass,
+  codexStatusLabel,
+  codexSummary,
+  codexTaskDuration,
+  codexTaskFullTime,
+  codexTaskLogTime,
+  codexTaskTime,
+  codexUsageSummary,
+  isCodexTerminal,
+  mergeCodexEventLists,
+  normalizeCodexEvents,
+} from "./modules/codex-presenters.js?v=20261102-layout7";
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261102-layout7";
+import { createApiClient } from "./modules/api.js?v=20261102-layout7";
+import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261102-layout7";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261102-layout7";
+import { createAppState } from "./modules/state.js?v=20261102-layout7";
 
 "use strict";
 
@@ -137,6 +155,10 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     openModelRouting: $("open-model-routing"),
     openModelRoutingSettings: $("open-model-routing-settings"),
     modelRoutingPage: $("model-routing-page"),
+    modelActiveProviderCount: $("model-active-provider-count"),
+    modelTotalProviderCount: $("model-total-provider-count"),
+    modelStrategySummary: $("model-strategy-summary"),
+    modelRecoverySummary: $("model-recovery-summary"),
     modelProviderList: $("model-provider-list"),
     addModelProvider: $("add-model-provider"),
     modelRetryDelays: $("model-retry-delays"),
@@ -271,6 +293,11 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     cancelCodexStart: $("cancel-codex-start"),
     attachmentDialog: $("attachment-manager-dialog"),
     attachmentSummary: $("attachment-summary"),
+    attachmentMissingCount: $("attachment-missing-count"),
+    attachmentExistingCount: $("attachment-existing-count"),
+    attachmentTotalCount: $("attachment-total-count"),
+    attachmentSearch: $("attachment-search"),
+    attachmentFilters: [...document.querySelectorAll("[data-attachment-filter]")],
     attachmentCheck: $("check-attachments"),
     attachmentDownloadAll: $("download-all-attachments"),
     attachmentList: $("attachment-manager-list"),
@@ -515,47 +542,6 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     els.connectionLabel.textContent = kind === "connected" ? "已连接" : kind === "error" ? "连接异常" : "正在连接";
   }
 
-  function formatNumber(value) {
-    if (value === null || value === undefined || Number.isNaN(Number(value))) return "--";
-    return new Intl.NumberFormat("zh-CN", { maximumFractionDigits: 2 }).format(Number(value));
-  }
-
-  function formatBytes(value) {
-    const bytes = Number(value);
-    if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
-    const units = ["B", "KiB", "MiB", "GiB"];
-    const unit = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
-    const amount = bytes / (1024 ** unit);
-    return `${amount.toFixed(unit === 0 || amount >= 10 ? 0 : 1)} ${units[unit]}`;
-  }
-
-  function formatDuration(value) {
-    const seconds = Math.max(0, Math.round(Number(value) || 0));
-    if (seconds < 60) return `${seconds} 秒`;
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    if (minutes < 60) return `${minutes} 分 ${remainder} 秒`;
-    const hours = Math.floor(minutes / 60);
-    return `${hours} 小时 ${minutes % 60} 分`;
-  }
-
-  function formatDate(timestamp) {
-    if (!timestamp) return "时间未知";
-    const date = new Date(Number(timestamp));
-    if (Number.isNaN(date.getTime())) return "时间未知";
-    return new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }).format(date);
-  }
-
-  function safeURL(raw) {
-    if (!raw) return null;
-    try {
-      const value = new URL(raw, window.location.origin);
-      return value.protocol === "http:" || value.protocol === "https:" ? value.href : null;
-    } catch {
-      return null;
-    }
-  }
-
   function apiPath(path, refresh = false) {
     if (!refresh) return path;
     const url = new URL(path, window.location.origin);
@@ -702,6 +688,31 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
       button.classList.toggle("is-active", active);
       button.setAttribute("aria-pressed", String(active));
     });
+    updateModelRoutingSummary();
+  }
+
+  function updateModelRoutingSummary() {
+    if (!els.modelProviderList) return;
+    const providers = [...els.modelProviderList.querySelectorAll(".model-provider-item")];
+    const active = providers.filter((item) => item.querySelector(".provider-enabled")?.checked).length;
+    const total = providers.length;
+    if (els.modelActiveProviderCount) els.modelActiveProviderCount.textContent = formatNumber(active);
+    if (els.modelTotalProviderCount) els.modelTotalProviderCount.textContent = `共 ${formatNumber(total)} 个`;
+    if (els.modelStrategySummary) {
+      els.modelStrategySummary.textContent = modelRoutingStrategy === "failover" ? "故障转移" : "每次轮询";
+    }
+    if (els.modelRecoverySummary) {
+      els.modelRecoverySummary.textContent = `${formatNumber(Number(els.modelRecoveryInterval?.value || 60))} 秒`;
+    }
+    providers.forEach((item, index) => {
+      item.style.setProperty("--provider-index", String(index + 1));
+      const order = item.querySelector(".provider-order");
+      if (order) order.textContent = `#${index + 1}`;
+      item.classList.toggle(
+        "is-disabled",
+        !item.querySelector(".provider-enabled")?.checked,
+      );
+    });
   }
 
   function addProviderRow(provider = {}) {
@@ -710,12 +721,15 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     item.dataset.providerId = id;
     item.dataset.legacy = provider.legacy ? "true" : "false";
     const heading = createElement("div", "model-provider-heading");
+    const providerOrder = createElement("span", "provider-order", "#");
+    const providerStatus = createElement("span", "provider-status-dot");
     const enabledLabel = createElement("label", "settings-checkbox");
     const enabled = document.createElement("input");
     enabled.type = "checkbox";
     enabled.checked = provider.enabled !== false;
     enabled.className = "provider-enabled";
-    enabledLabel.append(enabled, createElement("span", "", "参与轮询"));
+    enabled.addEventListener("change", updateModelRoutingSummary);
+    enabledLabel.append(enabled, createElement("span", "", "启用"));
     const name = document.createElement("input");
     name.type = "text";
     name.className = "provider-name";
@@ -724,8 +738,13 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     name.value = String(provider.name || "");
     const remove = createElement("button", "model-provider-remove", "删除");
     remove.type = "button";
-    remove.addEventListener("click", () => item.remove());
-    heading.append(enabledLabel, name, remove);
+    remove.addEventListener("click", () => {
+      item.remove();
+      updateModelRoutingSummary();
+    });
+    const identity = createElement("div", "provider-identity");
+    identity.append(providerOrder, providerStatus, name);
+    heading.append(identity, enabledLabel, remove);
 
     const grid = createElement("div", "model-provider-grid");
     const baseUrl = document.createElement("input");
@@ -748,7 +767,11 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     protocol.value = String(provider.protocol || "openai-chat");
     const protocolWrap = createElement("span", "select-wrap");
     protocolWrap.append(protocol, icon("chevron-down"));
-    grid.append(baseUrl, protocolWrap);
+    const baseField = createElement("label", "provider-field");
+    baseField.append(createElement("span", "", "接口地址"), baseUrl);
+    const protocolField = createElement("label", "provider-field");
+    protocolField.append(createElement("span", "", "协议"), protocolWrap);
+    grid.append(baseField, protocolField);
 
     const modelGrid = createElement("div", "model-provider-grid");
     const picker = createElement("span", "model-picker");
@@ -772,7 +795,11 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     apiKey.placeholder = provider.apiKeyConfigured
       ? `当前 Key：${provider.apiKeyMasked || "已配置"}（留空保持）`
       : "API Key";
-    modelGrid.append(picker, apiKey);
+    const modelField = createElement("label", "provider-field");
+    modelField.append(createElement("span", "", "模型"), picker);
+    const keyField = createElement("label", "provider-field");
+    keyField.append(createElement("span", "", "API Key"), apiKey);
+    modelGrid.append(modelField, keyField);
     fetchButton.addEventListener("click", async () => {
       const value = baseUrl.value.trim();
       if (!value) {
@@ -813,6 +840,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     });
     item.append(heading, grid, modelGrid);
     els.modelProviderList.append(item);
+    updateModelRoutingSummary();
   }
 
   function collectModelProviders() {
@@ -887,6 +915,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
       els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
       els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
       els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
+      updateModelRoutingSummary();
       setModelRoutingStatus("勾选参与轮询的提供商");
       refreshIcons();
     } catch (error) {
@@ -927,6 +956,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
           refreshIcons();
         }
         setModelRoutingStatus("模型路由已保存并生效", "success");
+        updateModelRoutingSummary();
         showToast("模型提供商与轮询策略已保存", "success");
       } catch (error) {
         setModelRoutingStatus(`保存失败：${error.message}`, "error");
@@ -2613,21 +2643,65 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     }
   }
 
+  function attachmentFileMatchesFilter(file) {
+    const filter = state.attachmentFilter;
+    if (filter === "missing") return !file.error && !file.exists;
+    if (filter === "ready") return Boolean(file.exists) && !file.error;
+    if (filter === "error") return Boolean(file.error);
+    return true;
+  }
+
+  function filterAttachmentExercise(exercise) {
+    const query = state.attachmentSearch.trim().toLocaleLowerCase("zh-CN");
+    const files = attachmentFiles(exercise);
+    const fileText = files
+      .map((file) => `${file.name || ""} ${file.path || ""}`)
+      .join(" ");
+    const exerciseText = `${exercise.id || ""} ${exercise.name || ""} ${exercise.category || ""} ${fileText}`
+      .toLocaleLowerCase("zh-CN");
+    if (query && !exerciseText.includes(query)) return null;
+    if (exercise.error) {
+      return state.attachmentFilter === "error" || state.attachmentFilter === "all"
+        ? { ...exercise, attachments: [] }
+        : null;
+    }
+    const filteredFiles = state.attachmentFilter === "all"
+      ? files
+      : files.filter(attachmentFileMatchesFilter);
+    if (state.attachmentFilter !== "all" && !filteredFiles.length) return null;
+    return { ...exercise, attachments: filteredFiles };
+  }
+
   function renderAttachmentCatalog() {
     const catalog = state.attachmentCatalog || {};
     const exercises = Array.isArray(catalog.exercises) ? catalog.exercises : [];
     const total = Number(catalog.totalAttachments || 0);
     const existing = Number(catalog.existingAttachments || 0);
+    const missing = Math.max(0, total - existing);
     const knownSizes = exercises.reduce((count, exercise) => count + attachmentFiles(exercise).filter((attachment) => Number(attachment.size) > 0).length, 0);
     els.attachmentSummary.textContent = `本地 ${existing} / ${total} · 大小 ${knownSizes} / ${total} · ${Number(catalog.totalExercises || exercises.length)} 道题`;
+    if (els.attachmentMissingCount) els.attachmentMissingCount.textContent = formatNumber(missing);
+    if (els.attachmentExistingCount) els.attachmentExistingCount.textContent = formatNumber(existing);
+    if (els.attachmentTotalCount) els.attachmentTotalCount.textContent = formatNumber(total);
     if (!exercises.length) {
       els.attachmentList.replaceChildren(createElement("div", "empty-state", "暂无题目附件"));
       setAttachmentManagerBusy(state.attachmentBusy);
       return;
     }
+    const visibleExercises = exercises
+      .map(filterAttachmentExercise)
+      .filter((exercise) => exercise !== null);
+    if (!visibleExercises.length) {
+      els.attachmentList.replaceChildren(
+        createElement("div", "empty-state", "没有符合当前筛选条件的附件"),
+      );
+      setAttachmentManagerBusy(state.attachmentBusy);
+      refreshIcons();
+      return;
+    }
 
     const categories = new Map();
-    exercises.forEach((exercise) => {
+    visibleExercises.forEach((exercise) => {
       const category = String(exercise.category || "").trim() || "未分类";
       if (!categories.has(category)) categories.set(category, []);
       categories.get(category).push(exercise);
@@ -3349,238 +3423,6 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     }
     els.noticeDetail.replaceChildren(fragment);
     refreshIcons();
-  }
-
-  function codexStatusLabel(status) {
-    return {
-      queued: "排队中",
-      running: "运行中",
-      completed: "已完成",
-      failed: "失败",
-      canceled: "已停止",
-      interrupted: "运行被中断",
-    }[status] || "未知状态";
-  }
-
-  function codexStatusClass(status) {
-    if (status === "completed") return "success";
-    if (status === "failed") return "error";
-    if (status === "canceled") return "muted";
-    if (status === "interrupted") return "interrupted";
-    return "running";
-  }
-
-  function isCodexTerminal(status) {
-    return ["completed", "failed", "canceled", "interrupted"].includes(status);
-  }
-
-  function codexTaskTime(value) {
-    if (!value) return "时间未知";
-    const timestamp = new Date(value).getTime();
-    return Number.isNaN(timestamp) ? "时间未知" : formatDate(timestamp);
-  }
-
-  function codexTaskFullTime(value) {
-    if (!value) return "尚未产生";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "时间未知";
-    return new Intl.DateTimeFormat("zh-CN", {
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    }).format(date);
-  }
-
-  function codexTaskLogTime(value) {
-    if (!value) return "--:--:--";
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return "时间未知";
-    return new Intl.DateTimeFormat("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-      hourCycle: "h23",
-    }).format(date);
-  }
-
-  function codexTaskDuration(start, end) {
-    if (!start) return "尚未产生";
-    const startedAt = new Date(start).getTime();
-    const finishedAt = end ? new Date(end).getTime() : Date.now();
-    if (Number.isNaN(startedAt) || Number.isNaN(finishedAt)) return "时间未知";
-    return formatDuration(Math.max(0, finishedAt - startedAt) / 1000);
-  }
-
-  function codexUsageSummary(usage) {
-    if (!usage) return "输入 0 · 缓存 0 · 输出 0";
-    return [
-      `输入 ${formatNumber(usage.inputTokens || 0)}`,
-      `缓存 ${formatNumber(usage.cachedInputTokens || 0)}`,
-      `输出 ${formatNumber(usage.outputTokens || 0)}`,
-    ].join(" · ");
-  }
-
-  function codexModeLabel(mode) {
-    if (mode === "pure") return "纯解题";
-    if (mode === "side") return "Side 对话";
-    return "主对话";
-  }
-
-  function codexSummary(value, maximum = 150) {
-    const normalized = String(value || "").replace(/\s+/g, " ").trim();
-    if (!normalized) return "无详细内容";
-    return normalized.length > maximum ? `${normalized.slice(0, maximum)}…` : normalized;
-  }
-
-  function codexCommandSummary(event) {
-    const command = String(event.command || event.summary || "").trim();
-    const firstLine = command.split(/\r?\n/, 1)[0] || "命令";
-    return codexSummary(firstLine, 180);
-  }
-
-  function codexEventPresentation(event) {
-    const kind = event?.kind || "event";
-    const presentations = {
-      "thread.started": ["会话", "session", "Codex 会话已建立"],
-      "turn.started": ["Codex 开始", "progress", "开始处理请求"],
-      "round.started": ["轮次开始", "progress", "开始处理本轮输入"],
-      "round.completed": ["轮次完成", "success", "本轮处理完成"],
-      "round.failed": ["轮次失败", "error", "本轮处理失败"],
-      "round.canceled": ["轮次停止", "muted", "本轮已停止"],
-      "round.interrupted": ["轮次切换", "interrupted", "本轮提前结束"],
-      "task.interrupted": ["任务中断", "interrupted", "程序退出导致运行中断"],
-      "task.resumed": ["恢复执行", "progress", "使用原会话恢复执行"],
-      "task.finished": ["标记结束", "muted", "中断任务已标记结束"],
-      "user.message": ["用户输入", "user", ""],
-      "user.followup_queued": ["用户追加消息", "user", ""],
-      "user.followup_updated": ["待处理消息已编辑", "user", ""],
-      "user.followup_canceled": ["待处理消息已取消", "muted", ""],
-      reasoning: ["思考", "reasoning", ""],
-      agent_message: ["Codex 回复", "message", ""],
-      command_execution: ["执行命令", "command", ""],
-      "process.started": ["进程", "progress", "Codex 子进程已启动"],
-      "process.completed": ["进程", "success", "Codex 子进程已结束"],
-      "turn.completed": ["Token 统计", "success", "本轮 Codex 处理完成"],
-      warning: ["警告", "warning", ""],
-      stderr: ["错误输出", "error", ""],
-      error: ["错误", "error", ""],
-      stream_error: ["日志读取错误", "error", ""],
-      stdout: ["输出", "output", ""],
-    };
-    let [label, tone, fallback] = presentations[kind] || [kind, "output", ""];
-    if (kind === "stderr") {
-      const diagnostic = String(event?.summary || "").toLowerCase();
-      const warning = ["warning", "warn:", "defaulting to fallback metadata", "degrade performance", "deprecated"].some((marker) => diagnostic.includes(marker));
-      const hardError = ["error", "failed", "fatal", "panic", "exception", "退出码"].some((marker) => diagnostic.includes(marker));
-      [label, tone, fallback] = warning
-        ? ["警告", "warning", ""]
-        : hardError
-          ? ["错误输出", "error", ""]
-          : ["诊断输出", "muted", ""];
-    }
-    const summary = kind === "command_execution"
-      ? codexCommandSummary(event)
-      : kind === "turn.completed" && event.usage
-        ? codexUsageSummary(event.usage)
-        : codexSummary(event?.summary || fallback, 220);
-    return { label, tone, summary };
-  }
-
-  function mergeCodexEventLists(current, incoming) {
-    const byKey = new Map();
-    [...(current || []), ...(incoming || [])].forEach((event, index) => {
-      const sequence = Number(event?.sequence || 0);
-      const key = sequence > 0
-        ? `sequence:${sequence}`
-        : `legacy:${event?.at || ""}:${event?.kind || ""}:${event?.itemId || ""}:${index}`;
-      byKey.set(key, event);
-    });
-    return [...byKey.values()].sort((a, b) => {
-      const left = Number(a.sequence || 0);
-      const right = Number(b.sequence || 0);
-      if (left && right) return left - right;
-      return new Date(a.at || 0).getTime() - new Date(b.at || 0).getTime();
-    });
-  }
-
-  function normalizeCodexEvents(events) {
-    const normalized = [];
-    const commands = new Map();
-    (Array.isArray(events) ? events : []).forEach((source) => {
-      const event = { ...source, repeatCount: Number(source.repeatCount || 1), sourceSequences: [source.sequence || 0] };
-      if (event.kind === "command_execution") {
-        const commandText = String(event.command || event.summary || "").trim();
-        let key = event.itemId ? `item:${event.itemId}` : "";
-        if (!key) {
-          const previous = normalized.at(-1);
-          if (previous?.kind === "command_execution" && previous.roundNumber === event.roundNumber && String(previous.command || previous.summary || "").trim() === commandText) {
-            key = previous._commandKey;
-          } else {
-            key = `legacy:${event.roundNumber || 0}:${event.sequence || event.at || normalized.length}:${commandText}`;
-          }
-        }
-        const existing = commands.get(key);
-        if (existing) {
-          const sameEvent = existing.status === event.status
-            && String(existing.command || existing.summary || "") === String(event.command || event.summary || "")
-            && String(existing.output || "") === String(event.output || "")
-            && existing.exitCode === event.exitCode;
-          const lifecycleUpdate = ["in_progress", "running", "started"].includes(existing.status)
-            && ["completed", "failed", "canceled"].includes(event.status);
-          existing.status = event.status || existing.status;
-          existing.output = event.output || existing.output;
-          existing.exitCode = event.exitCode ?? existing.exitCode;
-          existing.startedAt = existing.startedAt || event.startedAt || existing.at;
-          existing.finishedAt = event.finishedAt || existing.finishedAt;
-          existing.durationSeconds = event.durationSeconds ?? existing.durationSeconds;
-          existing.sessionId = event.sessionId || existing.sessionId;
-          existing.sourceSequences.push(event.sequence || 0);
-          if (sameEvent && !lifecycleUpdate) {
-            existing.repeatCount = Number(existing.repeatCount || 1) + Number(event.repeatCount || 1);
-          } else {
-            existing.repeatCount = Math.max(existing.repeatCount || 1, event.repeatCount || 1);
-          }
-          return;
-        }
-        event._commandKey = key;
-        event.startedAt = event.startedAt || ((event.status === "in_progress" || event.status === "running") ? event.at : null);
-        commands.set(key, event);
-        normalized.push(event);
-        return;
-      }
-      const previous = normalized.at(-1);
-      const same = previous
-        && previous.kind !== "command_execution"
-        && previous.roundNumber === event.roundNumber
-        && previous.kind === event.kind
-        && previous.status === event.status
-        && String(previous.summary || "") === String(event.summary || "")
-        && String(previous.output || "") === String(event.output || "");
-      if (same) {
-        previous.repeatCount = Number(previous.repeatCount || 1) + Number(event.repeatCount || 1);
-        previous.sourceSequences.push(event.sequence || 0);
-        previous.finishedAt = event.finishedAt || previous.finishedAt;
-        return;
-      }
-      normalized.push(event);
-    });
-    return normalized;
-  }
-
-  function codexEventStateKey(taskId, event, index) {
-    const sequence = event.sourceSequences?.[0] || event.sequence || event.itemId || index;
-    return `${taskId}:${sequence}`;
-  }
-
-  function codexEventDefaultExpanded(event) {
-    if (["agent_message", "error", "stream_error", "round.failed"].includes(event.kind)) return true;
-    if (event.kind === "warning") return true;
-    if (event.kind === "stdout" && String(event.summary || "").length < 360) return true;
-    return false;
   }
 
   function codexEventExpanded(key, event) {
@@ -4937,6 +4779,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
         addProviderRow();
         refreshIcons();
       });
+      els.modelRecoveryInterval.addEventListener("input", updateModelRoutingSummary);
       els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
         button.addEventListener("click", () => setRoutingStrategy(button.dataset.routing || "round-robin"));
       });
@@ -4948,8 +4791,23 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
   }
 
   function bindAttachmentEvents() {
-    bindModuleOnce("附件", ["open-attachment-manager", "close-attachment-manager", "attachment-manager-dialog", "check-attachments", "download-all-attachments", "pause-attachment-download", "resume-attachment-download", "cancel-attachment-download"], () => {
+    bindModuleOnce("附件", ["open-attachment-manager", "close-attachment-manager", "attachment-manager-dialog", "attachment-search", "check-attachments", "download-all-attachments", "pause-attachment-download", "resume-attachment-download", "cancel-attachment-download"], () => {
       $("open-attachment-manager").addEventListener("click", openAttachmentManager);
+      els.attachmentSearch.addEventListener("input", () => {
+        state.attachmentSearch = els.attachmentSearch.value;
+        renderAttachmentCatalog();
+      });
+      els.attachmentFilters.forEach((button) => {
+        button.addEventListener("click", () => {
+          state.attachmentFilter = button.dataset.attachmentFilter || "all";
+          els.attachmentFilters.forEach((item) => {
+            const active = item === button;
+            item.classList.toggle("is-active", active);
+            item.setAttribute("aria-pressed", String(active));
+          });
+          renderAttachmentCatalog();
+        });
+      });
       els.attachmentCheck.addEventListener("click", checkAttachments);
       els.attachmentDownloadAll.addEventListener("click", downloadAllAttachments);
       els.attachmentPause.addEventListener("click", () => controlAttachmentDownload("pause"));

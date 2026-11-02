@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261102-layout6">
+  <link rel="stylesheet" href="/styles.css?v=20261102-layout7">
 </head>
 <body>
   <aside id="app-sidebar" class="app-sidebar" aria-label="工作台导航">
@@ -623,6 +623,23 @@
       </button>
     </header>
     <div class="model-routing-page-body">
+      <section class="model-routing-overview" aria-label="模型路由概览">
+        <article class="model-routing-metric">
+          <span>已启用提供商</span>
+          <strong id="model-active-provider-count">0</strong>
+          <small id="model-total-provider-count">共 0 个</small>
+        </article>
+        <article class="model-routing-metric">
+          <span>当前策略</span>
+          <strong id="model-strategy-summary">每次轮询</strong>
+          <small>请求级负载分配</small>
+        </article>
+        <article class="model-routing-metric">
+          <span>恢复窗口</span>
+          <strong id="model-recovery-summary">60 秒</strong>
+          <small>失败提供商冷却时间</small>
+        </article>
+      </section>
       <div class="settings-form model-routing-form">
       <p class="settings-hint">勾选参与轮询的提供商。API Key 不会在页面回显，留空表示保留原值。</p>
       <section class="settings-section">
@@ -687,20 +704,50 @@
       </div>
       <div class="attachment-manager-actions">
         <span id="attachment-summary" class="attachment-summary" role="status">本地 0 / 0</span>
-        <button id="check-attachments" class="button button-ghost" type="button" title="检查本地文件" aria-label="检查本地附件文件">
-          <i data-lucide="scan-search" aria-hidden="true"></i>
-          <span>检查本地文件</span>
-        </button>
-        <button id="download-all-attachments" class="button button-primary" type="button" title="下载全部缺失附件" disabled>
-          <i data-lucide="folder-down" aria-hidden="true"></i>
-          <span>一键下载全部</span>
-        </button>
         <button id="close-attachment-manager" class="icon-button" type="button" title="关闭" aria-label="关闭附件管理">
           <i data-lucide="x" aria-hidden="true"></i>
         </button>
       </div>
     </header>
     <div class="attachment-manager-body">
+      <section class="attachment-overview" aria-label="附件概览">
+        <div class="attachment-metrics">
+          <article class="attachment-metric is-missing">
+            <span>缺失附件</span>
+            <strong id="attachment-missing-count">0</strong>
+          </article>
+          <article class="attachment-metric is-ready">
+            <span>已下载</span>
+            <strong id="attachment-existing-count">0</strong>
+          </article>
+          <article class="attachment-metric">
+            <span>附件总数</span>
+            <strong id="attachment-total-count">0</strong>
+          </article>
+        </div>
+        <div class="attachment-toolbar">
+          <label class="attachment-search" for="attachment-search">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="attachment-search" type="search" autocomplete="off" placeholder="搜索题目、分类或附件名">
+          </label>
+          <div class="attachment-filters" role="group" aria-label="附件状态筛选">
+            <button class="attachment-filter is-active" type="button" data-attachment-filter="all" aria-pressed="true">全部</button>
+            <button class="attachment-filter" type="button" data-attachment-filter="missing" aria-pressed="false">缺失</button>
+            <button class="attachment-filter" type="button" data-attachment-filter="ready" aria-pressed="false">已下载</button>
+            <button class="attachment-filter" type="button" data-attachment-filter="error" aria-pressed="false">异常</button>
+          </div>
+          <div class="attachment-toolbar-actions">
+            <button id="check-attachments" class="button button-ghost" type="button" title="检查本地文件" aria-label="检查本地附件文件">
+              <i data-lucide="scan-search" aria-hidden="true"></i>
+              <span>重新检查</span>
+            </button>
+            <button id="download-all-attachments" class="button button-primary" type="button" title="下载全部缺失附件" disabled>
+              <i data-lucide="folder-down" aria-hidden="true"></i>
+              <span>下载全部缺失</span>
+            </button>
+          </div>
+        </div>
+      </section>
       <section id="attachment-progress" class="attachment-progress" aria-live="polite" hidden>
         <div class="attachment-progress-heading">
           <div>
@@ -754,7 +801,7 @@
       </button>
     </header>
     <div class="tool-manager-body">
-      <p class="settings-section-note">安装位置：<code>tools/</code>；Python 环境：<code>tools/venv</code>；Go 工具与缓存：<code>tools/go</code>；工具清单：<code>tools/installed-tools.txt</code>。首次安装 Python 或 Go 工具时会自动测试官方源和国内镜像，选择延迟最低的源。</p>
+      <p class="settings-section-note">工具与虚拟环境：<code>tools/</code>；缓存与临时文件：<code>workbench-data/cache/</code>；工具清单：<code>tools/installed-tools.txt</code>。首次安装 Python 或 Go 工具时会自动测试官方源和国内镜像，选择延迟最低的源。</p>
       <section class="tool-manager-environment" aria-labelledby="tool-manager-environment-title">
         <div class="tool-manager-section-heading">
           <div>
@@ -978,6 +1025,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script type="module" src="/app.js?v=20261102-layout6"></script>
+  <script type="module" src="/app.js?v=20261102-layout7"></script>
 </body>
 </html>

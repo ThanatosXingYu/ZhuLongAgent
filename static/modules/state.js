@@ -8,6 +8,8 @@ export function createAppState({ realtimeStopped } = {}) {
     detail: null,
     noticeDetail: null,
     attachmentCatalog: null,
+    attachmentSearch: "",
+    attachmentFilter: "all",
     attachmentBusy: false,
     attachmentTask: null,
     attachmentTaskTimer: null,

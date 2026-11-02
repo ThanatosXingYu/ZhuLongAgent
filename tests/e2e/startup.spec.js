@@ -304,8 +304,11 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await rows.nth(1).locator(".provider-model").fill("model-b");
   await rows.nth(1).locator(".provider-protocol").selectOption("openai-responses");
   await rows.nth(1).locator(".provider-enabled").uncheck();
+  await expect(page.locator("#model-active-provider-count")).toHaveText("1");
+  await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
 
   await page.locator('[data-routing="failover"]').click();
+  await expect(page.locator("#model-strategy-summary")).toHaveText("故障转移");
   await page.locator("#model-retry-delays").fill("1,5,10,10,15");
   await page.locator("#model-recovery-interval").fill("60");
   await expect(page.locator("#codex-auto-compact-limit")).toHaveValue("500000");
@@ -324,6 +327,26 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await expect(page.locator("#model-routing-status")).toContainText("已保存");
   await page.locator("#close-model-routing").click();
   await expect(routingPage).toBeHidden();
+});
+
+test("附件管理页突出缺失状态并支持筛选", async ({ page }) => {
+  await openWorkbench(page);
+  await page.locator("#open-attachment-manager").click();
+  const dialog = page.locator("#attachment-manager-dialog");
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toHaveClass(/is-page-dialog/);
+  await expect(page.locator("#attachment-missing-count")).toHaveText("1");
+  await expect(page.locator("#attachment-existing-count")).toHaveText("0");
+  await expect(page.locator("#attachment-total-count")).toHaveText("1");
+
+  await page.locator('[data-attachment-filter="missing"]').click();
+  await expect(page.locator(".attachment-file-row")).toHaveCount(1);
+  await expect(page.locator(".attachment-file-status")).toContainText("缺失");
+
+  await page.locator('[data-attachment-filter="ready"]').click();
+  await expect(page.locator("#attachment-manager-list")).toContainText("没有符合当前筛选条件的附件");
+  await page.locator("#attachment-search").fill("不存在");
+  await expect(page.locator("#attachment-manager-list")).toContainText("没有符合当前筛选条件的附件");
 });
 
 test("登录态验证较慢时仍可绑定并进入登录", async ({ page }) => {
