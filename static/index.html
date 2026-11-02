@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261102-layout7">
+  <link rel="stylesheet" href="/styles.css?v=20261103-layout9">
 </head>
 <body>
   <aside id="app-sidebar" class="app-sidebar" aria-label="工作台导航">
@@ -30,10 +30,6 @@
         <button id="show-exercise-view" class="sidebar-link is-active" type="button" data-sidebar-view="exercise" title="题目工作区">
           <i data-lucide="list-tree" aria-hidden="true"></i>
           <span>题目工作区</span>
-        </button>
-        <button id="open-match-info" class="sidebar-link" type="button" title="比赛说明">
-          <i data-lucide="book-open" aria-hidden="true"></i>
-          <span>比赛说明</span>
         </button>
         <button id="open-attachment-manager" class="sidebar-link" type="button" data-sidebar-view="attachment-manager-dialog" title="附件管理">
           <i data-lucide="folder-down" aria-hidden="true"></i>
@@ -321,33 +317,6 @@
     </aside>
   </main>
 
-  <dialog id="match-info-dialog" class="match-dialog" aria-labelledby="match-info-title">
-    <header class="dialog-header">
-      <div>
-        <p class="eyebrow">Competition Info</p>
-        <h2 id="match-info-title">比赛说明</h2>
-      </div>
-      <div class="dialog-actions">
-        <button id="refresh-match-info" class="icon-button" type="button" title="刷新比赛说明" aria-label="刷新比赛说明">
-          <i data-lucide="refresh-cw" aria-hidden="true"></i>
-        </button>
-        <button id="close-match-info" class="icon-button" type="button" title="关闭" aria-label="关闭比赛说明">
-          <i data-lucide="x" aria-hidden="true"></i>
-        </button>
-      </div>
-    </header>
-    <div class="dialog-body">
-      <section>
-        <h3>注意事项</h3>
-        <p id="match-note">暂无内容</p>
-      </section>
-      <section>
-        <h3>比赛规则</h3>
-        <p id="match-rule">暂无内容</p>
-      </section>
-    </div>
-  </dialog>
-
   <dialog id="settings-dialog" class="settings-dialog" data-page-dialog aria-labelledby="settings-title">
     <header class="dialog-header">
       <div>
@@ -358,9 +327,24 @@
         <i data-lucide="x" aria-hidden="true"></i>
       </button>
     </header>
+    <div class="settings-page-layout">
+      <nav class="settings-page-nav" aria-label="配置分区">
+        <button class="settings-page-nav-item is-active" type="button" data-settings-tab="platform" aria-pressed="true">
+          <i data-lucide="shield-check" aria-hidden="true"></i>
+          <span>平台登录</span>
+        </button>
+        <button class="settings-page-nav-item" type="button" data-settings-tab="codex" aria-pressed="false">
+          <i data-lucide="terminal-square" aria-hidden="true"></i>
+          <span>Codex</span>
+        </button>
+        <button class="settings-page-nav-item" type="button" data-settings-tab="models" aria-pressed="false">
+          <i data-lucide="route" aria-hidden="true"></i>
+          <span>模型</span>
+        </button>
+      </nav>
     <div class="settings-form">
       <p class="settings-hint">配置仅保存在当前目录。Token、Cookie 与粘贴的请求包不会在页面回显，账号、密码与验证码不会保存。</p>
-      <section class="settings-section">
+      <section class="settings-section" data-settings-panel="platform">
         <div class="settings-section-heading">
           <h3>i春秋比赛</h3>
           <div class="platform-auth-actions">
@@ -521,7 +505,7 @@
         </div>
       </section>
       <form id="settings-form" novalidate>
-        <section class="settings-section settings-section-codex">
+        <section class="settings-section settings-section-codex" data-settings-panel="codex">
           <div class="settings-section-heading">
             <div>
               <h3>Codex CLI 任务 <span class="required-badge">必填</span></h3>
@@ -577,7 +561,7 @@
           </label>
           <p class="settings-section-note">默认关闭。开启后仅恢复仍有 Session ID 且原 Codex 子进程已经消失的任务，并继续沿用原任务与会话记录。</p>
         </section>
-        <section class="settings-section settings-section-optional">
+        <section class="settings-section settings-section-optional" data-settings-panel="models">
           <div class="settings-section-heading">
             <div>
               <h3>模型提供商与轮询 <span class="optional-badge">可选</span></h3>
@@ -609,6 +593,7 @@
           </button>
         </footer>
       </form>
+    </div>
     </div>
   </dialog>
 
@@ -711,19 +696,10 @@
     </header>
     <div class="attachment-manager-body">
       <section class="attachment-overview" aria-label="附件概览">
-        <div class="attachment-metrics">
-          <article class="attachment-metric is-missing">
-            <span>缺失附件</span>
-            <strong id="attachment-missing-count">0</strong>
-          </article>
-          <article class="attachment-metric is-ready">
-            <span>已下载</span>
-            <strong id="attachment-existing-count">0</strong>
-          </article>
-          <article class="attachment-metric">
-            <span>附件总数</span>
-            <strong id="attachment-total-count">0</strong>
-          </article>
+        <div class="attachment-summary-strip" aria-label="附件统计">
+          <span class="attachment-summary-item is-missing">缺失 <strong id="attachment-missing-count">0</strong></span>
+          <span class="attachment-summary-item is-ready">已下载 <strong id="attachment-existing-count">0</strong></span>
+          <span class="attachment-summary-item">总计 <strong id="attachment-total-count">0</strong></span>
         </div>
         <div class="attachment-toolbar">
           <label class="attachment-search" for="attachment-search">
@@ -801,7 +777,6 @@
       </button>
     </header>
     <div class="tool-manager-body">
-      <p class="settings-section-note">工具与虚拟环境：<code>tools/</code>；缓存与临时文件：<code>work/cache/</code>；工具清单：<code>tools/installed-tools.txt</code>。首次安装 Python 或 Go 工具时会自动测试官方源和国内镜像，选择延迟最低的源。</p>
       <section class="tool-manager-environment" aria-labelledby="tool-manager-environment-title">
         <div class="tool-manager-section-heading">
           <div>
@@ -892,6 +867,32 @@
     </header>
     <div class="codex-task-layout">
       <aside class="codex-task-sidebar" aria-label="Codex 会话树">
+        <div class="codex-session-controls">
+          <label class="codex-session-search" for="codex-session-search">
+            <i data-lucide="search" aria-hidden="true"></i>
+            <input id="codex-session-search" type="search" autocomplete="off" placeholder="搜索会话">
+          </label>
+          <select id="codex-session-status" aria-label="按状态筛选 Codex 会话">
+            <option value="">全部状态</option>
+            <option value="running,queued">运行中 / 排队</option>
+            <option value="completed">已完成</option>
+            <option value="failed">失败</option>
+            <option value="interrupted">已中断</option>
+            <option value="canceled">已停止</option>
+          </select>
+          <select id="codex-session-archive" aria-label="筛选归档会话">
+            <option value="active">当前会话</option>
+            <option value="archived">已归档</option>
+            <option value="all">全部会话</option>
+          </select>
+        </div>
+        <div class="codex-batch-toolbar">
+          <span id="codex-selected-count">未选择会话</span>
+          <div>
+            <button id="codex-export-selected" class="button button-ghost button-compact" type="button" disabled>导出</button>
+            <button id="codex-archive-selected" class="button button-ghost button-compact" type="button" disabled>归档</button>
+          </div>
+        </div>
         <div id="codex-task-list" class="codex-task-list" aria-live="polite">
           <div class="empty-state compact">暂无 Codex 任务</div>
         </div>
@@ -1025,6 +1026,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script type="module" src="/app.js?v=20261102-layout7"></script>
+  <script type="module" src="/app.js?v=20261103-layout9"></script>
 </body>
 </html>

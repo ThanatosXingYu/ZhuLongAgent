@@ -14,12 +14,12 @@ import {
   isCodexTerminal,
   mergeCodexEventLists,
   normalizeCodexEvents,
-} from "./modules/codex-presenters.js?v=20261102-layout7";
-import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261102-layout7";
-import { createApiClient } from "./modules/api.js?v=20261102-layout7";
-import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261102-layout7";
-import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261102-layout7";
-import { createAppState } from "./modules/state.js?v=20261102-layout7";
+} from "./modules/codex-presenters.js?v=20261103-layout9";
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout9";
+import { createApiClient } from "./modules/api.js?v=20261103-layout9";
+import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout9";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout9";
+import { createAppState } from "./modules/state.js?v=20261103-layout9";
 
 "use strict";
 
@@ -62,6 +62,18 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     "model-routing-page": "模型路由",
     "codex-task-page": "Codex 会话",
   });
+  const VIEW_PATHS = Object.freeze({
+    competition: "/competition",
+    exercise: "/exercises",
+    "attachment-manager-dialog": "/attachments",
+    "tool-manager-dialog": "/tools",
+    "codex-task-page": "/codex",
+    "model-routing-page": "/models",
+    "settings-dialog": "/settings",
+  });
+  const PATH_VIEWS = Object.freeze(
+    Object.fromEntries(Object.entries(VIEW_PATHS).map(([view, path]) => [path, view])),
+  );
   const RICH_TEXT_TAGS = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IMG", "LI", "OL", "P", "PRE", "S", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL"]);
   const DROPPED_RICH_TEXT_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "MATH", "OBJECT", "SCRIPT", "STYLE", "SVG", "TEXTAREA"]);
 
@@ -79,6 +91,8 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   let modelRoutingTrigger = null;
   let codexTaskTrigger = null;
   let activePrimaryView = "exercise";
+  let suppressRouteSync = false;
+  let codexLoadEpoch = 0;
 
   const $ = (id) => document.getElementById(id);
   let dialogLayerSequence = 0;
@@ -140,9 +154,6 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     noticeDetail: $("notice-detail"),
     scoreRefresh: $("score-auto-refresh"),
     noticeRefresh: $("notice-auto-refresh"),
-    matchDialog: $("match-info-dialog"),
-    matchNote: $("match-note"),
-    matchRule: $("match-rule"),
     aiPromptDialog: $("ai-prompt-dialog"),
     aiModelStatus: $("ai-model-status"),
     aiPromptText: $("ai-prompt-text"),
@@ -251,6 +262,12 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     saveSettings: $("save-settings"),
     codexTaskPage: $("codex-task-page"),
     codexTaskList: $("codex-task-list"),
+    codexSessionSearch: $("codex-session-search"),
+    codexSessionStatus: $("codex-session-status"),
+    codexSessionArchive: $("codex-session-archive"),
+    codexSelectedCount: $("codex-selected-count"),
+    codexExportSelected: $("codex-export-selected"),
+    codexArchiveSelected: $("codex-archive-selected"),
     codexLoadMoreTasks: $("codex-load-more-tasks"),
     codexTaskStatus: $("codex-task-status"),
     codexTaskMeta: $("codex-task-meta"),
@@ -365,6 +382,43 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     }
   }
 
+  function syncRouteForView(view, { replace = false } = {}) {
+    if (suppressRouteSync) return;
+    const path = VIEW_PATHS[view];
+    if (!path || window.location.pathname === path) return;
+    window.history[replace ? "replaceState" : "pushState"]({ view }, "", path);
+  }
+
+  function resolveRouteView() {
+    const normalized = window.location.pathname.replace(/\/+$/, "") || "/";
+    if (normalized === "/") return "exercise";
+    return PATH_VIEWS[normalized] || "exercise";
+  }
+
+  async function applyRouteFromLocation() {
+    const view = resolveRouteView();
+    suppressRouteSync = true;
+    try {
+      if (view === "competition") showCompetitionView();
+      else if (view === "exercise") showExerciseView();
+      else if (view === "attachment-manager-dialog") openAttachmentManager();
+      else if (view === "tool-manager-dialog") openToolManagerDialog();
+      else if (view === "codex-task-page") openCodexTaskPage();
+      else if (view === "model-routing-page") await loadModelRoutingPage();
+      else if (view === "settings-dialog") openSettingsDialog();
+    } finally {
+      suppressRouteSync = false;
+      const expectedPath = VIEW_PATHS[view];
+      if (expectedPath && window.location.pathname !== expectedPath) {
+        window.history.replaceState(
+          { view },
+          "",
+          expectedPath,
+        );
+      }
+    }
+  }
+
   function showPrimaryView(view) {
     activePrimaryView = view === "exercise" ? "exercise" : "competition";
     closePageDialogs({ restoreSidebar: false });
@@ -372,6 +426,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     if (!els.codexTaskPage.hidden) closeCodexTaskPage();
     setSidebarOpen(false);
     setActiveSidebarView(activePrimaryView);
+    syncRouteForView(activePrimaryView);
     if (els.competitionView) els.competitionView.hidden = activePrimaryView !== "competition";
     if (els.exerciseView) els.exerciseView.hidden = activePrimaryView !== "exercise";
     document.body.classList.remove("workspace-page-open");
@@ -489,6 +544,16 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     if (!dialog) return;
     if (dialog.hasAttribute("data-page-dialog")) {
       closePageDialogs({ except: dialog });
+      if (!els.modelRoutingPage.hidden || !els.codexTaskPage.hidden) {
+        const previousSuppress = suppressRouteSync;
+        suppressRouteSync = true;
+        try {
+          if (!els.modelRoutingPage.hidden) closeModelRoutingPage();
+          if (!els.codexTaskPage.hidden) closeCodexTaskPage();
+        } finally {
+          suppressRouteSync = previousSuppress;
+        }
+      }
       if (dialog.open && typeof dialog.close === "function") dialog.close();
       dialog.classList.add("is-page-dialog");
       if (typeof dialog.show === "function") {
@@ -499,6 +564,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       document.body.classList.add("workspace-page-open");
       setSidebarOpen(false);
       setActiveSidebarView(dialog.id);
+      syncRouteForView(dialog.id);
       syncToastRegionHost(dialog);
       return;
     }
@@ -529,6 +595,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
         document.body.classList.remove("workspace-page-open");
         if (els.modelRoutingPage.hidden && els.codexTaskPage.hidden) {
           setActiveSidebarView(activePrimaryView);
+          syncRouteForView(activePrimaryView);
         }
       }
     }
@@ -863,11 +930,21 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     modelRoutingTrigger = trigger instanceof HTMLElement ? trigger : document.activeElement;
     if (els.settingsDialog.open) closeDialog(els.settingsDialog);
     closePageDialogs();
+    if (!els.codexTaskPage.hidden) {
+      const previousSuppress = suppressRouteSync;
+      suppressRouteSync = true;
+      try {
+        closeCodexTaskPage();
+      } finally {
+        suppressRouteSync = previousSuppress;
+      }
+    }
     els.modelRoutingPage.hidden = false;
     document.body.classList.add("model-routing-open");
     document.body.classList.add("workspace-page-open");
     setSidebarOpen(false);
     setActiveSidebarView("model-routing-page");
+    syncRouteForView("model-routing-page");
     window.requestAnimationFrame(() => els.modelRoutingPage.focus());
   }
 
@@ -877,6 +954,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     if (!document.querySelector("dialog[data-page-dialog][open]") && els.codexTaskPage.hidden) {
       document.body.classList.remove("workspace-page-open");
       setActiveSidebarView(activePrimaryView);
+      syncRouteForView(activePrimaryView);
     }
     const focusTarget = modelRoutingTrigger;
     modelRoutingTrigger = null;
@@ -1083,12 +1161,19 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       els.installAllTools.disabled = true;
       return;
     }
-    const categoryOrder = [
-      ["python-library", "Python 库"],
-      ["go-project", "Go 开源项目"],
-      ["binary-package", "独立工具 / 发行包"],
+    const categoryDefinitions = [
+      { key: "general", label: "通用", icon: "layers-3", note: "跨题型基础库与通用能力" },
+      { key: "web", label: "Web / 网络", icon: "globe-2", note: "目录扫描、请求测试与网络分析" },
+      { key: "pwn", label: "Pwn / 二进制利用", icon: "binary", note: "调试、ROP、漏洞利用与二进制保护检查" },
+      { key: "reverse", label: "Reverse / 逆向", icon: "scan-code", note: "反汇编、反编译、仿真与动态插桩" },
+      { key: "crypto", label: "Crypto / 密码学", icon: "key-round", note: "约束求解、数论、哈希与口令恢复" },
+      { key: "forensics", label: "Forensics / 取证", icon: "microscope", note: "文件雕刻、内存、元数据与样本分析" },
+      { key: "misc", label: "Misc / 综合", icon: "blocks", note: "压缩、协议、网络与综合辅助工具" },
     ];
-    const grouped = new Map(categoryOrder.map(([key, label]) => [key, { key, label, tools: [] }]));
+    const grouped = new Map(categoryDefinitions.map((category) => [
+      category.key,
+      { ...category, tools: [] },
+    ]));
     tools.forEach((tool) => {
       const category = tool.category || "other";
       if (!grouped.has(category)) grouped.set(category, { key: category, label: tool.categoryLabel || "其他工具", tools: [] });
@@ -1097,11 +1182,18 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     const fragment = document.createDocumentFragment();
     grouped.forEach((group) => {
       if (!group.tools.length) return;
-      const section = createElement("section", "tool-manager-group");
+      const section = createElement("section", `tool-manager-group tool-category-${group.key}`);
       const installedCount = group.tools.filter((tool) => tool.installed).length;
       const heading = createElement("div", "tool-manager-group-heading");
+      const headingCopy = createElement("div", "tool-manager-group-copy");
+      const headingTitle = createElement("div", "tool-manager-group-title");
+      headingTitle.append(icon(group.icon || "wrench"), createElement("h3", "", group.label));
+      headingCopy.append(
+        headingTitle,
+        createElement("p", "tool-manager-group-note", group.note || ""),
+      );
       heading.append(
-        createElement("h3", "", group.label),
+        headingCopy,
         createElement("span", "tool-manager-group-count", `${installedCount} / ${group.tools.length} 已安装`),
       );
       section.append(heading);
@@ -1451,8 +1543,6 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     els.noticeCount.textContent = "0";
     els.noticeList.replaceChildren(createElement("div", "empty-state compact", messages.notice));
     els.noticeDetail.replaceChildren(createElement("div", "empty-state compact", messages.noticeDetail));
-    els.matchNote.textContent = messages.matchNote;
-    els.matchRule.textContent = messages.matchRule;
     if (els.overviewMatchNote) els.overviewMatchNote.textContent = messages.matchNote;
     if (els.overviewMatchRule) els.overviewMatchRule.textContent = messages.matchRule;
     if (els.overviewTeamName) els.overviewTeamName.textContent = "尚未获取队伍信息";
@@ -1683,6 +1773,19 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     });
   }
 
+  function setSettingsTab(tab) {
+    const selected = ["platform", "codex", "models"].includes(tab) ? tab : "platform";
+    state.activeSettingsTab = selected;
+    document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+      const active = button.dataset.settingsTab === selected;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    document.querySelectorAll("[data-settings-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.settingsPanel !== selected;
+    });
+  }
+
   async function sessionLogin(event) {
     event?.preventDefault();
     const rawRequest = els.sessionRequestPacket.value.trim();
@@ -1721,6 +1824,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
 
   function openSettingsDialog() {
     openDialog(els.settingsDialog);
+    setSettingsTab(state.activeSettingsTab);
     if (state.runtimeConfig) {
       fillRuntimeConfig(state.runtimeConfig);
       if (state.configured && !state.authenticated) els.platformLogin.hidden = false;
@@ -1876,7 +1980,6 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       "refresh-overview",
       "refresh-exercises",
       "refresh-notices",
-      "refresh-match-info",
       "refresh-active-environments",
       "open-attachment-manager",
     ].forEach((id) => {
@@ -2751,19 +2854,43 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
 
   function renderAttachmentExercise(exercise) {
     const files = attachmentFiles(exercise);
-    const section = createElement("section", "attachment-exercise");
+    const id = Number(exercise.id || 0);
+    const expanded = state.attachmentFilter !== "all"
+      || Boolean(state.attachmentSearch.trim())
+      || state.expandedAttachmentExercises.has(id);
+    const section = createElement("section", `attachment-exercise${expanded ? " is-expanded" : ""}`);
     const header = createElement("div", "attachment-exercise-row");
-    const main = createElement("div", "attachment-exercise-main");
+    const main = createElement("button", "attachment-exercise-main");
+    main.type = "button";
+    main.setAttribute("aria-expanded", String(expanded));
+    main.title = expanded ? "收起附件详情" : "展开附件详情";
     const title = createElement("div", "attachment-exercise-title");
     title.append(createElement("span", "attachment-exercise-id", `#${exercise.id}`), createElement("strong", "", exercise.name || `题目 ${exercise.id}`));
     const meta = createElement("span", exercise.error ? "attachment-exercise-meta is-error" : "attachment-exercise-meta");
     const knownBytes = files.reduce((sum, attachment) => sum + (Number(attachment.size) > 0 ? Number(attachment.size) : 0), 0);
-    meta.textContent = exercise.error || (files.length ? `${files.length} 个附件${knownBytes > 0 ? ` · ${formatBytes(knownBytes)}` : " · 正在获取大小"}` : "无附件");
+    const missing = files.filter((attachment) => !attachment.error && !attachment.exists).length;
+    const errors = files.filter((attachment) => Boolean(attachment.error)).length;
+    meta.textContent = exercise.error || [
+      `${files.length} 个附件`,
+      knownBytes > 0 ? formatBytes(knownBytes) : "",
+      missing ? `缺失 ${missing}` : "",
+      errors ? `异常 ${errors}` : "",
+    ].filter(Boolean).join(" · ");
     main.append(title, meta);
+    main.addEventListener("click", () => toggleAttachmentExercise(id));
     header.append(main);
 
     if (!exercise.error) {
       const actions = createElement("div", "attachment-exercise-actions");
+      if (files.length) {
+        const toggle = createElement("button", "icon-button attachment-exercise-toggle");
+        toggle.type = "button";
+        toggle.title = expanded ? "收起附件详情" : "展开附件详情";
+        toggle.setAttribute("aria-label", toggle.title);
+        toggle.append(icon(expanded ? "chevron-up" : "chevron-down"));
+        toggle.addEventListener("click", () => toggleAttachmentExercise(id));
+        actions.append(toggle);
+      }
       if (files.length) {
         const downloadButton = createElement("button", "button button-ghost attachment-download-exercise");
         downloadButton.type = "button";
@@ -2795,7 +2922,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     }
     section.append(header);
 
-    if (files.length) {
+    if (files.length && expanded) {
       const list = createElement("div", "attachment-file-list");
       files.forEach((attachment) => {
         const row = createElement("div", "attachment-file-row");
@@ -2814,6 +2941,16 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       section.append(list);
     }
     return section;
+  }
+
+  function toggleAttachmentExercise(id) {
+    if (!Number.isSafeInteger(id) || id <= 0) return;
+    if (state.expandedAttachmentExercises.has(id)) {
+      state.expandedAttachmentExercises.delete(id);
+    } else {
+      state.expandedAttachmentExercises.add(id);
+    }
+    renderAttachmentCatalog();
   }
 
   async function runAttachmentManagerOperation(button, label, operation) {
@@ -3315,14 +3452,10 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   async function loadMatchInfo(options = {}) {
     try {
       state.matchInfo = await request(apiPath("/api/match-info", options.refresh));
-      els.matchNote.textContent = state.matchInfo.note || "暂无内容";
-      els.matchRule.textContent = state.matchInfo.rule || "暂无内容";
       if (els.overviewMatchNote) els.overviewMatchNote.textContent = state.matchInfo.note || "暂无比赛说明";
       if (els.overviewMatchRule) els.overviewMatchRule.textContent = state.matchInfo.rule || "暂无比赛规则";
       return state.matchInfo;
     } catch (error) {
-      els.matchNote.textContent = `加载失败：${error.message}`;
-      els.matchRule.textContent = "请确认比赛已绑定且登录态有效";
       if (els.overviewMatchNote) els.overviewMatchNote.textContent = `比赛说明加载失败：${error.message}`;
       if (els.overviewMatchRule) els.overviewMatchRule.textContent = "请确认比赛已绑定且登录态有效";
       if (!options.silent) showToast(`比赛说明加载失败：${error.message}`, "error");
@@ -3673,6 +3806,16 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
 
   function createCodexTreeItem(task, depth = 0) {
     const row = createElement("div", `codex-tree-row depth-${depth}${task.id === state.codexSelectedTaskId ? " is-selected" : ""}${task.status === "running" ? " is-current-branch" : ""}`);
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.className = "codex-task-select";
+    checkbox.checked = state.selectedCodexTaskIds.has(task.id);
+    checkbox.setAttribute("aria-label", `选择会话 ${codexTaskTitle(task)}`);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) state.selectedCodexTaskIds.add(task.id);
+      else state.selectedCodexTaskIds.delete(task.id);
+      updateCodexSelectionToolbar();
+    });
     const button = createElement("button", "codex-tree-item");
     button.type = "button";
     button.setAttribute("aria-current", task.id === state.codexSelectedTaskId ? "true" : "false");
@@ -3689,7 +3832,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       renderCodexTaskList();
       void loadCodexTask(task.id);
     });
-    row.append(button);
+    row.append(checkbox, button);
     return row;
   }
 
@@ -3936,6 +4079,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   async function loadCodexTasks(options = {}) {
     const append = Boolean(options.append);
     if (append && (!state.codexTaskHasMore || state.codexTaskLoadingMore)) return null;
+    const requestEpoch = ++codexLoadEpoch;
     if (append) state.codexTaskLoadingMore = true;
     try {
       const previous = new Map(state.codexTasks.map((task) => [task.id, task.status]));
@@ -3945,8 +4089,12 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       const parameters = new URLSearchParams({
         offset: String(offset),
         limit: String(pageSize),
+        query: state.codexTaskQuery,
+        status: state.codexTaskStatus,
+        archived: state.codexTaskArchive,
       });
       const result = await request(`/api/codex/tasks?${parameters}`);
+      if (requestEpoch !== codexLoadEpoch) return null;
       state.codexAvailable = result.available === undefined ? true : Boolean(result.available);
       state.codexLimit = Number(result.limit || state.codexLimit || 10);
       const incoming = (Array.isArray(result.tasks) ? result.tasks : []).map((task) => ({
@@ -3962,8 +4110,14 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
         state.codexTasks.length,
       );
       state.codexTaskHasMore = state.codexTasks.length < state.codexTaskTotal;
+      state.selectedCodexTaskIds = new Set(
+        [...state.selectedCodexTaskIds].filter((taskId) =>
+          state.codexTasks.some((task) => task.id === taskId),
+        ),
+      );
       updateCodexCounter();
       updateCodexLoadMore();
+      updateCodexSelectionToolbar();
       if (state.codexSelectedTaskId === null && state.codexTasks.length) state.codexSelectedTaskId = state.codexTasks[0].id;
       if (state.codexSelectedTaskId && state.codexTasks.some((task) => task.id === state.codexSelectedTaskId)) {
         await loadCodexTask(state.codexSelectedTaskId, { select: false, render: false, silent: true });
@@ -4016,6 +4170,86 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     await loadCodexTasks({ append: true, silent: true, notify: true });
   }
 
+  function updateCodexSelectionToolbar() {
+    const count = state.selectedCodexTaskIds.size;
+    if (els.codexSelectedCount) {
+      els.codexSelectedCount.textContent = count ? `已选择 ${formatNumber(count)} 个` : "未选择会话";
+    }
+    if (els.codexExportSelected) els.codexExportSelected.disabled = count === 0;
+    if (els.codexArchiveSelected) {
+      els.codexArchiveSelected.disabled = count === 0;
+      els.codexArchiveSelected.textContent = state.codexTaskArchive === "archived" ? "取消归档" : "归档";
+    }
+  }
+
+  function applyCodexFilters() {
+    state.codexTaskQuery = els.codexSessionSearch?.value.trim() || "";
+    state.codexTaskStatus = els.codexSessionStatus?.value || "";
+    state.codexTaskArchive = els.codexSessionArchive?.value || "active";
+    state.selectedCodexTaskIds.clear();
+    state.codexSelectedTaskId = null;
+    state.codexTasks = [];
+    state.codexTaskTotal = 0;
+    state.codexTaskHasMore = false;
+    updateCodexSelectionToolbar();
+    updateCodexCounter();
+    updateCodexLoadMore();
+    renderCodexTaskState();
+    void loadCodexTasks({ notify: true });
+  }
+
+  async function archiveSelectedCodexTasks() {
+    const taskIds = [...state.selectedCodexTaskIds];
+    if (!taskIds.length) return;
+    const archive = state.codexTaskArchive !== "archived";
+    if (!window.confirm(`${archive ? "归档" : "取消归档"}所选 ${taskIds.length} 个会话？`)) return;
+    await withButton(els.codexArchiveSelected, async () => {
+      try {
+        await request("/api/codex/tasks/archive", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ taskIds, archived: archive }),
+        });
+        state.selectedCodexTaskIds.clear();
+        state.codexTasks = [];
+        state.codexSelectedTaskId = null;
+        showToast(archive ? "所选会话已归档" : "所选会话已取消归档", "success");
+        await loadCodexTasks({ notify: true });
+      } catch (error) {
+        showToast(`${archive ? "归档" : "取消归档"}失败：${error.message}`, "error");
+      }
+    });
+  }
+
+  async function exportSelectedCodexTasks() {
+    const tasks = state.codexTasks.filter((task) => state.selectedCodexTaskIds.has(task.id));
+    if (!tasks.length) return;
+    await withButton(els.codexExportSelected, async () => {
+      try {
+        const exported = await Promise.all(tasks.map(async (task) => {
+          const response = await fetch(
+            `/api/codex/tasks/${encodeURIComponent(task.id)}/logs.json`,
+            { cache: "no-store" },
+          );
+          if (!response.ok) throw new Error(`日志导出失败（HTTP ${response.status}）`);
+          return { task, logs: await response.json() };
+        }));
+        const blob = new Blob([JSON.stringify(exported, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `codex-sessions-${Date.now()}.json`;
+        document.body.append(link);
+        link.click();
+        link.remove();
+        URL.revokeObjectURL(url);
+        showToast(`已导出 ${tasks.length} 个会话`, "success");
+      } catch (error) {
+        showToast(`导出失败：${error.message}`, "error");
+      }
+    });
+  }
+
   async function loadEarlierCodexEvents() {
     const id = state.codexSelectedTaskId;
     if (!id || !state.codexHasMoreEvents.get(id)) return;
@@ -4046,6 +4280,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     document.body.classList.add("workspace-page-open");
     setSidebarOpen(false);
     setActiveSidebarView("codex-task-page");
+    syncRouteForView("codex-task-page");
     ensureCodexPolling();
     void loadCodexTasks();
     window.requestAnimationFrame(() => els.codexTaskPage.focus());
@@ -4057,6 +4292,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
     if (!document.querySelector("dialog[data-page-dialog][open]") && els.modelRoutingPage.hidden) {
       document.body.classList.remove("workspace-page-open");
       setActiveSidebarView(activePrimaryView);
+      syncRouteForView(activePrimaryView);
     }
     const focusTarget = codexTaskTrigger;
     codexTaskTrigger = null;
@@ -4662,14 +4898,11 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   }
 
   function bindOverviewAndNoticeEvents() {
-    bindModuleOnce("公告", ["refresh-overview", "refresh-notices", "score-auto-refresh", "notice-auto-refresh", "open-match-info", "refresh-match-info", "close-match-info", "match-info-dialog"], () => {
+    bindModuleOnce("公告", ["refresh-overview", "refresh-notices", "score-auto-refresh", "notice-auto-refresh"], () => {
       $("refresh-overview").addEventListener("click", () => withButton($("refresh-overview"), () => loadOverview({ refresh: true })));
       $("refresh-notices").addEventListener("click", () => withButton($("refresh-notices"), () => loadNotices({ refresh: true, refreshDetail: true })));
       els.scoreRefresh.addEventListener("change", toggleScoreRefresh);
       els.noticeRefresh.addEventListener("change", toggleNoticeRefresh);
-      $("open-match-info").addEventListener("click", () => openDialog(els.matchDialog));
-      $("refresh-match-info").addEventListener("click", () => withButton($("refresh-match-info"), () => loadMatchInfo({ refresh: true })));
-      $("close-match-info").addEventListener("click", () => closeDialog(els.matchDialog));
     });
   }
 
@@ -4707,6 +4940,9 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   function bindSettingsEvents() {
     bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "login-mode-session", "password-login-form", "sms-login-form", "session-login-form", "session-request-packet", "copy-session-login", "copy-authenticated-session", "session-login", "session-login-status", "platform-authenticated-actions", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "setting-model-protocol", "model-options", "setting-codex-model", "setting-codex-protocol", "codex-model-options"], () => {
       els.openSettings.addEventListener("click", openSettingsDialog);
+      document.querySelectorAll("[data-settings-tab]").forEach((button) => {
+        button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab || "platform"));
+      });
       els.matchBindForm.addEventListener("submit", (event) => { event.preventDefault(); void bindMatch(); });
       els.loginModePassword.addEventListener("click", () => setLoginMode("password"));
       els.loginModeSms.addEventListener("click", () => setLoginMode("sms"));
@@ -4818,8 +5054,16 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   }
 
   function bindCodexEvents() {
-    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-page", "codex-task-list", "codex-load-more-tasks", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
+    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-page", "codex-task-list", "codex-session-search", "codex-session-status", "codex-session-archive", "codex-selected-count", "codex-export-selected", "codex-archive-selected", "codex-load-more-tasks", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
       els.openCodexTasks.addEventListener("click", (event) => openCodexTaskPage(event.currentTarget));
+      els.codexSessionSearch.addEventListener("input", () => {
+        if (state.codexSearchTimer) window.clearTimeout(state.codexSearchTimer);
+        state.codexSearchTimer = window.setTimeout(applyCodexFilters, 250);
+      });
+      els.codexSessionStatus.addEventListener("change", applyCodexFilters);
+      els.codexSessionArchive.addEventListener("change", applyCodexFilters);
+      els.codexExportSelected.addEventListener("click", () => void exportSelectedCodexTasks());
+      els.codexArchiveSelected.addEventListener("click", () => void archiveSelectedCodexTasks());
       els.codexLoadMoreTasks.addEventListener("click", () => void loadMoreCodexTasks());
       els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
       els.codexTaskCompose.addEventListener("click", () => void sendCodexRecoveryPrompt());
@@ -4902,6 +5146,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
       if (!config) throw new Error("无法读取或应用运行配置");
       state.runtimeConfig = config;
     });
+    await runInitModule("当前页面", async () => applyRouteFromLocation());
     const config = state.runtimeConfig;
     await runInitModule("首屏比赛数据", async () => {
       if (config && config.configured && state.authenticated) await refreshWorkspaceAfterLogin();
@@ -4927,6 +5172,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout7";
   });
   installGlobalErrorBoundary(faultCenter, showToast);
   document.addEventListener("app:retry-init", () => void initializeApplication());
+  window.addEventListener("popstate", () => void applyRouteFromLocation());
 
   window.addEventListener("storage", (event) => {
     if (event.key !== ACTIVE_ENVIRONMENT_STORAGE_KEY) return;

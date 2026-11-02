@@ -97,6 +97,7 @@ X-GCSIS-Action: tools-manager
 | `POST` | `/api/exercises/{id}/codex/run` | 启动 Codex 解题任务 |
 | `POST` | `/api/exercises/{id}/codex/pure` | 启动 Codex 纯解题任务 |
 | `GET` | `/api/codex/tasks` | 分页查询 Codex 任务列表 |
+| `POST` | `/api/codex/tasks/archive` | 批量归档或取消归档 Codex 任务 |
 | `GET` | `/api/codex/tasks/{task_id}` | 查询 Codex 任务详情 |
 | `POST` | `/api/codex/tasks/{task_id}/message` | 在当前会话继续输入或创建 Side 对话 |
 | `POST` | `/api/codex/tasks/{task_id}/continue` | 发送标准故障恢复提示并继续任务 |
@@ -522,7 +523,7 @@ DELETE /api/codex/tasks/{task_id}
 
 `GET /api/codex/tasks` 即使当前 Codex CLI 暂不可用也会返回已经持久化的任务，并通过 `available: false` 标识不可启动新任务。任务元数据保存在 `work/runtime/codex/tasks.json`，不包含 API Key。
 
-任务列表支持 `offset`、`limit` 和 `query` 查询参数。`limit` 默认 `50`，最大 `200`；响应额外包含 `total`、`offset`、`pageSize` 和 `hasMore`。前端先加载首屏，用户滚动到会话树底部或点击“加载更多会话”时继续请求，不再一次传输全部历史。
+任务列表支持 `offset`、`limit`、`query`、`status` 和 `archived` 查询参数。`status` 可传逗号分隔的状态，`archived` 可取 `active`、`archived` 或 `all`。`limit` 默认 `50`，最大 `200`；响应额外包含 `total`、`offset`、`pageSize` 和 `hasMore`。前端先加载首屏，用户滚动到会话树底部或点击“加载更多会话”时继续请求，不再一次传输全部历史。批量归档请求体为 `{"taskIds":["..."],"archived":true}`，归档不删除任务、日志或 WP。
 
 附件下载使用工作区内的 `.part` 临时文件和 HTTP `Range` 请求。下载中断后重新启动同一附件会从已有字节继续；服务器返回 `200` 表示不支持 Range 时，服务会覆盖临时文件重新下载，避免内容重复拼接。
 

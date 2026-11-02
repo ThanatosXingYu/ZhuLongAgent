@@ -84,16 +84,40 @@ export async function installApiMock(page, overrides = {}) {
       case "/api/attachments/sizes": data = { status: "completed", totalFiles: 1, completedFiles: 1 }; break;
       case "/api/tools": data = state.toolCatalog; break;
       case "/api/environment": data = { items: [], summary: "环境可用" }; break;
-      case "/api/codex/tasks": data = {
-        available: true,
-        active: state.codexTasks.filter((item) => ["running", "queued"].includes(item.status)).length,
-        limit: 10,
-        total: state.codexTasks.length,
-        offset: 0,
-        pageSize: state.codexTasks.length,
-        hasMore: false,
-        tasks: state.codexTasks.map(({ events, ...item }) => item),
-      }; break;
+      case "/api/codex/tasks": {
+        const query = (url.searchParams.get("query") || "").toLowerCase();
+        const statuses = new Set((url.searchParams.get("status") || "").split(",").filter(Boolean));
+        const archive = url.searchParams.get("archived") || "active";
+        const offset = Number(url.searchParams.get("offset") || 0);
+        const limit = Number(url.searchParams.get("limit") || 50);
+        const filtered = state.codexTasks.filter((item) => {
+          if (archive === "active" && item.archived) return false;
+          if (archive === "archived" && !item.archived) return false;
+          if (statuses.size && !statuses.has(item.status)) return false;
+          if (!query) return true;
+          return `${item.id} ${item.exerciseId} ${item.title || ""} ${item.sourceMessage || ""}`.toLowerCase().includes(query);
+        });
+        const page = filtered.slice(offset, offset + limit);
+        data = {
+          available: true,
+          active: state.codexTasks.filter((item) => ["running", "queued"].includes(item.status)).length,
+          limit: 10,
+          total: filtered.length,
+          offset,
+          pageSize: limit,
+          hasMore: offset + page.length < filtered.length,
+          tasks: page.map(({ events, ...item }) => item),
+        };
+        break;
+      }
+      case "/api/codex/tasks/archive": {
+        const ids = new Set(body?.taskIds || []);
+        state.codexTasks = state.codexTasks.map((item) =>
+          ids.has(item.id) ? { ...item, archived: Boolean(body?.archived) } : item
+        );
+        data = { tasks: state.codexTasks.filter((item) => ids.has(item.id)) };
+        break;
+      }
       default: {
         const codexTask = url.pathname.match(/^\/api\/codex\/tasks\/([^/]+)$/);
         if (codexTask && request.method() === "GET") data = state.codexTasks.find((item) => item.id === decodeURIComponent(codexTask[1])) || task();

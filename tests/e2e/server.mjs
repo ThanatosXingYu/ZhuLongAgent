@@ -82,7 +82,10 @@ const server = createServer(async (request, response) => {
     response.end(JSON.stringify({ connections: clients.size, requests: requestCount, latestId: nextId }));
     return;
   }
-  const relative = url.pathname === "/" ? "index.html" : decodeURIComponent(url.pathname.slice(1));
+  const appPages = new Set(["/competition", "/exercises", "/attachments", "/tools", "/codex", "/models", "/settings"]);
+  const relative = url.pathname === "/" || appPages.has(url.pathname)
+    ? "index.html"
+    : decodeURIComponent(url.pathname.slice(1));
   const safe = normalize(relative).replace(/^(\.\.(\/|\\|$))+/, "");
   const file = join(root, safe);
   if (!file.startsWith(root) || !existsSync(file) || !statSync(file).isFile()) {

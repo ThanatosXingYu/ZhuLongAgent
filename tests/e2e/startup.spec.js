@@ -74,10 +74,9 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await expect(taskPage).toBeHidden();
   await expect(page.locator("body")).not.toHaveClass(/codex-task-open/);
 
-  await page.locator("#open-match-info").click();
-  await expect(page.locator("#match-info-dialog")).toHaveAttribute("open", "");
-  await page.keyboard.press("Escape");
-  await expect(page.locator("#match-info-dialog")).not.toHaveAttribute("open", "");
+  await page.locator("#show-competition-view").click();
+  await expect(page.locator("#overview-match-note")).toContainText("Regression note");
+  await expect(page.locator("#overview-match-rule")).toContainText("Regression rule");
 
   await page.locator("#open-settings").click();
   const settings = page.locator("#settings-dialog");
@@ -251,11 +250,14 @@ test("设置页支持默认比赛、三种模型协议与请求包登录", async
   await page.locator("#open-settings").click();
   await expect(page.locator("#setting-match-url")).toHaveValue("https://match.ichunqiu.com/2026qwbs10");
   await expect(page.locator("#setting-model-protocol option")).toHaveCount(3);
+  await expect(page.locator("#settings-dialog .dialog-header h2")).toBeHidden();
+  await page.locator('[data-settings-tab="codex"]').click();
   await expect(page.locator("#setting-codex-protocol option")).toHaveCount(3);
   await page.locator("#setting-codex-protocol").selectOption("openai-chat");
   await expect(page.locator("#setting-codex-protocol")).toHaveValue("openai-chat");
   await page.locator("#fetch-codex-models").click();
   await expect.poll(() => requests.find((request) => request.path === "/api/models")?.body?.protocol).toBe("openai-chat");
+  await page.locator('[data-settings-tab="platform"]').click();
   await expect(page.locator('#login-mode-password, #login-mode-sms, #login-mode-session')).toHaveCount(3);
 
   page.once("dialog", (dialog) => dialog.accept());
@@ -480,6 +482,26 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
   await expect(page.locator("body")).not.toHaveClass(/sidebar-open/);
 });
 
+test("功能页拥有独立 URL 且可从 Codex 直接切换", async ({ page }) => {
+  await installApiMock(page);
+  await page.goto("/codex");
+  await expect(page.locator("#codex-task-page")).toBeVisible();
+  await expect(page).toHaveURL(/\/codex$/);
+
+  await page.locator("#open-settings").click();
+  await expect(page.locator("#settings-dialog")).toHaveAttribute("open", "");
+  await expect(page.locator("#codex-task-page")).toBeHidden();
+  await expect(page).toHaveURL(/\/settings$/);
+
+  await page.locator("#close-settings").click();
+  await expect(page).toHaveURL(/\/exercises$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/settings$/);
+  await page.goBack();
+  await expect(page).toHaveURL(/\/codex$/);
+  await expect(page.locator("#codex-task-page")).toBeVisible();
+});
+
 test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
   let started = false;
   let detailLoads = 0;
@@ -590,4 +612,39 @@ test("Codex 会话树按页加载并显示总数", async ({ page }) => {
   await page.locator("#codex-load-more-tasks").click();
   await expect.poll(() => page.locator(".codex-tree-item").count()).toBeGreaterThanOrEqual(75);
   await expect(page.locator("#codex-load-more-tasks")).toBeHidden();
+});
+
+test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page }) => {
+  page.on("dialog", (dialog) => dialog.accept());
+  await openWorkbench(page, {
+    state: {
+      codexTasks: [
+        task({ id: "task-main", title: "正常工作流", status: "completed" }),
+        task({ id: "task-broken", title: "Broken Workflow", status: "failed" }),
+      ],
+    },
+  });
+  await page.locator("#open-codex-tasks").click();
+  await expect(page.locator(".codex-tree-item")).toHaveCount(2);
+
+  await page.locator("#codex-session-search").fill("Broken");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
+  await expect(page.locator(".codex-tree-item")).toContainText("Broken Workflow");
+
+  await page.locator("#codex-session-search").fill("");
+  await page.locator("#codex-session-status").selectOption("failed");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
+  await page.locator(".codex-task-select").check();
+  await page.locator("#codex-archive-selected").click();
+  await expect(page.locator(".toast.success")).toContainText("已归档");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(0);
+
+  await page.locator("#codex-session-status").selectOption("");
+  await page.locator("#codex-session-archive").selectOption("archived");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
+  await page.locator(".codex-task-select").check();
+  await expect(page.locator("#codex-export-selected")).toBeEnabled();
+  const download = page.waitForEvent("download");
+  await page.locator("#codex-export-selected").click();
+  expect((await download).suggestedFilename()).toMatch(/^codex-sessions-.*\.json$/);
 });
