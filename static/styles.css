@@ -2388,3 +2388,27 @@ body { font-size: 14px; line-height: 1.55; }
   .overview-briefing-grid { grid-template-columns: 1fr; min-height: 0; }
   .overview-briefing-block + .overview-briefing-block { border-left: 1px solid var(--line); }
 }
+
+/* Routed workspaces use the sidebar as the only page chrome. */
+dialog.is-page-dialog,
+.model-routing-page,
+.codex-task-page {
+  grid-template-rows: minmax(0, 1fr);
+}
+dialog.is-page-dialog .dialog-header,
+.model-routing-page-header,
+.codex-task-page-header {
+  display: none;
+}
+.codex-session-controls {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+}
+.codex-session-search {
+  grid-column: 1 / -1;
+  width: 100%;
+}
+.codex-session-controls select {
+  width: 100%;
+  min-width: 0;
+}

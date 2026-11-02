@@ -146,9 +146,22 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await page.locator("#open-codex-tasks").click();
   const taskPage = page.locator("#codex-task-page");
   await expect(taskPage).toBeVisible();
+  await expect(page.locator(".codex-task-page-header")).toBeHidden();
   await expect(page.locator("body")).toHaveClass(/codex-task-open/);
   await expect(page.locator("#app-sidebar")).toBeVisible();
   await expect(page.locator("#exercise-view")).toHaveCSS("visibility", "hidden");
+  const sessionControls = await page.locator(".codex-session-controls").evaluate((node) => {
+    const search = node.querySelector(".codex-session-search").getBoundingClientRect();
+    const selects = [...node.querySelectorAll("select")].map((select) => select.getBoundingClientRect());
+    return {
+      searchWidth: Math.round(search.width),
+      selectWidths: selects.map((rect) => Math.round(rect.width)),
+      selectRows: new Set(selects.map((rect) => Math.round(rect.y))).size,
+    };
+  });
+  expect(sessionControls.searchWidth).toBeGreaterThan(200);
+  expect(sessionControls.selectWidths.every((width) => width > 100)).toBeTruthy();
+  expect(sessionControls.selectRows).toBe(1);
 
   const sideRow = page.locator(".codex-tree-row", { hasText: "仅输出 123" });
   await sideRow.locator(".codex-tree-item").click();
@@ -162,11 +175,10 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await expect(page.locator(".toast.success")).toContainText("已打开题目目录");
   expect(await page.locator("#toast-region").evaluate((node) => node.parentElement === document.body)).toBeTruthy();
 
-  await page.locator("#close-codex-tasks").click();
+  await page.locator("#show-competition-view").click();
   await expect(taskPage).toBeHidden();
   await expect(page.locator("body")).not.toHaveClass(/codex-task-open/);
 
-  await page.locator("#show-competition-view").click();
   await expect(page.locator("#overview-match-note")).toContainText("Regression note");
   await expect(page.locator("#overview-match-rule")).toContainText("Regression rule");
 
@@ -174,7 +186,8 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   const settings = page.locator("#settings-dialog");
   await expect(settings).toHaveAttribute("open", "");
   await expect(settings).toHaveClass(/is-page-dialog/);
-  await page.locator("#close-settings").click();
+  await expect(settings.locator(".dialog-header")).toBeHidden();
+  await page.locator("#show-competition-view").click();
   await expect(settings).not.toHaveAttribute("open", "");
 });
 
@@ -382,6 +395,7 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator("#open-model-routing").click();
   const routingPage = page.locator("#model-routing-page");
   await expect(routingPage).toBeVisible();
+  await expect(page.locator(".model-routing-page-header")).toBeHidden();
   await expect(page.locator("dialog#model-routing-dialog")).toHaveCount(0);
   await expect(page.locator(".model-provider-item")).toHaveCount(1);
 
@@ -419,7 +433,7 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   expect(saved.modelProviders[0]).toMatchObject({ name: "Provider A", protocol: "anthropic", enabled: true });
   expect(saved.modelProviders[1]).toMatchObject({ name: "Provider B", protocol: "openai-responses", enabled: false });
   await expect(page.locator("#model-routing-status")).toContainText("已保存");
-  await page.locator("#close-model-routing").click();
+  await page.locator("#show-exercise-view").click();
   await expect(routingPage).toBeHidden();
 });
 
@@ -561,7 +575,7 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
   await page.locator("#open-settings").click();
   const settingsBox = await page.locator("#settings-dialog").boundingBox();
   expect(settingsBox.x).toBeGreaterThanOrEqual(desktop.sidebarRight - 1);
-  await page.locator("#close-settings").click();
+  await page.locator("#show-exercise-view").click();
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator("#open-sidebar")).toBeVisible();
@@ -585,7 +599,7 @@ test("功能页拥有独立 URL 且可从 Codex 直接切换", async ({ page }) 
   await expect(page.locator("#codex-task-page")).toBeHidden();
   await expect(page).toHaveURL(/\/settings$/);
 
-  await page.locator("#close-settings").click();
+  await page.locator("#show-exercise-view").click();
   await expect(page).toHaveURL(/\/exercises$/);
   await page.goBack();
   await expect(page).toHaveURL(/\/settings$/);
