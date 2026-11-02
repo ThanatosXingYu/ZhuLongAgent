@@ -724,6 +724,22 @@ def test_download_sanitizes_paths_and_inspects_content(tmp_path: Path) -> None:
         thread.join()
 
 
+def test_download_display_path_preserves_work_prefix(tmp_path: Path) -> None:
+    service = DownloadService(
+        tmp_path / "work" / "download",
+        display_root="work/download",
+    )
+
+    display_path = download_module._display_path(
+        service.display_root,
+        "Web",
+        "7-demo",
+        "a.zip",
+    )
+
+    assert display_path == "work/download/Web/7-demo/a.zip"
+
+
 def test_download_reloads_system_proxy_for_each_request(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1690,7 +1706,7 @@ def test_attachment_batch_catalog_clear_redownload_and_web_routes(
 
 class AttachmentsStub:
     def attachments(self, _id: int) -> list[AttachmentInfo]:
-        return [AttachmentInfo(0, "a.txt", "download/Web/7-shopping/a.txt", True, 1)]
+        return [AttachmentInfo(0, "a.txt", "work/download/Web/7-shopping/a.txt", True, 1)]
 
     def download(self, _id: int, _index: int):
         return type(
@@ -1714,6 +1730,8 @@ def test_solver_accepts_a_matching_exercise_in_an_empty_category(
     result = service.prompt(7)
     assert result.exercise_id == 7
     assert "题目类型：" in result.prompt
+    assert str(tmp_path / "work" / "download" / "Web" / "7-shopping") in result.prompt
+    assert "不要自行假设旧版相对下载目录" in result.prompt
 
 
 def test_solver_normalizes_flag_and_writes_wp(tmp_path: Path) -> None:

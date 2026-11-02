@@ -274,10 +274,11 @@ class DownloadService:
         http_client: object | None = None,
         max_bytes: int = DEFAULT_MAX_BYTES,
         timeout: float = 300.0,
+        display_root: str | Path | None = None,
     ) -> None:
         root_value = str(root).strip() or "download"
         self.root = Path(root_value)
-        self.display_root = (
+        self.display_root = Path(display_root) if display_root is not None else (
             self.root if not self.root.is_absolute() else Path(self.root.name)
         )
         self.source = source

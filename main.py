@@ -55,7 +55,12 @@ def build_application(config: Config | None = None) -> FastAPI:
         identity_path=runtime_root / "platform-identities.json",
     )
     cached = CachedService(upstream)
-    downloads = DownloadService(layout.download, cached, timeout=300.0)
+    downloads = DownloadService(
+        layout.download,
+        cached,
+        timeout=300.0,
+        display_root=layout.download.relative_to(workspace),
+    )
     event_broker = EventBroker()
     attachment_tasks = AttachmentTaskManager(
         downloads, event_publisher=event_broker.publish
