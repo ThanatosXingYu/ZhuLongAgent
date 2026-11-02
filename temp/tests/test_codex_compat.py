@@ -44,7 +44,12 @@ def test_codex_bridge_converts_responses_messages_and_tools() -> None:
     )
 
     assert bridge.model == "deepseek-v4.1-flash"
-    assert [message.role for message in bridge.messages] == ["system", "system", "user"]
+    assert [message.role for message in bridge.messages] == [
+        "system",
+        "system",
+        "system",
+        "user",
+    ]
     assert bridge.messages[-1].content == "solve"
     assert bridge.tools[0].function.name == "exec_command"
 

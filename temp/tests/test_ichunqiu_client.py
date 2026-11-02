@@ -539,6 +539,7 @@ def test_agent_maps_questions_flags_notices_and_environments() -> None:
     opened: list[str] = []
     process_calls = 0
     closed: dict[str, Any] = {}
+    delayed: list[dict[str, Any]] = []
 
     def transport(request: Request, _timeout: float, _maximum: int) -> HTTPResponse:
         nonlocal list_calls, process_calls
@@ -605,6 +606,9 @@ def test_agent_maps_questions_flags_notices_and_environments() -> None:
         if path == "/match/docker/close":
             closed.update(payload)
             return _json_response({"code": 0, "message": "", "data": None})
+        if path == "/match/docker/delay":
+            delayed.append(dict(payload))
+            return _json_response({"code": 0, "message": "延时成功", "data": None})
         raise AssertionError(path)
 
     client = AgentClient(config_provider=lambda: config, transport=transport)
@@ -651,6 +655,11 @@ def test_agent_maps_questions_flags_notices_and_environments() -> None:
     ready = client.exercise(1)
     assert ready.is_need_check is False and len(ready.endpoints) == 1
     assert ready.endpoints[0].users[0].username == "ctf"
+    assert ready.renew_remaining == 1
+    assert ready.renew_limit == 3
+    client.renew_environment(1)
+    assert len(delayed) == 1
+    assert delayed[0]["uuid"] == "environment-demo-id"
     client.recover_environment(1)
     assert closed["uuid"] == "environment-demo-id"
     assert closed["close_type"] == 3

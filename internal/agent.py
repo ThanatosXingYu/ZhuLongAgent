@@ -259,6 +259,8 @@ class ExerciseDetail:
     attachment: Attachment = field(default_factory=Attachment)
     endpoints: tuple[Endpoint, ...] = ()
     can_refresh_endpoint: bool = False
+    renew_remaining: int = 0
+    renew_limit: int = 3
     is_need_init: bool = False
     endpoint_type: str = ""
     current_time: int = 0
@@ -276,6 +278,8 @@ class ExerciseDetail:
             "attachment": self.attachment.to_dict(),
             "endpoints": [item.to_dict() for item in self.endpoints],
             "canRefreshEndpoint": self.can_refresh_endpoint,
+            "renewRemaining": self.renew_remaining,
+            "renewLimit": self.renew_limit,
             "isNeedInit": self.is_need_init,
             "endpointType": self.endpoint_type,
             "currentTime": self.current_time,
@@ -306,6 +310,8 @@ class ExerciseDetail:
             Attachment.from_wire(data.get("attachment")),
             endpoints,
             bool(data.get("canRefreshEndpoint", False)),
+            max(0, _as_int(data.get("renewRemaining"))),
+            max(0, _as_int(data.get("renewLimit")) or 3),
             bool(data.get("isNeedInit", False)),
             str(data.get("endpointType", "") or ""),
             _as_int(data.get("currentTime")),

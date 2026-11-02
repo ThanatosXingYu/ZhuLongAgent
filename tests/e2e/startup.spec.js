@@ -50,11 +50,13 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   });
   await openWorkbench(page, { state: { codexTasks: [main, side] } });
 
+  await expect(page.locator("#codex-active-count")).toHaveText("2");
   await page.locator("#open-codex-tasks").click();
   const taskPage = page.locator("#codex-task-page");
   await expect(taskPage).toBeVisible();
   await expect(page.locator("body")).toHaveClass(/codex-task-open/);
-  await expect(page.locator(".topbar")).toHaveAttribute("inert", "");
+  await expect(page.locator("#app-sidebar")).toBeVisible();
+  await expect(page.locator("#exercise-view")).toHaveCSS("visibility", "hidden");
 
   const sideRow = page.locator(".codex-tree-row", { hasText: "仅输出 123" });
   await sideRow.locator(".codex-tree-item").click();
@@ -80,7 +82,8 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await page.locator("#open-settings").click();
   const settings = page.locator("#settings-dialog");
   await expect(settings).toHaveAttribute("open", "");
-  await page.mouse.click(5, 5);
+  await expect(settings).toHaveClass(/is-page-dialog/);
+  await page.locator("#close-settings").click();
   await expect(settings).not.toHaveAttribute("open", "");
 });
 
@@ -392,4 +395,136 @@ test("登录态验证较慢时仍可绑定并进入登录", async ({ page }) => 
   await page.waitForTimeout(200);
   await expect(page.locator("#platform-login")).toBeVisible();
   await expect(page.locator("#platform-auth-status")).toHaveText("待登录");
+});
+
+test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+
+  const desktop = await page.evaluate(() => {
+    const sidebar = document.querySelector("#app-sidebar").getBoundingClientRect();
+    const topbar = document.querySelector(".topbar").getBoundingClientRect();
+    const workspace = document.querySelector("#exercise-view").getBoundingClientRect();
+    return {
+      sidebarRight: sidebar.right,
+      topbarLeft: topbar.left,
+      topbarHeight: topbar.height,
+      workspaceLeft: workspace.left,
+      workspaceTop: workspace.top,
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+    };
+  });
+  expect(desktop.sidebarRight).toBeGreaterThan(200);
+  expect(desktop.topbarLeft).toBeGreaterThanOrEqual(desktop.sidebarRight - 1);
+  expect(desktop.topbarHeight).toBeLessThan(90);
+  expect(desktop.workspaceLeft).toBeGreaterThan(desktop.sidebarRight);
+  expect(desktop.workspaceTop).toBeGreaterThan(desktop.topbarHeight);
+  expect(desktop.overflow).toBeLessThanOrEqual(1);
+
+  await page.locator("#collapse-sidebar").click();
+  await expect(page.locator("body")).toHaveClass(/sidebar-collapsed/);
+  await expect.poll(async () => (await page.locator("#app-sidebar").boundingBox()).width).toBeLessThan(90);
+  await expect(page.locator("#show-exercise-view > span").first()).toBeHidden();
+  expect(await page.evaluate(() => localStorage.getItem("gcsis.sidebar-collapsed"))).toBe("true");
+  await page.reload();
+  await expect(page.locator("body")).toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator("#startup-faults")).toBeHidden();
+  await expect.poll(async () => (await page.locator("#app-sidebar").boundingBox()).width).toBeLessThan(90);
+  await page.locator("#collapse-sidebar").click();
+  await expect(page.locator("body")).not.toHaveClass(/sidebar-collapsed/);
+
+  await page.locator("#show-competition-view").click();
+  await expect(page.locator("#competition-view")).toBeVisible();
+  await expect(page.locator("#exercise-view")).toBeHidden();
+  await expect(page.locator("#overview-team-name")).not.toHaveText("尚未获取队伍信息");
+  await page.locator("#overview-open-workbench").click();
+  await expect(page.locator("#exercise-view")).toBeVisible();
+  await expect(page.locator("#competition-view")).toBeHidden();
+
+  await page.locator("#open-settings").click();
+  const settingsBox = await page.locator("#settings-dialog").boundingBox();
+  expect(settingsBox.x).toBeGreaterThanOrEqual(desktop.sidebarRight - 1);
+  await page.locator("#close-settings").click();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator("#open-sidebar")).toBeVisible();
+  await page.locator("#open-sidebar").click();
+  await expect(page.locator("body")).toHaveClass(/sidebar-open/);
+  await expect(page.locator("#app-sidebar")).toBeVisible();
+  const mobileOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(mobileOverflow).toBeLessThanOrEqual(1);
+  await page.locator("#sidebar-scrim").click({ position: { x: 380, y: 800 } });
+  await expect(page.locator("body")).not.toHaveClass(/sidebar-open/);
+});
+
+test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
+  let started = false;
+  let detailLoads = 0;
+  let renewCalls = 0;
+  const { requests } = await openWorkbench(page, {
+    handler: async ({ route, request, url }) => {
+      if (url.pathname === "/api/exercises/1/environment/start" && request.method() === "POST") {
+        started = true;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({ accepted: true })),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/exercises/1/environment/renew" && request.method() === "POST") {
+        renewCalls += 1;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({ accepted: true })),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/exercises/1" && request.method() === "GET") {
+        detailLoads += 1;
+        const ready = started && detailLoads >= 2;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({
+            id: 1,
+            name: "Cold Forge",
+            category: "Pwn",
+            score: 500,
+            description: "Cold Forge detail",
+            attachment: { files: [] },
+            endpointType: "docker",
+            isNeedInit: !started,
+            isNeedCheck: started && !ready,
+            endpoints: ready ? [{
+              exposeIps: ["10.0.0.8"],
+              ports: ["8080"],
+              users: [],
+              portMappings: [],
+              proxyIps: [],
+              isProxy: false,
+              expireTime: Date.now() + 55 * 60 * 1000,
+            }] : [],
+            renewRemaining: ready ? Math.max(0, 2 - renewCalls) : 0,
+            renewLimit: 3,
+          })),
+        });
+        return true;
+      }
+      return false;
+    },
+  });
+
+  await page.locator(".exercise-item", { hasText: "Cold Forge" }).click();
+  await page.locator("#environment-action button", { hasText: "启动容器" }).click();
+  await expect(page.locator("#active-environment-count")).toHaveText("1");
+  await expect(page.locator(".active-environment-item")).toContainText("正在准备环境");
+
+  await page.locator(".exercise-item", { hasText: "Warmup Crypto" }).click();
+  await expect(page.locator(".active-environment-item"), "容器状态不应因切换题目而丢失").toContainText("可续期 2/3 次", { timeout: 5000 });
+  await page.locator(".active-environment-renew").click();
+  await expect.poll(() => renewCalls).toBe(1);
+  expect(requests.some((item) => item.path === "/api/exercises/1/environment/renew")).toBeTruthy();
+  await expect(page.locator(".active-environment-item")).toContainText("可续期 1/3 次");
 });

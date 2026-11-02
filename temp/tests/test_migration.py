@@ -155,6 +155,7 @@ class Source:
         self.refreshes: list[bool] = []
         self.submitted: list[str] = []
         self.recovered = 0
+        self.renewed = 0
 
     def exercises(self, refresh: bool = False) -> list[ExerciseGroup]:
         self.refreshes.append(refresh)
@@ -176,6 +177,9 @@ class Source:
 
     def recover_environment(self, _id: int) -> None:
         self.recovered += 1
+
+    def renew_environment(self, _id: int) -> None:
+        self.renewed += 1
 
 
 def test_platform_settings_are_not_loaded_from_environment(
@@ -1593,6 +1597,16 @@ def test_web_preserves_specific_flag_and_model_error_codes() -> None:
         assert response.json()["error"]["code"] == "MODEL_NOT_CONFIGURED"
 
 
+def test_web_renew_environment_route() -> None:
+    source = Source()
+    app = create_app(source, None, None, None)
+    with TestClient(app) as client:
+        response = client.post("/api/exercises/7/environment/renew")
+        assert response.status_code == 200
+        assert response.json()["data"] == {"accepted": True}
+        assert source.renewed == 1
+
+
 def test_attachment_catalog_reports_unconfigured_platform(tmp_path: Path) -> None:
     class UnconfiguredSource:
         def exercises(self, refresh: bool = False) -> list[ExerciseGroup]:
@@ -1680,7 +1694,7 @@ def test_codex_manager_runs_and_writes_output(tmp_path: Path) -> None:
             self, config: ProcessConfig, _prompt: str, on_event, _cancel
         ) -> ProcessResult:
             Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(config.output_path).write_text("done", encoding="utf-8")
+            Path(config.output_path).write_text("flag{logs}", encoding="utf-8")
             on_event(Event(datetime.now(timezone.utc), "message", "ok"))
             return ProcessResult(0, "done", "session")
 
@@ -1847,9 +1861,9 @@ def test_codex_task_metadata_survives_restart_without_api_key(tmp_path: Path) ->
     class Runner:
         def run(self, config: ProcessConfig, _prompt: str, on_event, _cancel) -> ProcessResult:
             Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(config.output_path).write_text("done", encoding="utf-8")
+            Path(config.output_path).write_text("flag{persisted}", encoding="utf-8")
             on_event(Event(datetime.now(timezone.utc), "message", "persisted"))
-            return ProcessResult(0, "done", "session-persisted")
+            return ProcessResult(0, "flag{persisted}", "session-persisted")
 
     tasks_path = tmp_path / "runtime" / "codex" / "tasks.json"
     config = ManagerConfig(
@@ -1889,9 +1903,9 @@ def test_codex_requeues_persisted_tasks_when_configuration_becomes_available(
 
         def run(self, config: ProcessConfig, _prompt: str, _on_event, _cancel) -> ProcessResult:
             Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(config.output_path).write_text("recovered", encoding="utf-8")
+            Path(config.output_path).write_text("flag{recovered}", encoding="utf-8")
             self.called.set()
-            return ProcessResult(0, "recovered", "session-recovered")
+            return ProcessResult(0, "flag{recovered}", "session-recovered")
 
     task_id = "a" * 24
     tasks_path = tmp_path / "runtime" / "codex" / "tasks.json"
@@ -2055,8 +2069,8 @@ def test_codex_tasks_over_limit_are_queued_without_pausing_running_task(
                 self.first_started.set()
                 self.release_first.wait(timeout=2)
             Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(config.output_path).write_text("done", encoding="utf-8")
-            return ProcessResult(0, "done", f"session-{self.calls}")
+            Path(config.output_path).write_text("flag{queued}", encoding="utf-8")
+            return ProcessResult(0, "flag{queued}", f"session-{self.calls}")
 
     runner = Runner()
     manager = CodexManager(
@@ -2606,7 +2620,7 @@ def test_codex_full_log_persistence_pagination_and_exports(tmp_path: Path) -> No
                     exit_code=0,
                 )
             )
-            return ProcessResult(0, "done", "session-logs")
+            return ProcessResult(0, "flag{logs}", "session-logs")
 
     manager = CodexManager(
         ManagerConfig(
@@ -2893,8 +2907,8 @@ def test_codex_side_conversation_uses_question_summary_and_source(tmp_path: Path
         ) -> ProcessResult:
             self.calls.append((config, prompt))
             Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(config.output_path).write_text("done", encoding="utf-8")
-            return ProcessResult(0, prompt, f"session-{len(self.calls)}")
+            Path(config.output_path).write_text("flag{side}", encoding="utf-8")
+            return ProcessResult(0, "flag{side}", f"session-{len(self.calls)}")
 
     runner = Runner()
     manager = CodexManager(

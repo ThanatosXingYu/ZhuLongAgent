@@ -76,6 +76,8 @@ class SourceProtocol(Protocol):
 
     def recover_environment(self, exercise_id: int) -> None: ...
 
+    def renew_environment(self, exercise_id: int) -> None: ...
+
     def notices(self, refresh: bool = False) -> list[Notice]: ...
 
     def notice(self, notice_id: int, refresh: bool = False) -> NoticeDetail: ...
@@ -248,6 +250,11 @@ class CachedService:
 
     def recover_environment(self, exercise_id: int) -> None:
         self.source.recover_environment(exercise_id)
+        with self._cache_lock:
+            self._exercise = _KeyedCache()
+
+    def renew_environment(self, exercise_id: int) -> None:
+        self.source.renew_environment(exercise_id)
         with self._cache_lock:
             self._exercise = _KeyedCache()
 

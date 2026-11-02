@@ -1,7 +1,7 @@
-import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js";
-import { createApiClient } from "./modules/api.js";
-import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js";
-import { createAppState } from "./modules/state.js";
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261102-layout6";
+import { createApiClient } from "./modules/api.js?v=20261102-layout6";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261102-layout6";
+import { createAppState } from "./modules/state.js?v=20261102-layout6";
 
 "use strict";
 
@@ -18,6 +18,7 @@ import { createAppState } from "./modules/state.js";
   const ACTIVE_ENVIRONMENT_STORAGE_KEY = "gcsis.active-environment-ids";
   const COLLAPSED_GROUP_STORAGE_KEY = "gcsis.collapsed-exercise-groups";
   const COLLAPSED_ATTACHMENT_CATEGORY_STORAGE_KEY = "gcsis.collapsed-attachment-categories";
+  const SIDEBAR_COLLAPSED_STORAGE_KEY = "gcsis.sidebar-collapsed";
   const ATTACHMENT_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "attachment-manager" });
   const PLATFORM_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "platform-auth" });
   const CODEX_RECOVERY_PROMPT = "刚才程序意外退出了，请你核对上下文，接着之前的进度继续执行任务。";
@@ -34,10 +35,23 @@ import { createAppState } from "./modules/state.js";
 4.正文的中文和英文以及特殊符号之间不要加空格，除非是markdown语法等特殊要求
 5.wp不要太过臃肿，能够完整的写出该题的完整过程即可，也不要太过精简导致关键信息缺失
 6.最重要的是，该版wp为脱敏wp，因为该题目是动态环境题目。脱敏的要求为不得写出该题目的靶机和端口信息；不得写出该题解出的flag；不得写入任何与本机信息、本地路径相关的信息。这些可以追溯到个人的信息全部使用占位符或完全脱敏，然后再写入到wp中。`;
+  const SIDEBAR_VIEW_TITLES = Object.freeze({
+    competition: "比赛概览",
+    exercise: "题目工作区",
+    "settings-dialog": "平台与设置",
+    "attachment-manager-dialog": "附件管理",
+    "tool-manager-dialog": "CTF 工具",
+    "model-routing-page": "模型路由",
+    "codex-task-page": "Codex 会话",
+  });
   const RICH_TEXT_TAGS = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IMG", "LI", "OL", "P", "PRE", "S", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL"]);
   const DROPPED_RICH_TEXT_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "MATH", "OBJECT", "SCRIPT", "STYLE", "SVG", "TEXTAREA"]);
 
   const state = createAppState({ realtimeStopped: REALTIME_STATUS.STOPPED });
+  for (const key of ["environmentRenewBusy", "environmentStopBusy", "trackedEnvironmentIds", "activeEnvironments"]) {
+    if (key === "activeEnvironments" && !(state[key] instanceof Map)) state[key] = new Map();
+    else if (key !== "activeEnvironments" && !(state[key] instanceof Set)) state[key] = new Set();
+  }
   let platformAuthRequest = null;
   let platformAuthController = null;
   let platformAuthEpoch = 0;
@@ -46,10 +60,31 @@ import { createAppState } from "./modules/state.js";
   let modelProviderSequence = 0;
   let modelRoutingTrigger = null;
   let codexTaskTrigger = null;
+  let activePrimaryView = "exercise";
 
   const $ = (id) => document.getElementById(id);
   let dialogLayerSequence = 0;
   const els = {
+    appSidebar: $("app-sidebar"),
+    openSidebar: $("open-sidebar"),
+    collapseSidebar: $("collapse-sidebar"),
+    sidebarScrim: $("sidebar-scrim"),
+    currentSectionTitle: $("current-section-title"),
+    competitionView: $("competition-view"),
+    exerciseView: $("exercise-view"),
+    exerciseEnvironmentRail: $("exercise-environment-rail"),
+    activeEnvironmentPanel: $("active-environment-panel"),
+    showCompetitionView: $("show-competition-view"),
+    showExerciseView: $("show-exercise-view"),
+    overviewOpenExercises: $("overview-open-exercises"),
+    overviewOpenWorkbench: $("overview-open-workbench"),
+    overviewTeamName: $("overview-team-name"),
+    overviewTeamSummary: $("overview-team-summary"),
+    overviewScore: $("overview-score-value"),
+    overviewRank: $("overview-rank-value"),
+    overviewLastUpdated: $("overview-last-updated"),
+    overviewMatchNote: $("overview-match-note"),
+    overviewMatchRule: $("overview-match-rule"),
     connection: $("connection-status"),
     connectionLabel: $("connection-status")?.querySelector(".connection-label") || null,
     realtimeStatus: $("realtime-status"),
@@ -257,6 +292,89 @@ import { createAppState } from "./modules/state.js";
 
   let faultCenter = null;
 
+  function setSidebarOpen(open) {
+    const mobile = window.matchMedia("(max-width: 1040px)").matches;
+    const next = Boolean(open);
+    document.body.classList.toggle("sidebar-open", next);
+    if (els.sidebarScrim) els.sidebarScrim.hidden = !next;
+    if (els.appSidebar) els.appSidebar.inert = mobile && !next;
+    if (mobile && next) {
+      window.requestAnimationFrame(() => els.appSidebar?.querySelector(".sidebar-link.is-active")?.focus());
+    }
+  }
+
+  function setSidebarCollapsed(collapsed, persist = true) {
+    const next = Boolean(collapsed);
+    document.body.classList.toggle("sidebar-collapsed", next);
+    document.documentElement.dataset.sidebarState = next ? "collapsed" : "expanded";
+    if (els.collapseSidebar) {
+      els.collapseSidebar.setAttribute("aria-expanded", String(!next));
+      const label = next ? "展开菜单" : "缩小菜单";
+      els.collapseSidebar.title = label;
+      els.collapseSidebar.setAttribute("aria-label", label);
+      const iconNode = els.collapseSidebar.querySelector("i[data-lucide]");
+      if (iconNode) iconNode.setAttribute("data-lucide", next ? "panel-left-open" : "panel-left-close");
+    }
+    if (persist) {
+      try {
+        window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, String(next));
+      } catch {
+        // The current page still keeps the visual state when storage is unavailable.
+      }
+    }
+    refreshIcons();
+  }
+
+  function setActiveSidebarView(viewId) {
+    const normalized = viewId || "competition";
+    document.querySelectorAll("[data-sidebar-view]").forEach((button) => {
+      const active = button.dataset.sidebarView === normalized;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-current", active ? "page" : "false");
+    });
+    if (els.currentSectionTitle) {
+      els.currentSectionTitle.textContent = SIDEBAR_VIEW_TITLES[normalized] || "比赛概览";
+    }
+  }
+
+  function showPrimaryView(view) {
+    activePrimaryView = view === "exercise" ? "exercise" : "competition";
+    closePageDialogs({ restoreSidebar: false });
+    if (!els.modelRoutingPage.hidden) closeModelRoutingPage();
+    if (!els.codexTaskPage.hidden) closeCodexTaskPage();
+    setSidebarOpen(false);
+    setActiveSidebarView(activePrimaryView);
+    if (els.competitionView) els.competitionView.hidden = activePrimaryView !== "competition";
+    if (els.exerciseView) els.exerciseView.hidden = activePrimaryView !== "exercise";
+    document.body.classList.remove("workspace-page-open");
+    const target = activePrimaryView === "exercise" ? els.exerciseView : els.competitionView;
+    target?.scrollTo({ top: 0, behavior: "smooth" });
+    const focusTarget = activePrimaryView === "exercise" ? els.showExerciseView : els.showCompetitionView;
+    window.requestAnimationFrame(() => focusTarget?.focus());
+  }
+
+  function showCompetitionView() {
+    showPrimaryView("competition");
+  }
+
+  function showExerciseView() {
+    showPrimaryView("exercise");
+  }
+
+  function closePageDialogs({ except = null, restoreSidebar = false } = {}) {
+    document.querySelectorAll("dialog[data-page-dialog][open]").forEach((dialog) => {
+      if (dialog === except) return;
+      if (typeof dialog.close === "function") dialog.close();
+      else dialog.removeAttribute("open");
+      dialog.classList.remove("is-page-dialog");
+      delete dialog.dataset.dialogLayer;
+    });
+    if (!document.querySelector("dialog[data-page-dialog][open]") && els.modelRoutingPage.hidden && els.codexTaskPage.hidden) {
+      document.body.classList.remove("workspace-page-open");
+    }
+    if (restoreSidebar) setActiveSidebarView(activePrimaryView);
+  }
+
   function createElement(tag, className, text) {
     const node = document.createElement(tag);
     if (className) node.className = className;
@@ -341,6 +459,21 @@ import { createAppState } from "./modules/state.js";
 
   function openDialog(dialog) {
     if (!dialog) return;
+    if (dialog.hasAttribute("data-page-dialog")) {
+      closePageDialogs({ except: dialog });
+      if (dialog.open && typeof dialog.close === "function") dialog.close();
+      dialog.classList.add("is-page-dialog");
+      if (typeof dialog.show === "function") {
+        if (!dialog.open) dialog.show();
+      } else {
+        dialog.setAttribute("open", "open");
+      }
+      document.body.classList.add("workspace-page-open");
+      setSidebarOpen(false);
+      setActiveSidebarView(dialog.id);
+      syncToastRegionHost(dialog);
+      return;
+    }
     if (typeof dialog.showModal === "function") {
       if (!dialog.open) {
         dialog.showModal();
@@ -355,13 +488,23 @@ import { createAppState } from "./modules/state.js";
 
   function closeDialog(dialog) {
     if (!dialog) return;
+    const pageDialog = dialog.hasAttribute("data-page-dialog");
     if (typeof dialog.close === "function") {
       if (dialog.open) dialog.close();
     } else {
       dialog.removeAttribute("open");
     }
     delete dialog.dataset.dialogLayer;
-    syncToastRegionHost(dialog);
+    if (pageDialog) {
+      dialog.classList.remove("is-page-dialog");
+      if (!document.querySelector("dialog[data-page-dialog][open]")) {
+        document.body.classList.remove("workspace-page-open");
+        if (els.modelRoutingPage.hidden && els.codexTaskPage.hidden) {
+          setActiveSidebarView(activePrimaryView);
+        }
+      }
+    }
+    syncToastRegionHost(pageDialog ? null : dialog);
   }
 
   function setConnection(kind) {
@@ -515,6 +658,13 @@ import { createAppState } from "./modules/state.js";
     els.teamSummary.hidden = !authenticated || !values.teamName;
     els.teamSummary.textContent = values.teamName || "";
     els.teamSummary.title = values.teamName || "";
+    if (els.overviewTeamName) els.overviewTeamName.textContent = values.teamName || "尚未获取队伍信息";
+    if (els.overviewTeamSummary) {
+      const summary = [values.organization, values.userName ? `当前成员 ${values.userName}` : "", values.memberCount ? `${values.memberCount} 名成员` : ""]
+        .filter(Boolean)
+        .join(" · ");
+      els.overviewTeamSummary.textContent = summary || "登录后可查看比赛排名与队伍概况。";
+    }
     els.platformTeamName.textContent = values.teamName || "--";
     els.platformUserName.textContent = values.userName || "--";
     els.platformTeamScore.textContent = formatNumber(values.score);
@@ -683,18 +833,22 @@ import { createAppState } from "./modules/state.js";
   function openModelRoutingPage(trigger = null) {
     modelRoutingTrigger = trigger instanceof HTMLElement ? trigger : document.activeElement;
     if (els.settingsDialog.open) closeDialog(els.settingsDialog);
+    closePageDialogs();
     els.modelRoutingPage.hidden = false;
     document.body.classList.add("model-routing-open");
-    document.querySelector(".topbar")?.setAttribute("inert", "");
-    document.querySelector("main.workspace")?.setAttribute("inert", "");
+    document.body.classList.add("workspace-page-open");
+    setSidebarOpen(false);
+    setActiveSidebarView("model-routing-page");
     window.requestAnimationFrame(() => els.modelRoutingPage.focus());
   }
 
   function closeModelRoutingPage() {
     els.modelRoutingPage.hidden = true;
     document.body.classList.remove("model-routing-open");
-    document.querySelector(".topbar")?.removeAttribute("inert");
-    document.querySelector("main.workspace")?.removeAttribute("inert");
+    if (!document.querySelector("dialog[data-page-dialog][open]") && els.codexTaskPage.hidden) {
+      document.body.classList.remove("workspace-page-open");
+      setActiveSidebarView(activePrimaryView);
+    }
     const focusTarget = modelRoutingTrigger;
     modelRoutingTrigger = null;
     if (
@@ -1268,6 +1422,13 @@ import { createAppState } from "./modules/state.js";
     els.noticeDetail.replaceChildren(createElement("div", "empty-state compact", messages.noticeDetail));
     els.matchNote.textContent = messages.matchNote;
     els.matchRule.textContent = messages.matchRule;
+    if (els.overviewMatchNote) els.overviewMatchNote.textContent = messages.matchNote;
+    if (els.overviewMatchRule) els.overviewMatchRule.textContent = messages.matchRule;
+    if (els.overviewTeamName) els.overviewTeamName.textContent = "尚未获取队伍信息";
+    if (els.overviewTeamSummary) els.overviewTeamSummary.textContent = messages.overview;
+    if (els.overviewScore) els.overviewScore.textContent = "--";
+    if (els.overviewRank) els.overviewRank.textContent = "--";
+    if (els.overviewLastUpdated) els.overviewLastUpdated.textContent = "尚未更新";
     setWorkspaceActionsEnabled(false);
     renderDetail();
     refreshIcons();
@@ -1709,7 +1870,11 @@ import { createAppState } from "./modules/state.js";
     state.overview = data;
     els.score.textContent = formatNumber(data.stagePoint);
     els.rank.textContent = formatNumber(data.stageRank);
-    els.overviewUpdated.textContent = `更新于 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date())}`;
+    const updatedText = `更新于 ${new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }).format(new Date())}`;
+    els.overviewUpdated.textContent = updatedText;
+    if (els.overviewScore) els.overviewScore.textContent = formatNumber(data.stagePoint);
+    if (els.overviewRank) els.overviewRank.textContent = formatNumber(data.stageRank);
+    if (els.overviewLastUpdated) els.overviewLastUpdated.textContent = updatedText.replace(/^更新于 /, "");
   }
 
   async function loadOverview(options = {}) {
@@ -1999,22 +2164,46 @@ import { createAppState } from "./modules/state.js";
   }
 
   function activeEnvironmentExpiry(detail) {
+    if (detail?.isNeedCheck && !(detail.endpoints || []).length) {
+      return Number(detail.renewRemaining) > 0
+        ? `正在准备环境 · 可续期 ${Number(detail.renewRemaining)}/${Number(detail.renewLimit || 3)} 次`
+        : "正在准备环境";
+    }
     const expiries = (detail.endpoints || [])
       .map((endpoint) => Number(endpoint.expireTime))
       .filter((value) => Number.isFinite(value) && value > 0);
-    return expiries.length ? `到期 ${formatDate(Math.min(...expiries))}` : "运行中";
+    const renewText = Number(detail.renewRemaining) > 0
+      ? `可续期 ${Number(detail.renewRemaining)}/${Number(detail.renewLimit || 3)} 次`
+      : "续期次数已用完";
+    if (!expiries.length) return `运行中 · ${renewText}`;
+    const expireAt = Math.min(...expiries);
+    const remainingSeconds = Math.max(0, Math.round((expireAt - Date.now()) / 1000));
+    return `${remainingSeconds > 0 ? `剩余 ${formatDuration(remainingSeconds)}` : "即将到期"} · ${renewText}`;
   }
 
   function makeActiveEnvironmentItem(detail) {
     const id = detail.id;
     const name = activeEnvironmentName(detail);
-    const busy = state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size > 0;
+    const busy = state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size > 0 || state.environmentRenewBusy.size > 0;
+    const hasEndpoint = (detail.endpoints || []).length > 0;
     const row = createElement("div", "active-environment-item");
     const main = createElement("button", "active-environment-main");
     main.type = "button";
     main.title = `切换到 ${name}`;
     main.append(createElement("span", "active-environment-name", name), createElement("span", "active-environment-meta", activeEnvironmentExpiry(detail)));
     main.addEventListener("click", () => selectExercise(id));
+
+    const actions = createElement("div", "active-environment-actions");
+    const renew = createElement("button", "icon-button active-environment-renew");
+    renew.type = "button";
+    renew.title = Number(detail.renewRemaining) > 0
+      ? `续期 ${name}，剩余 ${Number(detail.renewRemaining)} 次`
+      : `${name} 的续期次数已用完`;
+    renew.setAttribute("aria-label", renew.title);
+    renew.disabled = busy || !hasEndpoint || Number(detail.renewRemaining) <= 0;
+    if (state.environmentRenewBusy.has(id)) renew.setAttribute("aria-busy", "true");
+    renew.append(icon("clock-3"));
+    renew.addEventListener("click", () => renewEnvironment(id, renew));
 
     const stop = createElement("button", "icon-button active-environment-stop");
     stop.type = "button";
@@ -2024,7 +2213,8 @@ import { createAppState } from "./modules/state.js";
     if (state.environmentStopBusy.has(id)) stop.setAttribute("aria-busy", "true");
     stop.append(icon("square"));
     stop.addEventListener("click", () => stopTrackedEnvironment(id));
-    row.append(main, stop);
+    actions.append(renew, stop);
+    row.append(main, actions);
     return row;
   }
 
@@ -2033,7 +2223,7 @@ import { createAppState } from "./modules/state.js";
       const byName = activeEnvironmentName(a).localeCompare(activeEnvironmentName(b), "zh-CN");
       return byName || a.id - b.id;
     });
-    const interactionBusy = state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size > 0;
+    const interactionBusy = state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size > 0 || state.environmentRenewBusy.size > 0;
     els.activeEnvironmentCount.textContent = formatNumber(entries.length);
     els.activeEnvironmentRefresh.disabled = interactionBusy;
     els.stopAllEnvironments.disabled = !entries.length || interactionBusy;
@@ -2061,7 +2251,8 @@ import { createAppState } from "./modules/state.js";
   function observeEnvironment(detail) {
     const id = Number(detail && detail.id);
     if (!Number.isSafeInteger(id) || id <= 0) return;
-    const active = Array.isArray(detail.endpoints) && detail.endpoints.length > 0;
+    const active = (Array.isArray(detail.endpoints) && detail.endpoints.length > 0)
+      || Boolean(detail.isNeedCheck);
     const wasTracked = state.trackedEnvironmentIds.has(id);
     if (active) {
       state.trackedEnvironmentIds.add(id);
@@ -2755,14 +2946,33 @@ import { createAppState } from "./modules/state.js";
       return;
     }
     const active = (detail.endpoints || []).length > 0;
+    const actions = createElement("div", "detail-environment-actions");
+    if (active) {
+      const renewRemaining = Number(detail.renewRemaining || 0);
+      const renew = createElement(
+        "button",
+        `button button-ghost${renewRemaining > 0 ? "" : " is-muted"}`,
+        renewRemaining > 0 ? `续期 (${renewRemaining})` : "续期已用完",
+      );
+      renew.type = "button";
+      renew.disabled = renewRemaining <= 0 || state.environmentRenewBusy.has(detail.id);
+      if (state.environmentRenewBusy.has(detail.id)) renew.setAttribute("aria-busy", "true");
+      renew.title = renewRemaining > 0
+        ? `续期 1 小时，当前剩余 ${renewRemaining} 次`
+        : "容器续期次数已用完";
+      renew.prepend(icon("clock-3"));
+      renew.addEventListener("click", () => renewEnvironment(detail.id, renew));
+      actions.append(renew);
+    }
     const button = createElement("button", `button ${active ? "button-danger" : "button-primary"}`);
     button.type = "button";
-    const stopping = active && (state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.has(detail.id));
+    const stopping = active && (state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.has(detail.id) || state.environmentRenewBusy.has(detail.id));
     button.disabled = stopping;
     if (stopping) button.setAttribute("aria-busy", "true");
     button.append(icon(active ? "square" : "play"), createElement("span", "", active ? "关闭容器" : "启动容器"));
     button.addEventListener("click", active ? stopEnvironment : startEnvironment);
-    els.environmentAction.append(button);
+    actions.append(button);
+    els.environmentAction.append(actions);
     refreshIcons();
   }
 
@@ -2775,7 +2985,10 @@ import { createAppState } from "./modules/state.js";
         await request(`/api/exercises/${encodeURIComponent(id)}/environment/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
         state.pollToken += 1;
         const token = state.pollToken;
-        if (state.detail) state.detail = { ...state.detail, isNeedInit: false, isNeedCheck: true, endpoints: [] };
+        if (state.detail) {
+          state.detail = { ...state.detail, isNeedInit: false, isNeedCheck: true, endpoints: [], renewRemaining: 0 };
+          observeEnvironment(state.detail);
+        }
         renderDetail();
         showToast("环境启动请求已提交", "success");
         pollEnvironment(id, token);
@@ -2796,9 +3009,43 @@ import { createAppState } from "./modules/state.js";
     if (state.selectedExerciseId === id) await loadExerciseDetail(id, { refresh: true, observe: false });
   }
 
+  async function renewEnvironment(id, trigger = null) {
+    const detail = state.activeEnvironments.get(id) || (state.selectedExerciseId === id ? state.detail : null);
+    if (!detail || state.environmentRenewBusy.has(id)) return;
+    const remaining = Number(detail.renewRemaining || 0);
+    if (remaining <= 0) {
+      showToast("容器续期次数已用完", "warning");
+      return;
+    }
+    state.environmentRenewBusy.add(id);
+    if (trigger) setLoading(trigger, true);
+    renderActiveEnvironments();
+    if (state.selectedExerciseId === id) renderEnvironmentAction();
+    try {
+      await request(`/api/exercises/${encodeURIComponent(id)}/environment/renew`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const refreshed = await fetchExerciseDetail(id, { refresh: true, observe: true });
+      if (state.selectedExerciseId === id) {
+        state.detail = refreshed;
+        renderDetail();
+      }
+      showToast(`容器已续期 1 小时，剩余 ${Number(refreshed.renewRemaining || 0)} 次`, "success");
+    } catch (error) {
+      showToast(`容器续期失败：${error.message}`, "error");
+    } finally {
+      state.environmentRenewBusy.delete(id);
+      if (trigger) setLoading(trigger, false);
+      renderActiveEnvironments();
+      if (state.selectedExerciseId === id) renderEnvironmentAction();
+    }
+  }
+
   async function stopTrackedEnvironment(id) {
     const detail = state.activeEnvironments.get(id);
-    if (!detail || state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size) return;
+    if (!detail || state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size || state.environmentRenewBusy.size) return;
     const name = activeEnvironmentName(detail);
     if (!window.confirm(`确认关闭“${name}”的容器？`)) return;
     state.environmentStopBusy.add(id);
@@ -2818,7 +3065,7 @@ import { createAppState } from "./modules/state.js";
 
   async function stopAllEnvironments() {
     const ids = [...state.activeEnvironments.keys()];
-    if (!ids.length || state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size) return;
+    if (!ids.length || state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size || state.environmentRenewBusy.size) return;
     if (!window.confirm(`确认关闭全部 ${ids.length} 个容器？`)) return;
     state.environmentBatchBusy = true;
     setLoading(els.stopAllEnvironments, true);
@@ -2850,7 +3097,7 @@ import { createAppState } from "./modules/state.js";
 
   async function stopEnvironment() {
     const id = state.selectedExerciseId;
-    if (id === null || state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size || !window.confirm("确认关闭当前容器？")) return;
+    if (id === null || state.environmentRefreshBusy || state.environmentBatchBusy || state.environmentStopBusy.size || state.environmentRenewBusy.size || !window.confirm("确认关闭当前容器？")) return;
     const button = els.environmentAction.querySelector("button");
     state.environmentStopBusy.add(id);
     renderActiveEnvironments();
@@ -2872,18 +3119,21 @@ import { createAppState } from "./modules/state.js";
     const deadline = Date.now() + BUILD_POLL_TIMEOUT_MS;
     while (Date.now() < deadline) {
       await delay(BUILD_POLL_MS);
-      if (token !== state.pollToken || state.selectedExerciseId !== id) return;
-      const detail = await loadExerciseDetail(id, { silent: true, refresh: true });
+      if (!state.trackedEnvironmentIds.has(id)) return;
+      const detail = await fetchExerciseDetail(id, { refresh: true, observe: true, silent: true });
       if (!detail) {
-        showToast("环境状态查询失败", "error");
-        return;
+        continue;
+      }
+      if (state.selectedExerciseId === id) {
+        state.detail = detail;
+        renderDetail();
       }
       if (!detail.isNeedCheck && ((detail.endpoints || []).length > 0 || detail.isNeedInit)) {
-        showToast("环境状态已更新", "success");
+        showToast(detail.endpoints?.length ? "容器已就绪" : "容器准备失败", detail.endpoints?.length ? "success" : "warning");
         return;
       }
     }
-    if (token === state.pollToken && state.selectedExerciseId === id) showToast("环境准备超时，可稍后重试", "warning");
+    if (state.trackedEnvironmentIds.has(id)) showToast("容器准备超时，可在侧栏点击刷新重试", "warning");
   }
 
   function updateFlagLength() {
@@ -2992,10 +3242,14 @@ import { createAppState } from "./modules/state.js";
       state.matchInfo = await request(apiPath("/api/match-info", options.refresh));
       els.matchNote.textContent = state.matchInfo.note || "暂无内容";
       els.matchRule.textContent = state.matchInfo.rule || "暂无内容";
+      if (els.overviewMatchNote) els.overviewMatchNote.textContent = state.matchInfo.note || "暂无比赛说明";
+      if (els.overviewMatchRule) els.overviewMatchRule.textContent = state.matchInfo.rule || "暂无比赛规则";
       return state.matchInfo;
     } catch (error) {
       els.matchNote.textContent = `加载失败：${error.message}`;
       els.matchRule.textContent = "请确认比赛已绑定且登录态有效";
+      if (els.overviewMatchNote) els.overviewMatchNote.textContent = `比赛说明加载失败：${error.message}`;
+      if (els.overviewMatchRule) els.overviewMatchRule.textContent = "请确认比赛已绑定且登录态有效";
       if (!options.silent) showToast(`比赛说明加载失败：${error.message}`, "error");
       return null;
     }
@@ -3847,7 +4101,7 @@ import { createAppState } from "./modules/state.js";
         ...task,
         events: state.codexLoadedEvents.get(task.id) || previousDetails.get(task.id)?.events || [],
       }));
-      els.codexActiveCount.textContent = result.available === false ? "未配置" : `${Number(result.active || 0)}/${Number(result.limit || 0)}`;
+      updateCodexCounter();
       if (state.codexSelectedTaskId === null && state.codexTasks.length) state.codexSelectedTaskId = state.codexTasks[0].id;
       if (state.codexSelectedTaskId && state.codexTasks.some((task) => task.id === state.codexSelectedTaskId)) {
         await loadCodexTask(state.codexSelectedTaskId, { select: false, render: false, silent: true });
@@ -3907,10 +4161,12 @@ import { createAppState } from "./modules/state.js";
   function openCodexTaskPage(trigger = null) {
     codexTaskTrigger = trigger instanceof HTMLElement ? trigger : document.activeElement;
     if (!els.modelRoutingPage.hidden) closeModelRoutingPage();
+    closePageDialogs();
     els.codexTaskPage.hidden = false;
     document.body.classList.add("codex-task-open");
-    document.querySelector(".topbar")?.setAttribute("inert", "");
-    document.querySelector("main.workspace")?.setAttribute("inert", "");
+    document.body.classList.add("workspace-page-open");
+    setSidebarOpen(false);
+    setActiveSidebarView("codex-task-page");
     ensureCodexPolling();
     void loadCodexTasks();
     window.requestAnimationFrame(() => els.codexTaskPage.focus());
@@ -3919,8 +4175,10 @@ import { createAppState } from "./modules/state.js";
   function closeCodexTaskPage() {
     els.codexTaskPage.hidden = true;
     document.body.classList.remove("codex-task-open");
-    document.querySelector(".topbar")?.removeAttribute("inert");
-    document.querySelector("main.workspace")?.removeAttribute("inert");
+    if (!document.querySelector("dialog[data-page-dialog][open]") && els.modelRoutingPage.hidden) {
+      document.body.classList.remove("workspace-page-open");
+      setActiveSidebarView(activePrimaryView);
+    }
     const focusTarget = codexTaskTrigger;
     codexTaskTrigger = null;
     if (
@@ -4287,7 +4545,11 @@ import { createAppState } from "./modules/state.js";
 
   function updateCodexCounter() {
     const active = state.codexTasks.filter((task) => ["running", "queued"].includes(task.status)).length;
-    els.codexActiveCount.textContent = state.codexAvailable === false ? "不可用" : `${active}/${state.codexLimit || 10}`;
+    const total = state.codexTasks.length;
+    els.codexActiveCount.textContent = state.codexAvailable === false ? "不可用" : formatNumber(total);
+    els.codexActiveCount.title = state.codexAvailable === false
+      ? "Codex 未配置"
+      : `共 ${total} 个会话${active ? `，${active} 个运行或排队中` : ""}`;
   }
 
   function upsertCodexRealtimeTask(incoming) {
@@ -4468,15 +4730,43 @@ import { createAppState } from "./modules/state.js";
   }
 
   function bindInfrastructureEvents() {
-    bindModuleOnce("基础设施", ["toast-region", "connection-status"], () => {
+    bindModuleOnce("基础设施", ["toast-region", "connection-status", "open-sidebar", "collapse-sidebar", "sidebar-scrim", "show-competition-view", "show-exercise-view"], () => {
+      try {
+        setSidebarCollapsed(window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY) === "true", false);
+      } catch {
+        setSidebarCollapsed(false, false);
+      }
+      setActiveSidebarView(activePrimaryView);
+      setSidebarOpen(false);
+      if (els.exerciseEnvironmentRail && els.activeEnvironmentPanel) {
+        els.exerciseEnvironmentRail.append(els.activeEnvironmentPanel);
+      }
+      els.openSidebar.addEventListener("click", () => setSidebarOpen(true));
+      els.collapseSidebar.addEventListener("click", () => {
+        setSidebarCollapsed(!document.body.classList.contains("sidebar-collapsed"));
+      });
+      els.sidebarScrim.addEventListener("click", () => setSidebarOpen(false));
+      els.showCompetitionView.addEventListener("click", showCompetitionView);
+      els.showExerciseView.addEventListener("click", showExerciseView);
+      els.overviewOpenExercises.addEventListener("click", showExerciseView);
+      els.overviewOpenWorkbench.addEventListener("click", showExerciseView);
       document.querySelectorAll("dialog").forEach((dialog) => {
         dialog.addEventListener("close", () => {
           delete dialog.dataset.dialogLayer;
           syncToastRegionHost(dialog);
         });
         dialog.addEventListener("click", (event) => {
-          if (event.target === dialog) closeDialog(dialog);
+          if (event.target === dialog && !dialog.hasAttribute("data-page-dialog")) closeDialog(dialog);
         });
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && document.body.classList.contains("sidebar-open")) {
+          setSidebarOpen(false);
+          els.openSidebar.focus();
+        }
+      });
+      window.matchMedia("(min-width: 1041px)").addEventListener("change", (event) => {
+        if (event.matches) setSidebarOpen(false);
       });
     });
   }

@@ -22,6 +22,7 @@ export function createAppState({ realtimeStopped } = {}) {
     environmentSyncVersion: 0,
     environmentBatchBusy: false,
     environmentStopBusy: new Set(),
+    environmentRenewBusy: new Set(),
     environmentsRestored: false,
     exercisesLoaded: false,
     selectedExerciseId: null,

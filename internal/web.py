@@ -99,6 +99,8 @@ class AgentProtocol(Protocol):
 
     def recover_environment(self, exercise_id: int) -> Any: ...
 
+    def renew_environment(self, exercise_id: int) -> Any: ...
+
     def notices(self, refresh: bool = False) -> Any: ...
 
     def notice(self, notice_id: int, refresh: bool = False) -> Any: ...
@@ -1724,6 +1726,12 @@ async def _exercise_route(
             return _method_error("POST")
         return await _service_response(
             services.agent.recover_environment, exercise_id, data={"accepted": True}
+        )
+    if tail == ["environment", "renew"]:
+        if not _method(request, "POST"):
+            return _method_error("POST")
+        return await _service_response(
+            services.agent.renew_environment, exercise_id, data={"accepted": True}
         )
     if len(tail) == 3 and tail[0] == "attachments" and tail[2] == "download":
         if not _method(request, "POST"):

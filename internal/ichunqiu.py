@@ -48,6 +48,7 @@ EMPTY_IMAGE_PLACEHOLDER = "f97fae4e1ffdb1ee3b65231aa693ea85"
 MATCH_STATE_CODES = frozenset({"201", "202", "203"})
 MATCH_TIMEZONE = ZoneInfo("Asia/Shanghai")
 NOTICE_TYPE = 1
+MAX_ENVIRONMENT_RENEWALS = 3
 
 
 class AgentClient:
@@ -231,11 +232,18 @@ class AgentClient:
             row.get("is_allow_solve", True)
         )
         endpoints: tuple[Endpoint, ...] = ()
+        renew_remaining = 0
         is_need_init = False
         is_need_check = False
         can_refresh = False
         if can_use_environment:
-            endpoints, is_need_init, is_need_check, can_refresh = (
+            (
+                endpoints,
+                is_need_init,
+                is_need_check,
+                can_refresh,
+                renew_remaining,
+            ) = (
                 self._environment_state(
                     exercise_id,
                     platform_id,
@@ -251,6 +259,8 @@ class AgentClient:
             attachment=_attachments(row),
             endpoints=endpoints,
             can_refresh_endpoint=can_refresh,
+            renew_remaining=renew_remaining,
+            renew_limit=MAX_ENVIRONMENT_RENEWALS,
             is_need_init=is_need_init,
             endpoint_type="docker" if can_use_environment else "",
             current_time=time.time_ns() // 1_000_000,
@@ -315,6 +325,20 @@ class AgentClient:
             "/match/docker/close",
             {"uuid": environment_id, "close_type": 3},
         )
+        with self._lock:
+            self._pending_environments.pop(exercise_id, None)
+
+    def renew_environment(self, exercise_id: int) -> None:
+        platform_id = self._platform_question_id(exercise_id)
+        data = _mapping(
+            self._api.post("/match/docker/info", {"question_id": platform_id})
+        )
+        environment_id = str(data.get("uuid", "") or "").strip()
+        if not environment_id:
+            raise APIError("ENVIRONMENT_NOT_FOUND", "当前题目没有运行中的环境")
+        if _as_int(data.get("delay_count")) <= 0:
+            raise APIError("ENVIRONMENT_RENEW_LIMIT", "容器续期次数已用完")
+        self._api.post("/match/docker/delay", {"uuid": environment_id})
         with self._lock:
             self._pending_environments.pop(exercise_id, None)
 
@@ -462,7 +486,7 @@ class AgentClient:
         self,
         exercise_id: int,
         platform_id: str,
-    ) -> tuple[tuple[Endpoint, ...], bool, bool, bool]:
+    ) -> tuple[tuple[Endpoint, ...], bool, bool, bool, int]:
         with self._lock:
             pending = self._pending_environments.get(exercise_id, "")
         if pending:
@@ -470,7 +494,7 @@ class AgentClient:
                 self._api.post("/match/docker/process", {"uuid": pending})
             )
             if _as_int(process.get("process")) == 0:
-                return (), False, True, False
+                return (), False, True, False, 0
             with self._lock:
                 self._pending_environments.pop(exercise_id, None)
         try:
@@ -479,12 +503,18 @@ class AgentClient:
             )
         except APIError as exc:
             if exc.code in {"101", "116"}:
-                return (), True, False, False
+                return (), True, False, False, 0
             raise
         endpoint = _endpoint_from_data(data)
         if endpoint is None:
-            return (), True, False, False
-        return (endpoint,), False, False, _as_int(data.get("delay_count")) > 0
+            return (), True, False, False, 0
+        return (
+            (endpoint,),
+            False,
+            False,
+            _as_int(data.get("delay_count")) > 0,
+            _as_int(data.get("delay_count")),
+        )
 
 
 def _mapping(value: Any) -> Mapping[str, Any]:

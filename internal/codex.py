@@ -34,7 +34,6 @@ from .solver import PromptResult, safe_writeup_segment
 MAX_TASK_EVENTS = 128
 DEFAULT_EVENT_PAGE_SIZE = 64
 MAX_EVENT_PAGE_SIZE = 256
-MAX_TASK_HISTORY = 100
 CONTINUE_MESSAGE = "刚才程序意外退出了，请你仔细思考，继续未完成的操作"
 AUTO_CONTINUE_MESSAGE = (
     "继续执行。不要只输出计划、承诺或进度说明；立即调用工具推进任务，"
@@ -1450,7 +1449,6 @@ class CodexManager:
             )
             self._tasks[task_id] = task
             self._order.append(task_id)
-            self._trim_history()
             self._refresh_queue_positions()
             self._queue.put(task_id)
             self._persist_tasks_locked()
@@ -1534,7 +1532,6 @@ class CodexManager:
                 raise CodexUnavailable("codex is unavailable")
             self._tasks[task_id] = task
             self._order.append(task_id)
-            self._trim_history()
             self._refresh_queue_positions()
             self._queue.put(task_id)
             self._persist_tasks_locked()
@@ -2343,7 +2340,6 @@ class CodexManager:
                 LOGGER.warning("忽略无法恢复的 Codex 任务元数据", exc_info=True)
                 continue
             restored.append(task)
-        restored = restored[-MAX_TASK_HISTORY:]
         with self._condition:
             for task in restored:
                 task_id = task.snapshot.id
@@ -2552,20 +2548,6 @@ class CodexManager:
                 task.snapshot = _replace_snapshot(
                     task.snapshot, queue_position=position
                 )
-
-    def _trim_history(self) -> None:
-        while len(self._order) > MAX_TASK_HISTORY:
-            oldest = self._order[0]
-            task = self._tasks.get(oldest)
-            if task is not None and task.snapshot.status in {
-                "queued",
-                "running",
-                "interrupted",
-            }:
-                return
-            self._tasks.pop(oldest, None)
-            self._order.pop(0)
-
 
 def _invoke_runner(
     runner: object,

@@ -71,6 +71,7 @@ X-GCSIS-Action: tools-manager
 | `POST` | `/api/exercises/{id}/answer` | 提交 Flag |
 | `POST` | `/api/exercises/{id}/environment/start` | 启动题目环境 |
 | `POST` | `/api/exercises/{id}/environment/stop` | 回收题目环境 |
+| `POST` | `/api/exercises/{id}/environment/renew` | 续期题目环境，每次增加 1 小时 |
 | `GET` | `/api/notices` | 查询公告列表 |
 | `GET` | `/api/notices/{id}` | 查询公告详情 |
 | `GET` | `/api/attachments` | 查询本地附件目录 |
@@ -327,6 +328,8 @@ Header：`X-GCSIS-Action: platform-auth`
     },
     "endpoints": [],
     "canRefreshEndpoint": false,
+    "renewRemaining": 0,
+    "renewLimit": 3,
     "isNeedInit": true,
     "endpointType": "docker",
     "currentTime": 1780000000000,
@@ -335,7 +338,7 @@ Header：`X-GCSIS-Action: platform-auth`
 }
 ```
 
-`isNeedInit=true` 表示需要启动环境；`isNeedCheck=true` 表示环境仍在准备中，应稍后刷新详情。环境就绪后，`endpoints` 包含地址、端口、账号和过期时间。
+`isNeedInit=true` 表示需要启动环境；`isNeedCheck=true` 表示环境仍在准备中，应稍后刷新详情。环境就绪后，`endpoints` 包含地址、端口、账号和过期时间；`renewRemaining` 表示平台允许的剩余续期次数，`renewLimit` 当前为 3。
 
 ### 提交 Flag
 
@@ -369,9 +372,10 @@ Header：`X-GCSIS-Action: platform-auth`
 ```text
 POST /api/exercises/{id}/environment/start
 POST /api/exercises/{id}/environment/stop
+POST /api/exercises/{id}/environment/renew
 ```
 
-启动成功返回 `{"accepted": true}`。随后轮询题目详情，直到 `isNeedCheck=false`。完成题目后应调用停止接口回收环境。
+启动和续期成功均返回 `{"accepted": true}`。每次续期增加 1 小时，最多续期 3 次；续期后应重新读取题目详情以更新过期时间和 `renewRemaining`。完成题目后应调用停止接口回收环境。
 
 ### 公告
 
