@@ -1573,10 +1573,10 @@ def test_codex_archive_route_archives_tasks() -> None:
     with TestClient(app) as client:
         response = client.post(
             "/api/codex/tasks/archive",
-            json={"taskIds": ["a" * 32, "b" * 32], "archived": True},
+            json={"taskIds": ["a" * 24, "b" * 24], "archived": True},
         )
     assert response.status_code == 200
-    assert codex.calls == [("a" * 32, True), ("b" * 32, True)]
+    assert codex.calls == [("a" * 24, True), ("b" * 24, True)]
 
 
 def test_download_rejects_oversized_response(tmp_path: Path) -> None:
@@ -1929,7 +1929,12 @@ def test_web_renew_environment_route() -> None:
     source = Source()
     app = create_app(source, None, None, None)
     with TestClient(app) as client:
-        response = client.post("/api/exercises/7/environment/renew")
+        rejected = client.post("/api/exercises/7/environment/renew")
+        response = client.post(
+            "/api/exercises/7/environment/renew",
+            headers={"X-GCSIS-Action": "environment-manager"},
+        )
+        assert rejected.status_code == 403
         assert response.status_code == 200
         assert response.json()["data"] == {"accepted": True}
         assert source.renewed == 1

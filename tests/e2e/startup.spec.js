@@ -835,6 +835,7 @@ test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page 
   await expect(page.locator(".codex-tree-item")).toContainText("已归档");
 
   await page.locator("#codex-session-status").selectOption("");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(2);
   await page.locator("#codex-session-archive").selectOption("archived");
   await expect(page.locator(".codex-tree-item")).toHaveCount(1);
   await page.locator(".codex-task-select").check();

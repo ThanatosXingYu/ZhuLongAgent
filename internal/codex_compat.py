@@ -233,6 +233,7 @@ def stream_chat_response(
     base_url: str,
     api_key: str,
     timeout: float = 300.0,
+    fallback_upstreams: tuple[tuple[str, str], ...] = (),
 ) -> Iterator[bytes]:
     yield b": codex-proxy-connected\n\n"
     payload: dict[str, Any] = {
@@ -243,37 +244,51 @@ def stream_chat_response(
     if bridge.tools:
         payload["tools"] = [tool.to_dict() for tool in bridge.tools]
         payload["tool_choice"] = "required"
-    request = Request(
-        f"{base_url.rstrip('/')}/chat/completions",
-        data=json.dumps(
-            payload, ensure_ascii=False, separators=(",", ":")
-        ).encode("utf-8"),
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "text/event-stream",
-            "User-Agent": USER_AGENT,
-        },
-    )
-    if api_key:
-        request.add_header("Authorization", f"Bearer {api_key}")
+    body = json.dumps(
+        payload, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    upstreams = [(base_url.rstrip("/"), api_key), *fallback_upstreams]
+    unique_upstreams: list[tuple[str, str]] = []
+    for candidate in upstreams:
+        if candidate[0] and candidate not in unique_upstreams:
+            unique_upstreams.append(candidate)
     response = None
     last_error: Exception | None = None
-    try:
-        LOGGER.info("Codex stream upstream connecting model=%s", bridge.model)
-        response = urlopen(request, timeout=timeout)  # noqa: S310
-    except HTTPError as exc:
-        last_error = ModelCallError(
-            f"model returned status {exc.code}",
-            status=exc.code,
-            retryable=exc.code in {408, 429} or exc.code >= 500,
+    for index, (candidate_url, candidate_key) in enumerate(unique_upstreams[:3]):
+        request = Request(
+            f"{candidate_url}/chat/completions",
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Accept": "text/event-stream",
+                "User-Agent": USER_AGENT,
+            },
         )
-    except (TimeoutError, socket.timeout) as exc:
-        last_error = ModelCallError(
-            f"call model timed out: {exc}", timed_out=True
-        )
-    except (URLError, OSError) as exc:
-        last_error = ModelCallError(f"call model: {exc}")
+        if candidate_key:
+            request.add_header("Authorization", f"Bearer {candidate_key}")
+        try:
+            LOGGER.info(
+                "Codex stream upstream connecting model=%s attempt=%d",
+                bridge.model,
+                index + 1,
+            )
+            response = urlopen(request, timeout=timeout)  # noqa: S310
+            break
+        except HTTPError as exc:
+            last_error = ModelCallError(
+                f"model returned status {exc.code}",
+                status=exc.code,
+                retryable=exc.code in {408, 429} or exc.code >= 500,
+            )
+        except (TimeoutError, socket.timeout) as exc:
+            last_error = ModelCallError(
+                f"call model timed out: {exc}", timed_out=True
+            )
+        except (URLError, OSError) as exc:
+            last_error = ModelCallError(f"call model: {exc}")
+        if index + 1 < min(len(unique_upstreams), 3):
+            yield b": codex-proxy-failover\n\n"
     if response is None:
         yield _failed_response_event(str(last_error or "model request failed"))
         return

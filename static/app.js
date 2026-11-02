@@ -50,6 +50,7 @@ import {
   const COLLAPSED_ATTACHMENT_CATEGORY_STORAGE_KEY = "gcsis.collapsed-attachment-categories";
   const SIDEBAR_COLLAPSED_STORAGE_KEY = "gcsis.sidebar-collapsed";
   const ATTACHMENT_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "attachment-manager" });
+  const ENVIRONMENT_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "environment-manager" });
   const PLATFORM_ACTION_HEADERS = Object.freeze({ "X-GCSIS-Action": "platform-auth" });
   const CODEX_RECOVERY_PROMPT = "刚才程序意外退出了，请你核对上下文，接着之前的进度继续执行任务。";
   const CODEX_WP_RAW_PROMPT = `请你根据当前题目信息以及你解题的思路、脚本等，完成该题WriteUp的撰写，然后告诉我wp的完整路径。要求：
@@ -643,11 +644,10 @@ import {
 
   function handleAuthExpired() {
     stopWorkspacePollingOnAuthFailure();
-    state.authenticated = false;
-    els.platformAuthStatus.textContent = "登录已过期，请重新登录";
-    els.platformAuthStatus.className = "platform-auth-status is-expired";
-    els.platformLogout.hidden = true;
-    els.platformLogin.hidden = false;
+    setPlatformAuthentication({
+      authenticated: false,
+      message: "登录已过期，请重新登录",
+    });
     showAuthenticationRequiredWorkspace();
     const now = Date.now();
     if (now - state.authExpiryNoticeAt > 15000) {
@@ -658,11 +658,10 @@ import {
 
   function handleMatchContextExpired() {
     stopWorkspacePollingOnAuthFailure();
-    state.authenticated = false;
-    els.platformAuthStatus.textContent = "比赛上下文已失效，请重新绑定";
-    els.platformAuthStatus.className = "platform-auth-status is-expired";
-    els.platformLogout.hidden = true;
-    els.platformLogin.hidden = false;
+    setPlatformAuthentication({
+      authenticated: false,
+      message: "比赛上下文已失效，请重新绑定",
+    });
     showAuthenticationRequiredWorkspace();
     const now = Date.now();
     if (now - state.authExpiryNoticeAt > 15000) {
@@ -2959,7 +2958,11 @@ import {
     const button = els.environmentAction.querySelector("button");
     await withButton(button, async () => {
       try {
-        await request(`/api/exercises/${encodeURIComponent(id)}/environment/start`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+        await request(`/api/exercises/${encodeURIComponent(id)}/environment/start`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...ENVIRONMENT_ACTION_HEADERS },
+          body: "{}",
+        });
         const token = beginEnvironmentPoll(id);
         if (state.detail) {
           state.detail = { ...state.detail, isNeedInit: false, isNeedCheck: true, endpoints: [], renewRemaining: 0 };
@@ -2978,7 +2981,7 @@ import {
     cancelEnvironmentPoll(id);
     await request(`/api/exercises/${encodeURIComponent(id)}/environment/stop`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...ENVIRONMENT_ACTION_HEADERS },
       body: "{}",
     });
     removeTrackedEnvironment(id);
@@ -3000,7 +3003,7 @@ import {
     try {
       await request(`/api/exercises/${encodeURIComponent(id)}/environment/renew`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...ENVIRONMENT_ACTION_HEADERS },
         body: "{}",
       });
       const refreshed = await fetchExerciseDetail(id, { refresh: true, observe: true });

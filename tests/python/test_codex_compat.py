@@ -151,3 +151,56 @@ def test_codex_bridge_streams_chat_deltas(
 
     assert deltas == ["STREAM", "_OK"]
     assert events[-1]["type"] == "response.completed"
+
+
+def test_codex_stream_falls_back_to_next_upstream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def __iter__(self):
+            yield (
+                'data: {"choices":[{"delta":{"content":"fallback ok"}}]}\n\n'
+            ).encode()
+            yield b"data: [DONE]\n\n"
+
+    def fake_urlopen(request: Any, **_kwargs: Any) -> Response:
+        calls.append(request.full_url)
+        if len(calls) == 1:
+            raise OSError("TLS handshake timeout")
+        return Response()
+
+    monkeypatch.setattr(compat_module, "urlopen", fake_urlopen)
+    bridge = build_chat_bridge(
+        {
+            "model": "deepseek-v4.1-flash",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "hello"}],
+                }
+            ],
+        },
+        "fallback",
+    )
+
+    stream = b"".join(
+        stream_chat_response(
+            bridge,
+            base_url="https://primary.example/v1",
+            api_key="primary",
+            fallback_upstreams=(("https://fallback.example/v1", "fallback"),),
+        )
+    ).decode()
+
+    assert len(calls) == 2
+    assert "fallback.example" in calls[1]
+    assert "fallback ok" in stream

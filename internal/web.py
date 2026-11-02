@@ -49,6 +49,7 @@ ATTACHMENT_ACTION_HEADER = "X-GCSIS-Action"
 ATTACHMENT_ACTION_PURPOSE = "attachment-manager"
 PLATFORM_ACTION_PURPOSE = "platform-auth"
 TOOLS_ACTION_PURPOSE = "tools-manager"
+ENVIRONMENT_ACTION_PURPOSE = "environment-manager"
 ModelT = TypeVar("ModelT", bound=BaseModel)
 LOGGER = logging.getLogger("gcsis-tools.web")
 
@@ -348,7 +349,7 @@ class CodexArchiveRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_ids(self) -> "CodexArchiveRequest":
-        if any(not _valid_task_id(task_id) for task_id in self.task_ids):
+        if any(not _valid_codex_task_id(task_id) for task_id in self.task_ids):
             raise ValueError("invalid task id")
         if len(set(self.task_ids)) != len(self.task_ids):
             raise ValueError("duplicate task id")
@@ -595,11 +596,12 @@ def create_app(
                 raise ValueError
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError):
             return _error_response(400, "INVALID_REQUEST", "Codex 请求格式无效")
-        upstream_base_url, upstream_api_key = _codex_chat_upstream(current)
-        if not upstream_base_url or not upstream_api_key:
+        upstreams = _codex_chat_upstreams(current)
+        if not upstreams:
             return _error_response(
                 503, "CODEX_CHAT_UPSTREAM_UNAVAILABLE", "Codex Chat 上游未配置"
             )
+        upstream_base_url, upstream_api_key = upstreams[0]
         bridge = build_chat_bridge(payload, current.codex_model)
         return StreamingResponse(
             stream_chat_response(
@@ -607,6 +609,7 @@ def create_app(
                 base_url=upstream_base_url,
                 api_key=upstream_api_key,
                 timeout=45,
+                fallback_upstreams=tuple(upstreams[1:]),
             ),
             media_type="text/event-stream",
             headers={
@@ -1804,18 +1807,30 @@ async def _exercise_route(
     if tail == ["environment", "start"]:
         if not _method(request, "POST"):
             return _method_error("POST")
+        if not _trusted_environment_request(request):
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "容器操作缺少同源凭据"
+            )
         return await _service_response(
             services.agent.build_environment, exercise_id, data={"accepted": True}
         )
     if tail == ["environment", "stop"]:
         if not _method(request, "POST"):
             return _method_error("POST")
+        if not _trusted_environment_request(request):
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "容器操作缺少同源凭据"
+            )
         return await _service_response(
             services.agent.recover_environment, exercise_id, data={"accepted": True}
         )
     if tail == ["environment", "renew"]:
         if not _method(request, "POST"):
             return _method_error("POST")
+        if not _trusted_environment_request(request):
+            return _error_response(
+                403, "CROSS_SITE_ACTION_REJECTED", "容器操作缺少同源凭据"
+            )
         return await _service_response(
             services.agent.renew_environment, exercise_id, data={"accepted": True}
         )
@@ -2078,7 +2093,7 @@ def _runtime_login_status(
     return status
 
 
-def _codex_chat_upstream(config: Config) -> tuple[str, str]:
+def _codex_chat_upstreams(config: Config) -> list[tuple[str, str]]:
     try:
         providers = json.loads(config.model_providers_json or "[]")
     except json.JSONDecodeError:
@@ -2101,15 +2116,17 @@ def _codex_chat_upstream(config: Config) -> tuple[str, str]:
     pool_candidates = [
         item for item in chat_providers if not bool(item.get("poolExclude", False))
     ]
-    selected = active or (
-        pool_candidates[0]
-        if config.model_pool_enabled and pool_candidates
-        else None
-    )
-    if selected is None and not config.model_pool_enabled:
-        selected = chat_providers[0] if chat_providers else None
-    if selected is None:
-        selected = next(
+    ordered: list[Mapping[str, Any]] = []
+    if active is not None:
+        ordered.append(active)
+    if config.model_pool_enabled:
+        ordered.extend(
+            item
+            for item in pool_candidates
+            if not any(item is selected for selected in ordered)
+        )
+    if not ordered:
+        fallback = next(
             (
                 item
                 for item in chat_providers
@@ -2117,18 +2134,31 @@ def _codex_chat_upstream(config: Config) -> tuple[str, str]:
             ),
             chat_providers[0] if chat_providers else None,
         )
-    if isinstance(selected, Mapping):
-        return (
-            str(selected.get("baseUrl", "") or "").strip().rstrip("/"),
-            str(selected.get("apiKey", "") or "").strip(),
+        if isinstance(fallback, Mapping):
+            ordered.append(fallback)
+    upstreams = [
+        (
+            str(item.get("baseUrl", "") or "").strip().rstrip("/"),
+            str(item.get("apiKey", "") or "").strip(),
         )
+        for item in ordered
+        if str(item.get("baseUrl", "") or "").strip()
+        and str(item.get("apiKey", "") or "").strip()
+    ]
+    if upstreams:
+        return upstreams
     if (
         config.model_protocol == "openai-chat"
         and config.model_base_url
         and config.model_api_key
     ):
-        return config.model_base_url.rstrip("/"), config.model_api_key
-    return "", ""
+        return [(config.model_base_url.rstrip("/"), config.model_api_key)]
+    return []
+
+
+def _codex_chat_upstream(config: Config) -> tuple[str, str]:
+    upstreams = _codex_chat_upstreams(config)
+    return upstreams[0] if upstreams else ("", "")
 
 
 def _codex_proxy_models(config: Config) -> list[str]:
@@ -2515,6 +2545,12 @@ def _valid_task_id(value: str) -> bool:
     return len(value) == 32 and all(char in "0123456789abcdef" for char in value)
 
 
+def _valid_codex_task_id(value: str) -> bool:
+    return 1 <= len(value) <= 64 and all(
+        char.isalnum() or char in "_-" for char in value
+    )
+
+
 def _start_attachment_download(
     tasks: AttachmentTasksProtocol, request: AttachmentDownloadRequest
 ) -> dict[str, Any]:
@@ -2562,6 +2598,10 @@ def _trusted_tools_request(request: Request) -> bool:
 
 def _trusted_platform_request(request: Request) -> bool:
     return request.headers.get(ATTACHMENT_ACTION_HEADER) == PLATFORM_ACTION_PURPOSE
+
+
+def _trusted_environment_request(request: Request) -> bool:
+    return request.headers.get(ATTACHMENT_ACTION_HEADER) == ENVIRONMENT_ACTION_PURPOSE
 
 
 async def _empty_body_error(request: Request) -> JSONResponse | None:

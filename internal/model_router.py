@@ -182,20 +182,22 @@ class ModelRouter:
             self._mark_unavailable(provider)
 
     def _ordered_providers(self, available: list[_ProviderState]) -> list[_ProviderState]:
-        if self._strategy == "failover":
-            active = [
-                provider
-                for provider in available
-                if provider.provider_id == self._active_provider_id
-            ]
-            return active + [
-                provider
-                for provider in available
-                if provider.provider_id != self._active_provider_id
-            ]
-        start = self._cursor % len(available)
-        self._cursor = (start + 1) % len(available)
-        return available[start:] + available[:start]
+        active = [
+            provider
+            for provider in available
+            if provider.provider_id == self._active_provider_id
+        ]
+        fallbacks = [
+            provider
+            for provider in available
+            if provider.provider_id != self._active_provider_id
+        ]
+        if self._strategy == "failover" or not fallbacks:
+            return active + fallbacks
+        start = self._cursor % len(fallbacks)
+        self._cursor = (start + 1) % len(fallbacks)
+        rotated = fallbacks[start:] + fallbacks[:start]
+        return active + rotated
 
     def _eligible_providers(self) -> list[_ProviderState]:
         if not self._pool_enabled:

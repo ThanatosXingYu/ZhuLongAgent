@@ -62,18 +62,19 @@ def _config(strategy: str = "round-robin") -> Config:
     )
 
 
-def test_model_router_round_robin_rotates_providers() -> None:
+def test_model_router_round_robin_keeps_active_first_and_rotates_fallbacks() -> None:
     router = ModelRouter(_config())
     clients = [FakeClient("a"), FakeClient("b")]
     for provider, client in zip(router._providers, clients, strict=True):
         provider.client = client  # type: ignore[assignment]
 
     first = router.complete("auto", [Message("user", "one")])
+    clients[0].result = RuntimeError("active unavailable")
     second = router.complete("auto", [Message("user", "two")])
 
     assert first.content == "a"
     assert second.content == "b"
-    assert [client.calls for client in clients] == [1, 1]
+    assert [client.calls for client in clients] == [2, 1]
 
 
 def test_model_router_failover_retries_then_switches_provider() -> None:
