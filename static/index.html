@@ -95,11 +95,20 @@
           </div>
           <div class="metric">
             <dt>排名</dt>
-            <dd><span class="rank-prefix">#</span><span id="rank-value">--</span></dd>
+            <dd class="metric-number-line">
+              <span class="rank-prefix">#</span><span id="rank-value">--</span>
+              <span id="rank-delta" class="rank-delta is-flat" hidden>持平</span>
+            </dd>
           </div>
         </dl>
         <div class="overview-status" aria-live="polite">
-          <span id="team-summary" class="team-summary" hidden></span>
+          <div id="team-summary-block" class="topbar-team" hidden>
+            <span id="team-avatar" class="topbar-team-avatar" aria-hidden="true">队</span>
+            <span class="topbar-team-copy">
+              <strong id="team-summary" class="team-summary"></strong>
+              <small id="team-summary-meta" class="team-summary-meta"></small>
+            </span>
+          </div>
           <span id="overview-updated-at" class="updated-at">尚未更新</span>
         </div>
       </div>
@@ -229,7 +238,14 @@
             </div>
             <div>
               <dt>实时排名</dt>
-              <dd><span>#</span><span id="overview-rank-value">--</span></dd>
+              <dd class="overview-rank-line">
+                <span>#</span><span id="overview-rank-value">--</span>
+                <span id="overview-rank-delta" class="rank-delta is-flat" hidden>持平</span>
+              </dd>
+            </div>
+            <div>
+              <dt>已解题目</dt>
+              <dd id="overview-solved-value">--</dd>
             </div>
             <div>
               <dt>数据更新</dt>
@@ -239,26 +255,38 @@
         </div>
         <div class="overview-briefing-grid">
           <section class="overview-briefing-block">
-            <h3>比赛说明</h3>
-            <p id="overview-match-note">正在读取比赛说明…</p>
+            <header class="overview-briefing-heading">
+              <span class="overview-briefing-icon"><i data-lucide="flag" aria-hidden="true"></i></span>
+              <div>
+                <h3>比赛说明</h3>
+                <small>赛事名称与时间安排</small>
+              </div>
+            </header>
+            <div id="overview-match-note" class="overview-facts">正在读取比赛说明…</div>
           </section>
           <section class="overview-briefing-block">
-            <h3>比赛规则</h3>
-            <p id="overview-match-rule">正在读取比赛规则…</p>
+            <header class="overview-briefing-heading">
+              <span class="overview-briefing-icon"><i data-lucide="scale" aria-hidden="true"></i></span>
+              <div>
+                <h3>比赛规则</h3>
+                <small>状态、参赛与登录方式</small>
+              </div>
+            </header>
+            <div id="overview-match-rule" class="overview-facts">正在读取比赛规则…</div>
           </section>
         </div>
       </section>
-
-      <section class="panel overview-entry-panel">
-        <div>
-          <p class="eyebrow">Workflow</p>
-          <h3>集中处理比赛任务</h3>
-          <p>题目列表、详情、Flag 提交和容器操作已拆分到独立工作区，减少首页信息密度。</p>
+      <section class="panel overview-activity-panel" aria-labelledby="overview-activity-title">
+        <header class="panel-header overview-activity-header">
+          <div class="heading-group">
+            <h2 id="overview-activity-title">排名动态</h2>
+            <span class="count-badge" id="overview-rank-history-count">0</span>
+          </div>
+          <span class="overview-activity-note">每次刷新自动记录</span>
+        </header>
+        <div id="overview-rank-history" class="overview-rank-history" aria-live="polite">
+          <div class="empty-state compact">等待第一次排名刷新</div>
         </div>
-        <button id="overview-open-workbench" class="button button-ghost" type="button">
-          <i data-lucide="arrow-right" aria-hidden="true"></i>
-          <span>打开题目工作区</span>
-        </button>
       </section>
     </section>
 
@@ -301,17 +329,29 @@
             </button>
           </div>
         </header>
-        <div id="notice-list" class="notice-list" aria-live="polite">
-          <div class="list-skeleton compact" aria-label="正在加载公告">
-            <span></span><span></span><span></span>
+        <section class="notice-list-section" aria-labelledby="notice-list-title">
+          <header class="notice-section-heading">
+            <strong id="notice-list-title">公告列表</strong>
+            <span>平台同步顺序</span>
+          </header>
+          <div id="notice-list" class="notice-list" aria-live="polite">
+            <div class="list-skeleton compact" aria-label="正在加载公告">
+              <span></span><span></span><span></span>
+            </div>
           </div>
-        </div>
-        <article id="notice-detail" class="notice-detail" aria-live="polite">
-          <div class="empty-state compact">
-            <i data-lucide="megaphone" aria-hidden="true"></i>
-            <p>暂无公告详情</p>
-          </div>
-        </article>
+        </section>
+        <section class="notice-reader-section" aria-labelledby="notice-reader-title">
+          <header class="notice-section-heading">
+            <strong id="notice-reader-title">公告正文</strong>
+            <span id="notice-reader-source">--</span>
+          </header>
+          <article id="notice-detail" class="notice-detail" aria-live="polite">
+            <div class="empty-state compact">
+              <i data-lucide="megaphone" aria-hidden="true"></i>
+              <p>暂无公告详情</p>
+            </div>
+          </article>
+        </section>
       </section>
     </aside>
   </main>

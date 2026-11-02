@@ -97,11 +97,14 @@ import {
     showCompetitionView: $("show-competition-view"),
     showExerciseView: $("show-exercise-view"),
     overviewOpenExercises: $("overview-open-exercises"),
-    overviewOpenWorkbench: $("overview-open-workbench"),
     overviewTeamName: $("overview-team-name"),
     overviewTeamSummary: $("overview-team-summary"),
     overviewScore: $("overview-score-value"),
     overviewRank: $("overview-rank-value"),
+    overviewRankDelta: $("overview-rank-delta"),
+    overviewSolved: $("overview-solved-value"),
+    overviewRankHistory: $("overview-rank-history"),
+    overviewRankHistoryCount: $("overview-rank-history-count"),
     overviewLastUpdated: $("overview-last-updated"),
     overviewMatchNote: $("overview-match-note"),
     overviewMatchRule: $("overview-match-rule"),
@@ -110,9 +113,13 @@ import {
     realtimeStatus: $("realtime-status"),
     startupFaults: $("startup-faults"),
     retryInitialization: $("retry-initialization"),
+    teamSummaryBlock: $("team-summary-block"),
+    teamAvatar: $("team-avatar"),
     teamSummary: $("team-summary"),
+    teamSummaryMeta: $("team-summary-meta"),
     score: $("score-value"),
     rank: $("rank-value"),
+    rankDelta: $("rank-delta"),
     overviewUpdated: $("overview-updated-at"),
     exerciseCount: $("exercise-count"),
     exerciseList: $("exercise-list"),
@@ -140,6 +147,7 @@ import {
     noticeCount: $("notice-count"),
     noticeList: $("notice-list"),
     noticeDetail: $("notice-detail"),
+    noticeReaderSource: $("notice-reader-source"),
     scoreRefresh: $("score-auto-refresh"),
     noticeRefresh: $("notice-auto-refresh"),
     aiPromptDialog: $("ai-prompt-dialog"),
@@ -695,9 +703,14 @@ import {
       memberCount: status && status.memberCount,
       organization: status && status.organization,
     };
-    els.teamSummary.hidden = !authenticated || !values.teamName;
+    const showTeam = authenticated && !contextUnavailable && Boolean(values.teamName);
+    els.teamSummaryBlock.hidden = !showTeam;
     els.teamSummary.textContent = values.teamName || "";
     els.teamSummary.title = values.teamName || "";
+    els.teamAvatar.textContent = String(values.teamName || "队").trim().slice(0, 1).toUpperCase();
+    els.teamSummaryMeta.textContent = [values.organization, values.memberCount ? `${formatNumber(values.memberCount)} 名成员` : ""]
+      .filter(Boolean)
+      .join(" · ");
     if (els.overviewTeamName) els.overviewTeamName.textContent = values.teamName || "尚未获取队伍信息";
     if (els.overviewTeamSummary) {
       const summary = [values.organization, values.userName ? `当前成员 ${values.userName}` : "", values.memberCount ? `${values.memberCount} 名成员` : ""]
@@ -1970,6 +1983,10 @@ import {
   }
 
   function updateOverview(data) {
+    const previousRank = Number(state.overview?.stageRank);
+    const nextRank = Number(data.stageRank);
+    const hasRankDelta = Number.isFinite(previousRank) && previousRank > 0 && Number.isFinite(nextRank) && nextRank > 0;
+    const rankDelta = hasRankDelta ? previousRank - nextRank : null;
     state.overview = data;
     els.score.textContent = formatNumber(data.stagePoint);
     els.rank.textContent = formatNumber(data.stageRank);
@@ -1977,7 +1994,91 @@ import {
     els.overviewUpdated.textContent = updatedText;
     if (els.overviewScore) els.overviewScore.textContent = formatNumber(data.stagePoint);
     if (els.overviewRank) els.overviewRank.textContent = formatNumber(data.stageRank);
+    if (els.overviewSolved) els.overviewSolved.textContent = formatNumber(data.solvedCount);
     if (els.overviewLastUpdated) els.overviewLastUpdated.textContent = updatedText.replace(/^更新于 /, "");
+    if (data.teamName) {
+      els.overviewTeamName.textContent = data.teamName;
+      els.teamSummary.textContent = data.teamName;
+      els.teamSummaryBlock.hidden = false;
+      els.teamAvatar.textContent = String(data.teamName).trim().slice(0, 1).toUpperCase();
+    }
+    if (data.organization) {
+      els.overviewTeamSummary.textContent = data.organization;
+      els.teamSummaryMeta.textContent = data.organization;
+    }
+    [els.rankDelta, els.overviewRankDelta].forEach((node) => {
+      if (!node) return;
+      node.hidden = rankDelta === null;
+      node.className = "rank-delta";
+      if (rankDelta === null) return;
+      if (rankDelta > 0) {
+        node.textContent = `↑ ${formatNumber(rankDelta)}`;
+        node.classList.add("is-up");
+        node.title = `较上次刷新上升 ${formatNumber(rankDelta)} 名`;
+      } else if (rankDelta < 0) {
+        node.textContent = `↓ ${formatNumber(Math.abs(rankDelta))}`;
+        node.classList.add("is-down");
+        node.title = `较上次刷新下降 ${formatNumber(Math.abs(rankDelta))} 名`;
+      } else {
+        node.textContent = "持平";
+        node.classList.add("is-flat");
+        node.title = "排名与上次刷新相同";
+      }
+    });
+    if (nextRank > 0) {
+      state.overviewRankHistory.unshift({
+        at: Date.now(),
+        rank: nextRank,
+        score: Number(data.stagePoint || 0),
+        delta: rankDelta,
+      });
+      state.overviewRankHistory = state.overviewRankHistory.slice(0, 8);
+      renderOverviewRankHistory();
+    }
+  }
+
+  function renderOverviewRankHistory() {
+    if (!els.overviewRankHistory) return;
+    const history = state.overviewRankHistory;
+    if (els.overviewRankHistoryCount) els.overviewRankHistoryCount.textContent = formatNumber(history.length);
+    if (!history.length) {
+      els.overviewRankHistory.replaceChildren(createElement("div", "empty-state compact", "等待第一次排名刷新"));
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    history.forEach((item, index) => {
+      const row = createElement("div", `overview-rank-event${index === 0 ? " is-latest" : ""}`);
+      const marker = createElement("span", "overview-rank-event-marker");
+      marker.append(icon(index === 0 ? "activity" : "history"));
+      const copy = createElement("span", "overview-rank-event-copy");
+      copy.append(
+        createElement("strong", "", `排名 #${formatNumber(item.rank)}`),
+        createElement("small", "", new Intl.DateTimeFormat("zh-CN", {
+          hour: "2-digit",
+          minute: "2-digit",
+          second: "2-digit",
+        }).format(new Date(item.at))),
+      );
+      const delta = createElement("span", "overview-rank-event-delta");
+      delta.className = "overview-rank-event-delta";
+      if (item.delta === null) {
+        delta.textContent = "基准";
+        delta.classList.add("is-flat");
+      } else if (item.delta > 0) {
+        delta.textContent = `↑ ${formatNumber(item.delta)}`;
+        delta.classList.add("is-up");
+      } else if (item.delta < 0) {
+        delta.textContent = `↓ ${formatNumber(Math.abs(item.delta))}`;
+        delta.classList.add("is-down");
+      } else {
+        delta.textContent = "持平";
+        delta.classList.add("is-flat");
+      }
+      row.append(marker, copy, delta);
+      fragment.append(row);
+    });
+    els.overviewRankHistory.replaceChildren(fragment);
+    refreshIcons();
   }
 
   async function loadOverview(options = {}) {
@@ -3425,19 +3526,49 @@ import {
   async function loadMatchInfo(options = {}) {
     try {
       state.matchInfo = await request(apiPath("/api/match-info", options.refresh));
-      if (els.overviewMatchNote) els.overviewMatchNote.textContent = state.matchInfo.note || "暂无比赛说明";
-      if (els.overviewMatchRule) els.overviewMatchRule.textContent = state.matchInfo.rule || "暂无比赛规则";
+      renderOverviewFacts(els.overviewMatchNote, state.matchInfo.note, "暂无比赛说明");
+      renderOverviewFacts(els.overviewMatchRule, state.matchInfo.rule, "暂无比赛规则");
       return state.matchInfo;
     } catch (error) {
-      if (els.overviewMatchNote) els.overviewMatchNote.textContent = `比赛说明加载失败：${error.message}`;
-      if (els.overviewMatchRule) els.overviewMatchRule.textContent = "请确认比赛已绑定且登录态有效";
+      renderOverviewFacts(els.overviewMatchNote, `比赛说明加载失败：${error.message}`, "比赛说明加载失败");
+      renderOverviewFacts(els.overviewMatchRule, "请确认比赛已绑定且登录态有效", "比赛规则加载失败");
       if (!options.silent) showToast(`比赛说明加载失败：${error.message}`, "error");
       return null;
     }
   }
 
+  function renderOverviewFacts(container, text, emptyText) {
+    if (!container) return;
+    const lines = String(text || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) {
+      container.replaceChildren(createElement("p", "overview-fact-empty", emptyText));
+      return;
+    }
+    const fragment = document.createDocumentFragment();
+    lines.forEach((line) => {
+      const match = line.match(/^([^：:]{1,12})[：:]\s*(.+)$/);
+      if (match) {
+        const row = createElement("div", "overview-fact-row");
+        row.append(createElement("span", "", match[1]), createElement("strong", "", match[2]));
+        fragment.append(row);
+      } else {
+        fragment.append(createElement("strong", "overview-fact-title", line));
+      }
+    });
+    container.replaceChildren(fragment);
+  }
+
   function updateNoticeTime(notice) {
     return notice.createdTime ? formatDate(notice.createdTime) : notice.createdAt || "时间未知";
+  }
+
+  function noticesShareRecordedTime() {
+    const values = new Set(
+      state.notices
+        .map((notice) => Number(notice.createdTime || 0))
+        .filter((value) => value > 0),
+    );
+    return values.size === 1;
   }
 
   async function loadNotices(options = {}) {
@@ -3462,8 +3593,10 @@ import {
     els.noticeCount.textContent = formatNumber(state.notices.length);
     if (!state.notices.length) {
       els.noticeList.replaceChildren(createElement("div", "empty-state compact", "暂无公告"));
+      renderNoticeDetail();
       return;
     }
+    const sharedRecordedTime = noticesShareRecordedTime();
     const fragment = document.createDocumentFragment();
     state.notices.forEach((notice) => {
       const button = createElement("button", `notice-item${state.selectedNoticeId === notice.id ? " is-selected" : ""}`);
@@ -3471,7 +3604,10 @@ import {
       button.setAttribute("aria-current", state.selectedNoticeId === notice.id ? "true" : "false");
       button.append(icon(notice.isFile ? "file-text" : "megaphone"));
       const main = createElement("span", "notice-item-main");
-      main.append(createElement("span", "notice-item-title", notice.title || "未命名公告"), createElement("span", "notice-item-meta", `${notice.userName || "系统公告"} · ${updateNoticeTime(notice)}`));
+      const metaText = sharedRecordedTime
+        ? notice.userName || "系统公告"
+        : `${notice.userName || "系统公告"} · ${updateNoticeTime(notice)}`;
+      main.append(createElement("span", "notice-item-title", notice.title || "未命名公告"), createElement("span", "notice-item-meta", metaText));
       button.append(main);
       button.addEventListener("click", () => selectNotice(notice.id));
       fragment.append(button);
@@ -3503,10 +3639,12 @@ import {
     const detail = state.noticeDetail;
     if (!detail) {
       els.noticeDetail.replaceChildren(createElement("div", "empty-state compact", "暂无公告详情"));
+      if (els.noticeReaderSource) els.noticeReaderSource.textContent = "--";
       return;
     }
     const header = createElement("h3", "", detail.title || "未命名公告");
-    const meta = createElement("p", "notice-meta", formatDate(detail.createdTime));
+    if (els.noticeReaderSource) els.noticeReaderSource.textContent = "平台记录时间";
+    const meta = createElement("p", "notice-meta", detail.createdTime ? `平台记录时间：${formatDate(detail.createdTime)}` : "平台未提供发布时间");
     const content = renderRichText(detail.content || "暂无正文", "notice-content rich-text");
     const fragment = document.createDocumentFragment();
     fragment.append(header, meta, content);
@@ -4873,7 +5011,6 @@ import {
       els.showCompetitionView.addEventListener("click", showCompetitionView);
       els.showExerciseView.addEventListener("click", showExerciseView);
       els.overviewOpenExercises.addEventListener("click", showExerciseView);
-      els.overviewOpenWorkbench.addEventListener("click", showExerciseView);
       document.querySelectorAll("dialog").forEach((dialog) => {
         dialog.addEventListener("close", () => {
           delete dialog.dataset.dialogLayer;

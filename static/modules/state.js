@@ -4,6 +4,7 @@ export function createAppState({ realtimeStopped } = {}) {
     groups: [],
     notices: [],
     overview: null,
+    overviewRankHistory: [],
     matchInfo: null,
     detail: null,
     noticeDetail: null,

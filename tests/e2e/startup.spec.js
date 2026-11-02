@@ -38,6 +38,46 @@ test("首次打开自动加载题目、公告并支持搜索与组合筛选", as
   expect(pageErrors).toEqual([]);
 });
 
+test("比赛概览完整展示队伍数据、排名变化和公告区隔", async ({ page }) => {
+  let rank = 8;
+  await openWorkbench(page, {
+    handler: async ({ route, url }) => {
+      if (url.pathname !== "/api/overview") return false;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(success({
+          stagePoint: 1934.96,
+          stageRank: rank,
+          solvedCount: 19,
+          teamName: "GuanXing",
+          organization: "青岛腾权网络科技有限公司",
+        })),
+      });
+      return true;
+    },
+  });
+
+  await page.locator("#show-competition-view").click();
+  await expect(page.locator("#overview-score-value")).toHaveText("1,934.96");
+  await expect(page.locator("#overview-rank-value")).toHaveText("8");
+  await expect(page.locator("#overview-solved-value")).toHaveText("19");
+  await expect(page.locator("#overview-team-name")).toHaveText("GuanXing");
+  await expect(page.locator("#team-summary-meta")).toContainText("青岛腾权网络科技有限公司");
+  await expect(page.locator("#overview-match-note")).toContainText("Regression note");
+  await expect(page.locator("#notice-list-title")).toHaveText("公告列表");
+  await expect(page.locator("#notice-reader-title")).toHaveText("公告正文");
+  expect(await page.locator(".notice-list-section").evaluate((node) => getComputedStyle(node).borderBottomWidth)).toBe("6px");
+
+  rank = 5;
+  await page.locator("#refresh-overview").click();
+  await expect(page.locator("#rank-delta")).toHaveText("↑ 3");
+  await expect(page.locator("#overview-rank-delta")).toHaveText("↑ 3");
+  await expect(page.locator("#overview-rank-value")).toHaveText("5");
+  await expect(page.locator("#overview-rank-history-count")).toHaveText("2");
+  await expect(page.locator(".overview-rank-event").first()).toContainText("↑ 3");
+});
+
 test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkbench(page);
@@ -514,7 +554,7 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
   await expect(page.locator("#competition-view")).toBeVisible();
   await expect(page.locator("#exercise-view")).toBeHidden();
   await expect(page.locator("#overview-team-name")).not.toHaveText("尚未获取队伍信息");
-  await page.locator("#overview-open-workbench").click();
+  await page.locator("#overview-open-exercises").click();
   await expect(page.locator("#exercise-view")).toBeVisible();
   await expect(page.locator("#competition-view")).toBeHidden();
 

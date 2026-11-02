@@ -71,7 +71,7 @@ export async function installApiMock(page, overrides = {}) {
         codexAutoResumeInterrupted: false, modelApiKeyConfigured: false, codexApiKeyConfigured: true,
       }; break;
       case "/api/platform/auth": data = { authenticated: true, teamName: "QA Team", userName: "Tester", score: 100, rank: 1, memberCount: 2, organization: "Lab" }; break;
-      case "/api/overview": data = { score: 100, rank: 1, updatedAt: "2026-09-15T02:00:00Z", teamName: "QA Team" }; break;
+      case "/api/overview": data = { stagePoint: 100, stageRank: 1, solvedCount: 2, teamName: "QA Team", organization: "QA Lab" }; break;
       case "/api/exercises": data = exerciseGroups; break;
       case "/api/exercises/1": data = { ...exercises[0], score: 500, difficulty: "中等", category: "Pwn", description: "Cold Forge detail", attachment: { files: [{ name: "cold.zip", ext: ".zip", size: 1024 }] }, endpointType: "docker", isNeedInit: true, isNeedCheck: false, endpoints: [], renewRemaining: 0, renewLimit: 3 }; break;
       case "/api/exercises/2": data = { ...exercises[1], score: 100, category: "Crypto", description: "Warmup detail", attachment: { files: [] } }; break;
