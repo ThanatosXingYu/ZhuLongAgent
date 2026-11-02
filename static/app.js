@@ -14,21 +14,21 @@ import {
   isCodexTerminal,
   mergeCodexEventLists,
   normalizeCodexEvents,
-} from "./modules/codex-presenters.js?v=20261103-layout11";
-import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout11";
-import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout11";
-import { createApiClient } from "./modules/api.js?v=20261103-layout11";
-import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout11";
-import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261103-layout11";
-import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261103-layout11";
-import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout11";
-import { createAppState } from "./modules/state.js?v=20261103-layout11";
-import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout11";
+} from "./modules/codex-presenters.js?v=20261103-layout12";
+import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout12";
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout12";
+import { createApiClient } from "./modules/api.js?v=20261103-layout12";
+import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout12";
+import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261103-layout12";
+import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261103-layout12";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout12";
+import { createAppState } from "./modules/state.js?v=20261103-layout12";
+import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout12";
 import {
   SIDEBAR_VIEW_TITLES,
   pathForView,
   viewForPath,
-} from "./modules/workspace-routes.js?v=20261103-layout11";
+} from "./modules/workspace-routes.js?v=20261103-layout12";
 
 "use strict";
 
