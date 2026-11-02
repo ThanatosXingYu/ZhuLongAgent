@@ -1625,6 +1625,15 @@ body.sidebar-collapsed .sidebar-footer .realtime-status {
   pointer-events: none;
   transition-delay: 0ms;
 }
+.sidebar-group-label {
+  transition: opacity 80ms ease 105ms, visibility 0s linear 105ms, height var(--sidebar-motion), margin var(--sidebar-motion), line-height var(--sidebar-motion);
+}
+body.sidebar-collapsed .sidebar-group-label {
+  height: 0;
+  margin-block: 0;
+  line-height: 0;
+  overflow: hidden;
+}
 body.sidebar-collapsed .sidebar-collapse {
   top: 62px;
   right: 14px;

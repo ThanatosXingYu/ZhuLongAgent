@@ -66,6 +66,22 @@ test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) 
   expect(collapsedState.brandWidth).toBe(34);
   expect(collapsedState.footerDisplay).toBe("none");
   expect(collapsedState.labelOpacity).toBe("0");
+  const iconAlignment = await page.evaluate(() => {
+    const links = [...document.querySelectorAll(".sidebar-link")];
+    const iconCenters = links.map((link) => {
+      const icon = link.querySelector("svg").getBoundingClientRect();
+      return Math.round(icon.x + icon.width / 2);
+    });
+    const groupGaps = [...document.querySelectorAll(".sidebar-group")].map((group) => {
+      const tops = [...group.querySelectorAll(".sidebar-link")].map((link) =>
+        Math.round(link.getBoundingClientRect().top),
+      );
+      return new Set(tops.slice(1).map((top, index) => top - tops[index])).size;
+    });
+    return { iconCenters: new Set(iconCenters).size, groupGaps };
+  });
+  expect(iconAlignment.iconCenters).toBe(1);
+  expect(iconAlignment.groupGaps.every((size) => size <= 1)).toBeTruthy();
 
   await collapse.click();
   await page.waitForTimeout(60);
