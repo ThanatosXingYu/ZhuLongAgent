@@ -38,6 +38,42 @@ test("首次打开自动加载题目、公告并支持搜索与组合筛选", as
   expect(pageErrors).toEqual([]);
 });
 
+test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+
+  const sidebar = page.locator("#app-sidebar");
+  const collapse = page.locator("#collapse-sidebar");
+  expect(await sidebar.evaluate((node) => Math.round(node.getBoundingClientRect().width))).toBe(200);
+
+  await collapse.click();
+  await expect(page.locator("body")).toHaveClass(/sidebar-collapsed/);
+  await expect.poll(() => sidebar.evaluate((node) => Math.round(node.getBoundingClientRect().width))).toBe(56);
+  const collapsedState = await page.evaluate(() => {
+    const sidebarNode = document.querySelector("#app-sidebar");
+    const toggle = document.querySelector("#collapse-sidebar");
+    const brand = document.querySelector(".sidebar-brand-mark");
+    const footer = document.querySelector(".sidebar-footer");
+    return {
+      toggleRight: Math.round(toggle.getBoundingClientRect().right),
+      sidebarRight: Math.round(sidebarNode.getBoundingClientRect().right),
+      brandWidth: Math.round(brand.getBoundingClientRect().width),
+      footerDisplay: getComputedStyle(footer).display,
+      labelOpacity: getComputedStyle(document.querySelector(".sidebar-link > span")).opacity,
+    };
+  });
+  expect(collapsedState.toggleRight).toBeLessThanOrEqual(collapsedState.sidebarRight);
+  expect(collapsedState.brandWidth).toBe(34);
+  expect(collapsedState.footerDisplay).toBe("none");
+  expect(collapsedState.labelOpacity).toBe("0");
+
+  await collapse.click();
+  await page.waitForTimeout(60);
+  expect(Number(await page.locator(".sidebar-link > span").first().evaluate((node) => getComputedStyle(node).opacity))).toBe(0);
+  await expect.poll(() => sidebar.evaluate((node) => Math.round(node.getBoundingClientRect().width))).toBe(200);
+  await expect.poll(() => page.locator(".sidebar-link > span").first().evaluate((node) => getComputedStyle(node).opacity)).toBe("1");
+});
+
 test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", async ({ page }) => {
   const main = task();
   const side = task({
@@ -439,7 +475,7 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
       overflow: document.documentElement.scrollWidth - window.innerWidth,
     };
   });
-  expect(desktop.sidebarRight).toBeGreaterThan(200);
+  expect(desktop.sidebarRight).toBeGreaterThanOrEqual(199);
   expect(desktop.topbarLeft).toBeGreaterThanOrEqual(desktop.sidebarRight - 1);
   expect(desktop.topbarHeight).toBeLessThan(90);
   expect(desktop.workspaceLeft).toBeGreaterThan(desktop.sidebarRight);
@@ -506,6 +542,7 @@ test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
   let started = false;
   let detailLoads = 0;
   let renewCalls = 0;
+  let expiresInMinutes = 55;
   const { requests } = await openWorkbench(page, {
     handler: async ({ route, request, url }) => {
       if (url.pathname === "/api/exercises/1/environment/start" && request.method() === "POST") {
@@ -549,7 +586,7 @@ test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
               portMappings: [],
               proxyIps: [],
               isProxy: false,
-              expireTime: Date.now() + 55 * 60 * 1000,
+              expireTime: Date.now() + expiresInMinutes * 60 * 1000,
             }] : [],
             renewRemaining: ready ? Math.max(0, 2 - renewCalls) : 0,
             renewLimit: 3,
@@ -568,6 +605,11 @@ test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
 
   await page.locator(".exercise-item", { hasText: "Warmup Crypto" }).click();
   await expect(page.locator(".active-environment-item"), "容器状态不应因切换题目而丢失").toContainText("可续期 2/3 次", { timeout: 5000 });
+  await expect(page.locator(".active-environment-renew")).toBeDisabled();
+  await expect(page.locator(".active-environment-renew")).toHaveAttribute("title", /后开放续期/);
+  expiresInMinutes = 9;
+  await page.locator("#refresh-active-environments").click();
+  await expect(page.locator(".active-environment-renew")).toBeEnabled();
   await page.locator(".active-environment-renew").click();
   await expect.poll(() => renewCalls).toBe(1);
   expect(requests.some((item) => item.path === "/api/exercises/1/environment/renew")).toBeTruthy();
@@ -625,6 +667,7 @@ test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page 
     },
   });
   await page.locator("#open-codex-tasks").click();
+  await expect(page.locator("#codex-session-archive")).toHaveValue("all");
   await expect(page.locator(".codex-tree-item")).toHaveCount(2);
 
   await page.locator("#codex-session-search").fill("Broken");
@@ -634,10 +677,17 @@ test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page 
   await page.locator("#codex-session-search").fill("");
   await page.locator("#codex-session-status").selectOption("failed");
   await expect(page.locator(".codex-tree-item")).toHaveCount(1);
+  await emitSse(page, {
+    type: "codex.task",
+    resourceId: "task-new-completed",
+    data: task({ id: "task-new-completed", title: "不符合筛选", status: "completed" }),
+  });
+  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
   await page.locator(".codex-task-select").check();
   await page.locator("#codex-archive-selected").click();
   await expect(page.locator(".toast.success")).toContainText("已归档");
-  await expect(page.locator(".codex-tree-item")).toHaveCount(0);
+  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
+  await expect(page.locator(".codex-tree-item")).toContainText("已归档");
 
   await page.locator("#codex-session-status").selectOption("");
   await page.locator("#codex-session-archive").selectOption("archived");

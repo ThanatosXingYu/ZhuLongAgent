@@ -339,7 +339,7 @@ Header：`X-GCSIS-Action: platform-auth`
 }
 ```
 
-`isNeedInit=true` 表示需要启动环境；`isNeedCheck=true` 表示环境仍在准备中，应稍后刷新详情。环境就绪后，`endpoints` 包含地址、端口、账号和过期时间；`renewRemaining` 表示平台允许的剩余续期次数，`renewLimit` 当前为 3。
+`isNeedInit=true` 表示需要启动环境；`isNeedCheck=true` 表示环境仍在准备中，应稍后刷新详情。环境就绪后，`endpoints` 包含地址、端口、账号和过期时间；`renewRemaining` 表示平台允许的剩余续期次数，`renewLimit` 当前为 3。容器剩余有效期进入 10 分钟后才允许续期。
 
 ### 提交 Flag
 
@@ -376,7 +376,7 @@ POST /api/exercises/{id}/environment/stop
 POST /api/exercises/{id}/environment/renew
 ```
 
-启动和续期成功均返回 `{"accepted": true}`。每次续期增加 1 小时，最多续期 3 次；续期后应重新读取题目详情以更新过期时间和 `renewRemaining`。完成题目后应调用停止接口回收环境。
+启动和续期成功均返回 `{"accepted": true}`。每次续期增加 1 小时，最多续期 3 次；只有剩余有效期不超过 10 分钟时平台才接受续期，过早请求会返回 `ENVIRONMENT_RENEW_TOO_EARLY`。续期后应重新读取题目详情以更新过期时间和 `renewRemaining`。完成题目后应调用停止接口回收环境。
 
 ### 公告
 

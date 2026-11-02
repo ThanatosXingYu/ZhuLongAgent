@@ -50,6 +50,7 @@ MATCH_STATE_CODES = frozenset({"201", "202", "203"})
 MATCH_TIMEZONE = ZoneInfo("Asia/Shanghai")
 NOTICE_TYPE = 1
 MAX_ENVIRONMENT_RENEWALS = 3
+ENVIRONMENT_RENEW_WINDOW_SECONDS = 10 * 60
 
 
 class AgentClient:
@@ -76,6 +77,7 @@ class AgentClient:
         self._notice_by_id: dict[int, Mapping[str, Any]] = {}
         self._identities = StableIDStore(identity_path)
         self._pending_environments: dict[int, str] = {}
+        self._renewing_environments: set[int] = set()
         self._opened_platform_questions: set[str] = set()
 
     def bind_match(
@@ -329,18 +331,32 @@ class AgentClient:
             self._pending_environments.pop(exercise_id, None)
 
     def renew_environment(self, exercise_id: int) -> None:
-        platform_id = self._platform_question_id(exercise_id)
-        data = _mapping(
-            self._api.post("/match/docker/info", {"question_id": platform_id})
-        )
-        environment_id = str(data.get("uuid", "") or "").strip()
-        if not environment_id:
-            raise APIError("ENVIRONMENT_NOT_FOUND", "当前题目没有运行中的环境")
-        if _as_int(data.get("delay_count")) <= 0:
-            raise APIError("ENVIRONMENT_RENEW_LIMIT", "容器续期次数已用完")
-        self._api.post("/match/docker/delay", {"uuid": environment_id})
         with self._lock:
-            self._pending_environments.pop(exercise_id, None)
+            if exercise_id in self._renewing_environments:
+                raise APIError("ENVIRONMENT_RENEW_BUSY", "容器续期请求正在处理中")
+            self._renewing_environments.add(exercise_id)
+        try:
+            platform_id = self._platform_question_id(exercise_id)
+            data = _mapping(
+                self._api.post("/match/docker/info", {"question_id": platform_id})
+            )
+            environment_id = str(data.get("uuid", "") or "").strip()
+            if not environment_id:
+                raise APIError("ENVIRONMENT_NOT_FOUND", "当前题目没有运行中的环境")
+            if _as_int(data.get("delay_count")) <= 0:
+                raise APIError("ENVIRONMENT_RENEW_LIMIT", "容器续期次数已用完")
+            countdown = _as_int(data.get("countdown"))
+            if countdown > ENVIRONMENT_RENEW_WINDOW_SECONDS:
+                raise APIError(
+                    "ENVIRONMENT_RENEW_TOO_EARLY",
+                    "容器剩余时间超过 10 分钟，暂不可续期",
+                )
+            self._api.post("/match/docker/delay", {"uuid": environment_id})
+            with self._lock:
+                self._pending_environments.pop(exercise_id, None)
+        finally:
+            with self._lock:
+                self._renewing_environments.discard(exercise_id)
 
     def notices(self, _refresh: bool = False) -> list[Notice]:
         try:

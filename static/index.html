@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261103-layout9">
+  <link rel="stylesheet" href="/styles.css?v=20261103-layout10">
 </head>
 <body>
   <aside id="app-sidebar" class="app-sidebar" aria-label="工作台导航">
     <header class="sidebar-brand">
-      <span class="sidebar-brand-mark" aria-hidden="true"><span>iC</span></span>
+      <span class="sidebar-brand-mark" aria-hidden="true"><i data-lucide="square-terminal"></i></span>
       <span class="sidebar-brand-copy">
         <strong>CTF Console</strong>
         <small>Competition Workspace</small>
@@ -71,7 +71,6 @@
         </div>
         <span id="realtime-status" class="realtime-status is-connecting" role="status" title="实时事件连接状态">实时连接中</span>
       </div>
-      <p>i春秋比赛工作台</p>
     </footer>
   </aside>
   <button id="sidebar-scrim" class="sidebar-scrim" type="button" aria-label="关闭导航" hidden></button>
@@ -881,9 +880,9 @@
             <option value="canceled">已停止</option>
           </select>
           <select id="codex-session-archive" aria-label="筛选归档会话">
+            <option value="all" selected>全部会话</option>
             <option value="active">当前会话</option>
             <option value="archived">已归档</option>
-            <option value="all">全部会话</option>
           </select>
         </div>
         <div class="codex-batch-toolbar">
@@ -1025,7 +1024,7 @@
 
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
-  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js" defer></script>
-  <script type="module" src="/app.js?v=20261103-layout9"></script>
+  <script src="/vendor/lucide.min.js?v=0.468.0" defer></script>
+  <script type="module" src="/app.js?v=20261103-layout10"></script>
 </body>
 </html>

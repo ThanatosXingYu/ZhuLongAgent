@@ -14,19 +14,19 @@ import {
   isCodexTerminal,
   mergeCodexEventLists,
   normalizeCodexEvents,
-} from "./modules/codex-presenters.js?v=20261103-layout9";
-import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout9";
-import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout9";
-import { createApiClient } from "./modules/api.js?v=20261103-layout9";
-import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout9";
-import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout9";
-import { createAppState } from "./modules/state.js?v=20261103-layout9";
-import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout9";
+} from "./modules/codex-presenters.js?v=20261103-layout10";
+import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout10";
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout10";
+import { createApiClient } from "./modules/api.js?v=20261103-layout10";
+import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout10";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout10";
+import { createAppState } from "./modules/state.js?v=20261103-layout10";
+import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout10";
 import {
   SIDEBAR_VIEW_TITLES,
   pathForView,
   viewForPath,
-} from "./modules/workspace-routes.js?v=20261103-layout9";
+} from "./modules/workspace-routes.js?v=20261103-layout10";
 
 "use strict";
 
@@ -40,6 +40,8 @@ import {
   // Legacy cadence names remain for compatibility; SSE/fallback paths use FALLBACK_POLL_MS.
   const ATTACHMENT_TASK_POLL_MS = 500;
   const ATTACHMENT_SIZE_POLL_MS = 1000;
+  const ENVIRONMENT_COUNTDOWN_REFRESH_MS = 15000;
+  const ENVIRONMENT_RENEW_WINDOW_MS = 10 * 60 * 1000;
   const ACTIVE_ENVIRONMENT_STORAGE_KEY = "gcsis.active-environment-ids";
   const COLLAPSED_GROUP_STORAGE_KEY = "gcsis.collapsed-exercise-groups";
   const COLLAPSED_ATTACHMENT_CATEGORY_STORAGE_KEY = "gcsis.collapsed-attachment-categories";
@@ -2266,9 +2268,7 @@ import {
 
   function activeEnvironmentExpiry(detail) {
     if (detail?.isNeedCheck && !(detail.endpoints || []).length) {
-      return Number(detail.renewRemaining) > 0
-        ? `正在准备环境 · 可续期 ${Number(detail.renewRemaining)}/${Number(detail.renewLimit || 3)} 次`
-        : "正在准备环境";
+      return "正在准备环境";
     }
     const expiries = (detail.endpoints || [])
       .map((endpoint) => Number(endpoint.expireTime))
@@ -2280,6 +2280,29 @@ import {
     const expireAt = Math.min(...expiries);
     const remainingSeconds = Math.max(0, Math.round((expireAt - Date.now()) / 1000));
     return `${remainingSeconds > 0 ? `剩余 ${formatDuration(remainingSeconds)}` : "即将到期"} · ${renewText}`;
+  }
+
+  function environmentRenewalState(detail) {
+    const renewRemaining = Math.max(0, Number(detail?.renewRemaining || 0));
+    const renewLimit = Math.max(1, Number(detail?.renewLimit || 3));
+    const expiries = (detail?.endpoints || [])
+      .map((endpoint) => Number(endpoint.expireTime))
+      .filter((value) => Number.isFinite(value) && value > 0);
+    if (renewRemaining <= 0) {
+      return { canRenew: false, renewRemaining, renewLimit, waitSeconds: 0, reason: "续期次数已用完" };
+    }
+    if (!expiries.length) {
+      return { canRenew: false, renewRemaining, renewLimit, waitSeconds: 0, reason: "正在等待平台返回到期时间" };
+    }
+    const waitMs = Math.min(...expiries) - Date.now() - ENVIRONMENT_RENEW_WINDOW_MS;
+    const waitSeconds = Math.max(0, Math.ceil(waitMs / 1000));
+    return {
+      canRenew: waitSeconds === 0,
+      renewRemaining,
+      renewLimit,
+      waitSeconds,
+      reason: waitSeconds > 0 ? `剩余 ${formatDuration(waitSeconds)} 后开放续期` : "当前可续期 1 小时",
+    };
   }
 
   function makeActiveEnvironmentItem(detail) {
@@ -2296,12 +2319,11 @@ import {
 
     const actions = createElement("div", "active-environment-actions");
     const renew = createElement("button", "icon-button active-environment-renew");
+    const renewal = environmentRenewalState(detail);
     renew.type = "button";
-    renew.title = Number(detail.renewRemaining) > 0
-      ? `续期 ${name}，剩余 ${Number(detail.renewRemaining)} 次`
-      : `${name} 的续期次数已用完`;
+    renew.title = `续期 ${name}：${renewal.reason}`;
     renew.setAttribute("aria-label", renew.title);
-    renew.disabled = busy || !hasEndpoint || Number(detail.renewRemaining) <= 0;
+    renew.disabled = busy || !hasEndpoint || !renewal.canRenew;
     if (state.environmentRenewBusy.has(id)) renew.setAttribute("aria-busy", "true");
     renew.append(icon("clock-3"));
     renew.addEventListener("click", () => renewEnvironment(id, renew));
@@ -2367,6 +2389,17 @@ import {
       persistTrackedEnvironmentIds();
     }
     renderActiveEnvironments();
+  }
+
+  function startEnvironmentCountdown() {
+    if (state.environmentCountdownTimer) return;
+    state.environmentCountdownTimer = window.setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      if (state.activeEnvironments.size) renderActiveEnvironments();
+      if (state.detail && isContainerExercise(state.detail) && (state.detail.endpoints || []).length) {
+        renderEnvironmentAction();
+      }
+    }, ENVIRONMENT_COUNTDOWN_REFRESH_MS);
   }
 
   function reconcileTrackedExerciseIds(allIds) {
@@ -3101,18 +3134,17 @@ import {
     const active = (detail.endpoints || []).length > 0;
     const actions = createElement("div", "detail-environment-actions");
     if (active) {
-      const renewRemaining = Number(detail.renewRemaining || 0);
+      const renewal = environmentRenewalState(detail);
+      const renewRemaining = renewal.renewRemaining;
       const renew = createElement(
         "button",
         `button button-ghost${renewRemaining > 0 ? "" : " is-muted"}`,
         renewRemaining > 0 ? `续期 (${renewRemaining})` : "续期已用完",
       );
       renew.type = "button";
-      renew.disabled = renewRemaining <= 0 || state.environmentRenewBusy.has(detail.id);
+      renew.disabled = !renewal.canRenew || state.environmentRenewBusy.has(detail.id);
       if (state.environmentRenewBusy.has(detail.id)) renew.setAttribute("aria-busy", "true");
-      renew.title = renewRemaining > 0
-        ? `续期 1 小时，当前剩余 ${renewRemaining} 次`
-        : "容器续期次数已用完";
+      renew.title = renewal.reason;
       renew.prepend(icon("clock-3"));
       renew.addEventListener("click", () => renewEnvironment(detail.id, renew));
       actions.append(renew);
@@ -3165,9 +3197,9 @@ import {
   async function renewEnvironment(id, trigger = null) {
     const detail = state.activeEnvironments.get(id) || (state.selectedExerciseId === id ? state.detail : null);
     if (!detail || state.environmentRenewBusy.has(id)) return;
-    const remaining = Number(detail.renewRemaining || 0);
-    if (remaining <= 0) {
-      showToast("容器续期次数已用完", "warning");
+    const renewal = environmentRenewalState(detail);
+    if (!renewal.canRenew) {
+      showToast(renewal.reason, "warning");
       return;
     }
     state.environmentRenewBusy.add(id);
@@ -3764,14 +3796,15 @@ import {
     iconWrap.append(icon(task.mode === "side" ? "git-branch" : "messages-square"));
     const copy = createElement("span", "codex-tree-copy");
     copy.append(createElement("span", "codex-task-item-title", codexTaskTitle(task)));
-    copy.append(createElement("span", "codex-task-item-meta", `${codexModeLabel(task.mode)} · ${codexStatusLabel(task.status)}${task.mode === "side" && task.sourceMessage ? ` · 来源：${codexSummary(task.sourceMessage, 36)}` : ""}`));
+    const archived = task.archived ? " · 已归档" : "";
+    copy.append(createElement("span", "codex-task-item-meta", `${codexModeLabel(task.mode)} · ${codexStatusLabel(task.status)}${archived}${task.mode === "side" && task.sourceMessage ? ` · 来源：${codexSummary(task.sourceMessage, 36)}` : ""}`));
     const status = createElement("span", `codex-tree-status ${codexStatusClass(task.status)}`, task.status === "queued" ? `#${task.queuePosition || "—"}` : task.status === "running" ? "运行" : codexStatusLabel(task.status));
     button.append(iconWrap, copy, status);
     button.addEventListener("click", () => {
       state.codexSelectedTaskId = task.id;
       state.codexEventsFollowTail = true;
       renderCodexTaskList();
-      void loadCodexTask(task.id);
+      void loadCodexTask(task.id, { select: false });
     });
     row.append(checkbox, button);
     return row;
@@ -4037,15 +4070,13 @@ import {
       const result = await request(`/api/codex/tasks?${parameters}`);
       if (requestEpoch !== codexLoadEpoch) return null;
       state.codexAvailable = result.available === undefined ? true : Boolean(result.available);
-      state.codexLimit = Number(result.limit || state.codexLimit || 10);
       const incoming = (Array.isArray(result.tasks) ? result.tasks : []).map((task) => ({
         ...task,
         events: state.codexLoadedEvents.get(task.id) || previousDetails.get(task.id)?.events || [],
       }));
-      const incomingIds = new Set(incoming.map((task) => task.id));
       state.codexTasks = append
         ? [...state.codexTasks, ...incoming.filter((task) => !previousDetails.has(task.id))]
-        : [...incoming, ...state.codexTasks.filter((task) => !incomingIds.has(task.id))];
+        : incoming;
       state.codexTaskTotal = Math.max(
         Number(result.total || 0),
         state.codexTasks.length,
@@ -4216,6 +4247,12 @@ import {
     codexTaskTrigger = trigger instanceof HTMLElement ? trigger : document.activeElement;
     if (!els.modelRoutingPage.hidden) closeModelRoutingPage();
     closePageDialogs();
+    state.codexTaskQuery = "";
+    state.codexTaskStatus = "";
+    state.codexTaskArchive = "all";
+    if (els.codexSessionSearch) els.codexSessionSearch.value = "";
+    if (els.codexSessionStatus) els.codexSessionStatus.value = "";
+    if (els.codexSessionArchive) els.codexSessionArchive.value = "all";
     els.codexTaskPage.hidden = false;
     document.body.classList.add("codex-task-open");
     document.body.classList.add("workspace-page-open");
@@ -4620,8 +4657,25 @@ import {
       ...incoming,
       events: previous?.events || incoming.events || [],
     };
-    if (index >= 0) state.codexTasks.splice(index, 1, task);
-    else {
+    const query = state.codexTaskQuery.trim().toLocaleLowerCase();
+    const statuses = new Set(state.codexTaskStatus.split(",").filter(Boolean));
+    const searchable = [task.id, task.exerciseId, task.title, task.sourceMessage].join(" ").toLocaleLowerCase();
+    const matchesView = (!query || searchable.includes(query))
+      && (!statuses.size || statuses.has(task.status))
+      && (state.codexTaskArchive === "all"
+        || (state.codexTaskArchive === "archived" ? Boolean(task.archived) : !task.archived));
+    if (!matchesView) {
+      if (index < 0) return null;
+      state.codexTasks.splice(index, 1);
+      state.codexTaskTotal = Math.max(0, state.codexTaskTotal - 1);
+      state.selectedCodexTaskIds.delete(task.id);
+      if (state.codexSelectedTaskId === task.id) state.codexSelectedTaskId = state.codexTasks[0]?.id || null;
+      state.codexTaskHasMore = state.codexTasks.length < state.codexTaskTotal;
+      return { task, previous, removed: true };
+    }
+    if (index >= 0) {
+      state.codexTasks.splice(index, 1, task);
+    } else {
       state.codexTasks.unshift(task);
       state.codexTaskTotal += 1;
     }
@@ -4635,7 +4689,10 @@ import {
     state.codexAvailable = true;
     const result = upsertCodexRealtimeTask(incoming);
     if (!result) return;
-    const { task, previous } = result;
+    const { task, previous, removed } = result;
+    if (removed && state.codexSelectedTaskId) {
+      await loadCodexTask(state.codexSelectedTaskId, { render: false, silent: true });
+    }
     updateCodexCounter();
     renderCodexTaskState();
     renderExercises();
@@ -5067,6 +5124,7 @@ import {
     await runInitModule("题目与容器", async () => {
       bindExerciseEvents();
       loadTrackedEnvironmentIds();
+      startEnvironmentCountdown();
       renderActiveEnvironments();
       setWorkspaceActionsEnabled(false);
       updateFlagLength();
@@ -5127,6 +5185,7 @@ import {
     if (state.noticeTimer) window.clearInterval(state.noticeTimer);
     if (state.codexPollTimer) window.clearInterval(state.codexPollTimer);
     if (state.toolManagerTimer) window.clearTimeout(state.toolManagerTimer);
+    if (state.environmentCountdownTimer) window.clearInterval(state.environmentCountdownTimer);
     stopAttachmentTaskPolling();
     stopAttachmentSizePolling();
     state.pollToken += 1;

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 from typing import Any, Literal, cast
 from urllib.parse import urlsplit
@@ -752,6 +753,35 @@ def test_agent_maps_questions_flags_notices_and_environments() -> None:
     client.recover_environment(1)
     assert closed["uuid"] == "environment-demo-id"
     assert closed["close_type"] == 3
+
+
+def test_environment_renewal_rejects_requests_before_final_ten_minutes() -> None:
+    calls: list[str] = []
+
+    class API:
+        def post(self, path: str, _payload: dict[str, Any]) -> Any:
+            calls.append(path)
+            if path == "/match/docker/info":
+                return {
+                    "uuid": "environment-demo-id",
+                    "delay_count": 2,
+                    "countdown": 601,
+                }
+            return {}
+
+    client = object.__new__(AgentClient)
+    client._lock = threading.RLock()
+    client._renewing_environments = set()
+    client._pending_environments = {1: "environment-demo-id"}
+    client._question_by_id = {1: {"id": "question-platform-a"}}
+    client._api = API()
+
+    with pytest.raises(APIError) as raised:
+        client.renew_environment(1)
+
+    assert raised.value.code == "ENVIRONMENT_RENEW_TOO_EARLY"
+    assert calls == ["/match/docker/info"]
+    assert client._renewing_environments == set()
 
 
 def test_agent_maps_match_lifecycle_and_real_notice_shape() -> None:
