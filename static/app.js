@@ -15,11 +15,18 @@ import {
   mergeCodexEventLists,
   normalizeCodexEvents,
 } from "./modules/codex-presenters.js?v=20261103-layout9";
+import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout9";
 import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout9";
 import { createApiClient } from "./modules/api.js?v=20261103-layout9";
 import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout9";
 import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout9";
 import { createAppState } from "./modules/state.js?v=20261103-layout9";
+import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout9";
+import {
+  SIDEBAR_VIEW_TITLES,
+  pathForView,
+  viewForPath,
+} from "./modules/workspace-routes.js?v=20261103-layout9";
 
 "use strict";
 
@@ -53,27 +60,6 @@ import { createAppState } from "./modules/state.js?v=20261103-layout9";
 4.正文的中文和英文以及特殊符号之间不要加空格，除非是markdown语法等特殊要求
 5.wp不要太过臃肿，能够完整的写出该题的完整过程即可，也不要太过精简导致关键信息缺失
 6.最重要的是，该版wp为脱敏wp，因为该题目是动态环境题目。脱敏的要求为不得写出该题目的靶机和端口信息；不得写出该题解出的flag；不得写入任何与本机信息、本地路径相关的信息。这些可以追溯到个人的信息全部使用占位符或完全脱敏，然后再写入到wp中。`;
-  const SIDEBAR_VIEW_TITLES = Object.freeze({
-    competition: "比赛概览",
-    exercise: "题目工作区",
-    "settings-dialog": "平台与设置",
-    "attachment-manager-dialog": "附件管理",
-    "tool-manager-dialog": "CTF 工具",
-    "model-routing-page": "模型路由",
-    "codex-task-page": "Codex 会话",
-  });
-  const VIEW_PATHS = Object.freeze({
-    competition: "/competition",
-    exercise: "/exercises",
-    "attachment-manager-dialog": "/attachments",
-    "tool-manager-dialog": "/tools",
-    "codex-task-page": "/codex",
-    "model-routing-page": "/models",
-    "settings-dialog": "/settings",
-  });
-  const PATH_VIEWS = Object.freeze(
-    Object.fromEntries(Object.entries(VIEW_PATHS).map(([view, path]) => [path, view])),
-  );
   const RICH_TEXT_TAGS = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IMG", "LI", "OL", "P", "PRE", "S", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL"]);
   const DROPPED_RICH_TEXT_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "MATH", "OBJECT", "SCRIPT", "STYLE", "SVG", "TEXTAREA"]);
 
@@ -384,15 +370,13 @@ import { createAppState } from "./modules/state.js?v=20261103-layout9";
 
   function syncRouteForView(view, { replace = false } = {}) {
     if (suppressRouteSync) return;
-    const path = VIEW_PATHS[view];
+    const path = pathForView(view);
     if (!path || window.location.pathname === path) return;
     window.history[replace ? "replaceState" : "pushState"]({ view }, "", path);
   }
 
   function resolveRouteView() {
-    const normalized = window.location.pathname.replace(/\/+$/, "") || "/";
-    if (normalized === "/") return "exercise";
-    return PATH_VIEWS[normalized] || "exercise";
+    return viewForPath(window.location.pathname);
   }
 
   async function applyRouteFromLocation() {
@@ -408,7 +392,7 @@ import { createAppState } from "./modules/state.js?v=20261103-layout9";
       else if (view === "settings-dialog") openSettingsDialog();
     } finally {
       suppressRouteSync = false;
-      const expectedPath = VIEW_PATHS[view];
+      const expectedPath = pathForView(view);
       if (expectedPath && window.location.pathname !== expectedPath) {
         window.history.replaceState(
           { view },
@@ -1161,24 +1145,7 @@ import { createAppState } from "./modules/state.js?v=20261103-layout9";
       els.installAllTools.disabled = true;
       return;
     }
-    const categoryDefinitions = [
-      { key: "general", label: "通用", icon: "layers-3", note: "跨题型基础库与通用能力" },
-      { key: "web", label: "Web / 网络", icon: "globe-2", note: "目录扫描、请求测试与网络分析" },
-      { key: "pwn", label: "Pwn / 二进制利用", icon: "binary", note: "调试、ROP、漏洞利用与二进制保护检查" },
-      { key: "reverse", label: "Reverse / 逆向", icon: "scan-code", note: "反汇编、反编译、仿真与动态插桩" },
-      { key: "crypto", label: "Crypto / 密码学", icon: "key-round", note: "约束求解、数论、哈希与口令恢复" },
-      { key: "forensics", label: "Forensics / 取证", icon: "microscope", note: "文件雕刻、内存、元数据与样本分析" },
-      { key: "misc", label: "Misc / 综合", icon: "blocks", note: "压缩、协议、网络与综合辅助工具" },
-    ];
-    const grouped = new Map(categoryDefinitions.map((category) => [
-      category.key,
-      { ...category, tools: [] },
-    ]));
-    tools.forEach((tool) => {
-      const category = tool.category || "other";
-      if (!grouped.has(category)) grouped.set(category, { key: category, label: tool.categoryLabel || "其他工具", tools: [] });
-      grouped.get(category).tools.push(tool);
-    });
+    const grouped = groupToolsByCategory(tools);
     const fragment = document.createDocumentFragment();
     grouped.forEach((group) => {
       if (!group.tools.length) return;
@@ -2746,35 +2713,6 @@ import { createAppState } from "./modules/state.js?v=20261103-layout9";
     }
   }
 
-  function attachmentFileMatchesFilter(file) {
-    const filter = state.attachmentFilter;
-    if (filter === "missing") return !file.error && !file.exists;
-    if (filter === "ready") return Boolean(file.exists) && !file.error;
-    if (filter === "error") return Boolean(file.error);
-    return true;
-  }
-
-  function filterAttachmentExercise(exercise) {
-    const query = state.attachmentSearch.trim().toLocaleLowerCase("zh-CN");
-    const files = attachmentFiles(exercise);
-    const fileText = files
-      .map((file) => `${file.name || ""} ${file.path || ""}`)
-      .join(" ");
-    const exerciseText = `${exercise.id || ""} ${exercise.name || ""} ${exercise.category || ""} ${fileText}`
-      .toLocaleLowerCase("zh-CN");
-    if (query && !exerciseText.includes(query)) return null;
-    if (exercise.error) {
-      return state.attachmentFilter === "error" || state.attachmentFilter === "all"
-        ? { ...exercise, attachments: [] }
-        : null;
-    }
-    const filteredFiles = state.attachmentFilter === "all"
-      ? files
-      : files.filter(attachmentFileMatchesFilter);
-    if (state.attachmentFilter !== "all" && !filteredFiles.length) return null;
-    return { ...exercise, attachments: filteredFiles };
-  }
-
   function renderAttachmentCatalog() {
     const catalog = state.attachmentCatalog || {};
     const exercises = Array.isArray(catalog.exercises) ? catalog.exercises : [];
@@ -2792,7 +2730,10 @@ import { createAppState } from "./modules/state.js?v=20261103-layout9";
       return;
     }
     const visibleExercises = exercises
-      .map(filterAttachmentExercise)
+      .map((exercise) => filterAttachmentExercise(exercise, {
+        query: state.attachmentSearch,
+        filter: state.attachmentFilter,
+      }))
       .filter((exercise) => exercise !== null);
     if (!visibleExercises.length) {
       els.attachmentList.replaceChildren(
