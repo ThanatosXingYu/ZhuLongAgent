@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import internal.download as download_module
+import internal.web as web_module
 from internal.attachment_tasks import AttachmentTaskManager
 from internal.agent import (
     APIError,
@@ -580,6 +581,55 @@ def test_codex_proxy_lists_configured_chat_models(tmp_path: Path) -> None:
     assert rejected.status_code == 401
     assert response.status_code == 200
     assert response.json()["data"][0]["id"] == "deepseek-v4.1-flash"
+
+
+def test_codex_proxy_streams_initial_heartbeat_and_response_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    providers = [
+        {
+            "id": "provider-a",
+            "name": "A",
+            "baseUrl": "https://a.example/v1",
+            "apiKey": "upstream-secret",
+            "model": "deepseek-v4.1-flash",
+            "protocol": "openai-chat",
+            "enabled": True,
+        }
+    ]
+    store = RuntimeConfigStore(
+        Config(
+            codex_model="deepseek-v4.1-flash",
+            codex_api_key="local-secret",
+            model_providers_json=json.dumps(providers),
+        ),
+        tmp_path / ".runtime-config.json",
+    )
+
+    def fake_stream(*_args: Any, **_kwargs: Any) -> Any:
+        return iter((b": codex-proxy-connected\n\n", b'data: {"type":"response.completed"}\n\n'))
+
+    monkeypatch.setattr(web_module, "stream_chat_response", fake_stream)
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        response = client.post(
+            "/codex-proxy/v1/responses",
+            headers={"Authorization": "Bearer local-secret"},
+            json={
+                "model": "deepseek-v4.1-flash",
+                "input": [
+                    {
+                        "type": "message",
+                        "role": "user",
+                        "content": [{"type": "input_text", "text": "hello"}],
+                    }
+                ],
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.text.startswith(": codex-proxy-connected")
+    assert "response.completed" in response.text
 
 
 def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:

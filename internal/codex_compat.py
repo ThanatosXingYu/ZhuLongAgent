@@ -234,6 +234,7 @@ def stream_chat_response(
     api_key: str,
     timeout: float = 300.0,
 ) -> Iterator[bytes]:
+    yield b": codex-proxy-connected\n\n"
     payload: dict[str, Any] = {
         "model": bridge.model,
         "messages": [message.to_dict() for message in bridge.messages],
@@ -258,25 +259,21 @@ def stream_chat_response(
         request.add_header("Authorization", f"Bearer {api_key}")
     response = None
     last_error: Exception | None = None
-    for attempt in range(3):
-        try:
-            response = urlopen(request, timeout=timeout)  # noqa: S310
-            break
-        except HTTPError as exc:
-            last_error = ModelCallError(
-                f"model returned status {exc.code}",
-                status=exc.code,
-                retryable=exc.code in {408, 429} or exc.code >= 500,
-            )
-        except (TimeoutError, socket.timeout) as exc:
-            last_error = ModelCallError(
-                f"call model timed out: {exc}", timed_out=True
-            )
-        except (URLError, OSError) as exc:
-            last_error = ModelCallError(f"call model: {exc}")
-        if attempt >= 2 or not isinstance(last_error, ModelCallError) or not last_error.retryable:
-            break
-        time.sleep(1.0 if attempt == 0 else 3.0)
+    try:
+        LOGGER.info("Codex stream upstream connecting model=%s", bridge.model)
+        response = urlopen(request, timeout=timeout)  # noqa: S310
+    except HTTPError as exc:
+        last_error = ModelCallError(
+            f"model returned status {exc.code}",
+            status=exc.code,
+            retryable=exc.code in {408, 429} or exc.code >= 500,
+        )
+    except (TimeoutError, socket.timeout) as exc:
+        last_error = ModelCallError(
+            f"call model timed out: {exc}", timed_out=True
+        )
+    except (URLError, OSError) as exc:
+        last_error = ModelCallError(f"call model: {exc}")
     if response is None:
         yield _failed_response_event(str(last_error or "model request failed"))
         return

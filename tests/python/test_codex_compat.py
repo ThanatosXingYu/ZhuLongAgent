@@ -137,6 +137,7 @@ def test_codex_bridge_streams_chat_deltas(
             api_key="secret",
         )
     ).decode()
+    assert stream.startswith(": codex-proxy-connected")
     events = [
         json.loads(line.removeprefix("data: "))
         for line in stream.splitlines()

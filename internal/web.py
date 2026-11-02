@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import time
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Callable, Literal, Protocol, TypeGuard, TypeVar
@@ -21,10 +20,8 @@ from .agent import APIError, PlatformNotConfigured
 from .attachment_tasks import DownloadTaskBusy, DownloadTaskNotFound
 from .codex import CodexError, CodexUnavailable, ErrPrompt, TaskNotFound
 from .codex_compat import (
-    ChatBridge,
     build_chat_bridge,
-    build_response_sse,
-    complete_with_chat,
+    stream_chat_response,
 )
 from .download import (
     AttachmentNotFound,
@@ -36,7 +33,7 @@ from .download import (
 )
 from .environment import collect_environment_status
 from .events import EventBroker
-from .openai_client import Message, ModelCallError, ModelListError, fetch_models
+from .openai_client import ModelListError, fetch_models
 from .routers.realtime import create_realtime_router
 from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
@@ -604,29 +601,13 @@ def create_app(
                 503, "CODEX_CHAT_UPSTREAM_UNAVAILABLE", "Codex Chat 上游未配置"
             )
         bridge = build_chat_bridge(payload, current.codex_model)
-        try:
-            message = await asyncio.wait_for(
-                asyncio.to_thread(
-                    _complete_codex_chat_with_retry,
-                    bridge,
-                    upstream_base_url,
-                    upstream_api_key,
-                ),
-                timeout=135,
-            )
-        except TimeoutError:
-            return _error_response(504, "CODEX_CHAT_TIMEOUT", "Codex Chat 上游响应超时")
-        except Exception as exc:
-            LOGGER.warning("Codex Chat compatibility request failed: %s", exc)
-            return _error_response(502, "CODEX_CHAT_FAILED", "Codex Chat 上游请求失败")
-        stream = build_response_sse(
-            message,
-            model=bridge.model,
-            tool_names=bridge.tool_names,
-            custom_tools=bridge.custom_tools,
-        )
         return StreamingResponse(
-            iter((stream,)),
+            stream_chat_response(
+                bridge,
+                base_url=upstream_base_url,
+                api_key=upstream_api_key,
+                timeout=45,
+            ),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-store",
@@ -2150,32 +2131,6 @@ def _codex_proxy_models(config: Config) -> list[str]:
             if model and model not in models:
                 models.append(model)
     return models
-
-
-def _complete_codex_chat_with_retry(
-    bridge: ChatBridge, base_url: str, api_key: str
-) -> Message:
-    last_error: Exception | None = None
-    for attempt in range(2):
-        try:
-            return complete_with_chat(
-                bridge,
-                base_url=base_url,
-                api_key=api_key,
-                timeout=60,
-            )
-        except ModelCallError as exc:
-            last_error = exc
-            LOGGER.warning(
-                "Codex Chat upstream attempt %d failed: %s",
-                attempt + 1,
-                exc,
-            )
-            if not exc.retryable or attempt >= 1:
-                raise
-            time.sleep(1.0 if attempt == 0 else 3.0)
-    assert last_error is not None
-    raise last_error
 
 
 def _runtime_patch_values(

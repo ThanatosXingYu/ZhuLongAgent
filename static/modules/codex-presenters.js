@@ -112,6 +112,7 @@ export function codexEventPresentation(event) {
     agent_message: ["Codex 回复", "message", ""],
     command_execution: ["执行命令", "command", ""],
     "process.started": ["进程", "progress", "Codex 子进程已启动"],
+    "process.waiting": ["等待上游", "progress", "长时间没有新输出，正在等待模型响应"],
     "process.completed": ["进程", "success", "Codex 子进程已结束"],
     "turn.completed": ["Token 统计", "success", "本轮 Codex 处理完成"],
     warning: ["警告", "warning", ""],

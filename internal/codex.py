@@ -53,6 +53,7 @@ AUTO_CONTINUE_MESSAGE = (
     "直到得到 Flag 和完整 WP，或明确说明阻止继续的具体原因。"
 )
 MAX_AUTO_CONTINUE_ROUNDS = 4
+NO_PROGRESS_NOTICE_SECONDS = 90
 API_KEY_ENVIRONMENT = "GCSIS_CODEX_API_KEY"
 CODEX_HOME_ENVIRONMENT = "CODEX_HOME"
 LOGGER = logging.getLogger("gcsis-tools.codex")
@@ -142,6 +143,8 @@ class ProcessRunner:
                 for line in iter(stream.readline, ""):
                     if not line.strip():
                         continue
+                    with activity_lock:
+                        last_activity[0] = time.monotonic()
                     if kind_override == "stderr" and _ignore_stderr_line(line):
                         continue
                     event = parse_event_line(line, datetime.now(timezone.utc), redactor)
@@ -173,8 +176,32 @@ class ProcessRunner:
         stderr_thread = threading.Thread(
             target=scan, args=(process.stderr, "stderr"), daemon=True
         )
+        activity_lock = threading.Lock()
+        last_activity = [time.monotonic()]
+
+        def monitor_progress() -> None:
+            while process.poll() is None:
+                time.sleep(2)
+                now = time.monotonic()
+                with activity_lock:
+                    idle_seconds = now - last_activity[0]
+                    if idle_seconds < NO_PROGRESS_NOTICE_SECONDS:
+                        continue
+                    last_activity[0] = now
+                callback(
+                    Event(
+                        datetime.now(timezone.utc),
+                        "process.waiting",
+                        f"Codex 已 {int(idle_seconds)} 秒没有新输出，正在等待模型上游响应",
+                        status="running",
+                        metadata={"idleSeconds": int(idle_seconds)},
+                    )
+                )
+
         stdout_thread.start()
         stderr_thread.start()
+        progress_thread = threading.Thread(target=monitor_progress, daemon=True)
+        progress_thread.start()
         if process.stdin is not None:
             try:
                 process.stdin.write(prompt)
@@ -192,6 +219,7 @@ class ProcessRunner:
                 break
             time.sleep(0.05)
         exit_code = process.wait()
+        progress_thread.join(timeout=3)
         stdout_thread.join(timeout=5)
         stderr_thread.join(timeout=5)
         callback(
