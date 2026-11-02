@@ -114,6 +114,7 @@ Codex 默认最多同时运行 10 个任务；这里的 `10` 是同时运行的�
 | `runtime/codex/` | 本项目专用 Codex HOME、会话数据库、日志和技能副本 |
 | `runtime/codex/tasks.json` | Codex 任务列表和会话元数据（不含 API Key） |
 | `runtime/platform-schema.json` | 最近观测到的平台接口字段集合及变化记录，只包含字段名 |
+| `runtime/platform-identities.json` | 平台题目、分类和公告到稳定本地 ID 的持久映射 |
 | `download/` | 题目附件及下载临时文件 |
 | `writeups/` | Codex 或手动生成的解题报告 |
 | `codex-runs/` | Codex 任务运行记录 |

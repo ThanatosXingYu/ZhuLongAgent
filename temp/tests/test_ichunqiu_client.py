@@ -494,6 +494,95 @@ Content-Type: application/json
     assert result.auth_status.team_name == "导入队伍"
 
 
+def test_agent_persists_local_question_ids_across_reordering(
+    tmp_path: Path,
+) -> None:
+    config = Config(
+        match_url="https://match.ichunqiu.com/demo-match",
+        match_key="resolved-match-key",
+        platform_token="login:not-a-real-token",
+    )
+    rows = [
+        {
+            "id": "platform-a",
+            "title": "A",
+            "category_id": "misc",
+            "category": "Misc",
+            "is_allow_solve": True,
+            "red_solved": {"is_solved": False},
+        },
+        {
+            "id": "platform-b",
+            "title": "B",
+            "category_id": "web",
+            "category": "Web",
+            "is_allow_solve": True,
+            "red_solved": {"is_solved": False},
+        },
+    ]
+    current_rows = list(rows)
+
+    def transport(request: Request, _timeout: float, _maximum: int) -> HTTPResponse:
+        path = urlsplit(request.full_url).path
+        payload = _payload(request)
+        _assert_signed_request(request, payload)
+        if path == "/match/question/lists":
+            return _json_response(
+                {
+                    "code": 0,
+                    "message": "",
+                    "data": {"total": len(current_rows), "lists": current_rows},
+                }
+            )
+        raise AssertionError(path)
+
+    identity_path = tmp_path / "platform-identities.json"
+    first = AgentClient(
+        config_provider=lambda: config,
+        transport=transport,
+        identity_path=identity_path,
+    )
+    first_ids = {
+        item.name: item.id for group in first.exercises() for item in group.corpus
+    }
+    assert first_ids == {"A": 1, "B": 2}
+
+    current_rows = list(reversed(rows))
+    restored = AgentClient(
+        config_provider=lambda: config,
+        transport=transport,
+        identity_path=identity_path,
+    )
+    restored_ids = {
+        item.name: item.id for group in restored.exercises() for item in group.corpus
+    }
+    assert restored_ids == first_ids
+
+    current_rows = [
+        rows[1],
+        {
+            "id": "platform-c",
+            "title": "C",
+            "category_id": "misc",
+            "category": "Misc",
+            "is_allow_solve": True,
+            "red_solved": {"is_solved": False},
+        },
+        rows[0],
+    ]
+    extended = AgentClient(
+        config_provider=lambda: config,
+        transport=transport,
+        identity_path=identity_path,
+    )
+    extended_ids = {
+        item.name: item.id for group in extended.exercises() for item in group.corpus
+    }
+    assert extended_ids["B"] == 2
+    assert extended_ids["C"] == 3
+    assert extended_ids["A"] == 1
+
+
 def test_agent_maps_questions_flags_notices_and_environments() -> None:
     config = Config(
         match_url="https://match.ichunqiu.com/demo-match",

@@ -41,6 +41,7 @@ from .ichunqiu_api import (
 )
 from .ichunqiu_crypto import MATCH_ORIGIN, parse_match_url
 from .ichunqiu_session import ImportedSession, parse_session_request
+from .platform_ids import StableIDStore
 
 MAX_QUESTION_COUNT = 10_000
 PAGE_SIZE = 100
@@ -61,6 +62,7 @@ class AgentClient:
         config_provider: ConfigProvider,
         transport: Transport | None = None,
         schema_path: str | Path | None = None,
+        identity_path: str | Path | None = None,
     ) -> None:
         self._config_provider = config_provider
         self._api = IChunQiuAPI(
@@ -71,10 +73,8 @@ class AgentClient:
         )
         self._lock = threading.RLock()
         self._question_by_id: dict[int, Mapping[str, Any]] = {}
-        self._question_id_by_platform: dict[str, int] = {}
-        self._group_id_by_platform: dict[str, int] = {}
         self._notice_by_id: dict[int, Mapping[str, Any]] = {}
-        self._notice_id_by_platform: dict[str, int] = {}
+        self._identities = StableIDStore(identity_path)
         self._pending_environments: dict[int, str] = {}
         self._opened_platform_questions: set[str] = set()
 
@@ -360,7 +360,7 @@ class AgentClient:
                 platform_id = str(
                     row.get("id", "") or row.get("notice_id", "") or order
                 )
-                local_id = self._stable_id(platform_id, self._notice_id_by_platform)
+                local_id = self._identities.notice_id(platform_id)
                 self._notice_by_id[local_id] = row
                 result.append(_notice_from_row(local_id, row))
         return result
@@ -456,19 +456,10 @@ class AgentClient:
         platform_id = str(row.get("id", "") or "").strip()
         if not platform_id:
             return None
-        return self._stable_id(platform_id, self._question_id_by_platform)
+        return self._identities.question_id(platform_id)
 
     def _local_group_id(self, platform_id: str) -> int:
-        return self._stable_id(platform_id, self._group_id_by_platform)
-
-    def _stable_id(self, platform_id: str, values: dict[str, int]) -> int:
-        with self._lock:
-            current = values.get(platform_id)
-            if current is not None:
-                return current
-            local_id = len(values) + 1
-            values[platform_id] = local_id
-            return local_id
+        return self._identities.group_id(platform_id)
 
     def _ensure_question_opened(self, platform_id: str) -> None:
         with self._lock:

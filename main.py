@@ -51,6 +51,7 @@ def build_application(config: Config | None = None) -> FastAPI:
         timeout=15.0,
         config_provider=config_store.get,
         schema_path=runtime_root / "platform-schema.json",
+        identity_path=runtime_root / "platform-identities.json",
     )
     cached = CachedService(upstream)
     downloads = DownloadService(workspace / "download", cached, timeout=300.0)
