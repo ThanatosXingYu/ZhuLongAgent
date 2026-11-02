@@ -134,6 +134,7 @@ class SolverService:
         model_name: str,
         writeup_root: str | Path = "writeups",
         workspace_root: str | Path | None = None,
+        download_root: str | Path | None = None,
     ) -> None:
         self.source = source
         self.attachments = attachments
@@ -141,6 +142,11 @@ class SolverService:
         self.model_name = model_name.strip()
         self.writeup_root = Path(writeup_root)
         self.workspace_root = Path(workspace_root) if workspace_root else detect_workspace_root()
+        self.download_root = (
+            Path(download_root)
+            if download_root
+            else self.workspace_root / "workbench-data" / "download"
+        )
 
     def configure_model(self, model: ModelProtocol | None, model_name: str) -> None:
         self.model = model
@@ -155,7 +161,7 @@ class SolverService:
     def prompt(self, exercise_id: int) -> PromptResult:
         data = self._load_exercise(exercise_id)
         return PromptResult(
-            render_prompt(data, self.workspace_root),
+            render_prompt(data, self.workspace_root, self.download_root),
             self.enabled(),
             self.model_name,
             data.detail.id,
@@ -167,7 +173,7 @@ class SolverService:
     def prompt_pure(self, exercise_id: int) -> PromptResult:
         data = self._load_exercise(exercise_id)
         return PromptResult(
-            render_pure_prompt(data, self.workspace_root),
+            render_pure_prompt(data, self.workspace_root, self.download_root),
             self.enabled(),
             self.model_name,
             data.detail.id,
@@ -185,7 +191,7 @@ class SolverService:
         data = self._load_exercise(exercise_id)
         messages = [
             Message("system", "你是受限的 CTF 解题代理。只能处理用户指定题目，只能调用提供的竞赛工具。未获得平台正确响应时不得声称已解出；正确后必须输出完整中文 Markdown WP。"),
-            Message("user", render_prompt(data, self.workspace_root)),
+            Message("user", render_prompt(data, self.workspace_root, self.download_root)),
         ]
         tools = solver_tools()
         state = _RunState()
@@ -348,7 +354,11 @@ class SolverService:
         return (display_root / category / target.name).as_posix()
 
 
-def render_prompt(data: _ExerciseData, workspace_root: Path) -> str:
+def render_prompt(
+    data: _ExerciseData,
+    workspace_root: Path,
+    download_root: Path | None = None,
+) -> str:
     prompt = [
         "# CTF 题目自动解题任务\n\n",
         "你正在处理一项明确授权的 CTF 竞赛题目，只允许操作本题相关附件、靶机和答题接口。\n\n",
@@ -356,7 +366,7 @@ def render_prompt(data: _ExerciseData, workspace_root: Path) -> str:
         "想一切办法解决题目：可以进行公开网络搜索，查阅公开资料、官方文档、技术文章和公开源码；对关键结论必须通过实际命令、脚本、请求或文件内容验证并记录证据。网络搜索只用于获取公开资料。\n\n",
         "## 安全边界\n\n",
         "禁止爆破、穷举、猜测、伪造或拼接 Flag；不能把未经验证的推测当成成功。禁止攻击 i春秋平台本身、登录接口、比赛接口、网关和其他竞赛基础设施；只允许访问本题明确授权的附件、靶机和本地 Web API。\n\n",
-        render_exercise_block(data, workspace_root),
+        render_exercise_block(data, workspace_root, download_root),
         render_tool_block(workspace_root),
         "\n## 强制工作流程\n\n",
         f"1. 先阅读 API 文档 `{workspace_root / 'docs' / 'api_doc.md'}`，确认题目详情、附件、启动环境、提交答案和回收环境的接口语义。\n",
@@ -373,14 +383,18 @@ def render_prompt(data: _ExerciseData, workspace_root: Path) -> str:
     return "".join(prompt)
 
 
-def render_pure_prompt(data: _ExerciseData, workspace_root: Path) -> str:
+def render_pure_prompt(
+    data: _ExerciseData,
+    workspace_root: Path,
+    download_root: Path | None = None,
+) -> str:
     return "".join(
         [
             "# CTF 题目纯解题任务\n\n",
             "你正在处理一项明确授权的 CTF 竞赛题目。这是纯解题模式：不启动任何容器或靶机、不阅读任何文档或配置文件、不调用竞赛 API 或提交 Flag，只根据题目说明和本地已下载附件推导答案。\n\n",
             "## 解题原则与安全边界\n\n",
             "可以搜索公开资料、官方文档和公开源码来补充背景知识，但必须以题目附件或可复现的本地分析为证据。禁止爆破、穷举、猜测、伪造或拼接 Flag；禁止攻击任何竞赛平台、登录接口、比赛接口或网关。\n\n",
-            render_exercise_block(data, workspace_root),
+            render_exercise_block(data, workspace_root, download_root),
             render_tool_block(workspace_root),
             "\n## 强制工作流程\n\n",
             "1. 只使用上面的题目说明和本地附件路径；禁止阅读任何文档或配置文件，包括 docs/api_doc.md 和 .env。\n",
@@ -404,14 +418,18 @@ def render_tool_block(workspace_root: Path) -> str:
         f"Python 工具虚拟环境是 `{tools_root / 'venv'}`，命令行工具目录是 `{tools_root / 'bin'}`。\n"
         f"工具清单文件是 `{manifest}`；如果文件存在，请先阅读它获取当前已安装工具、入口路径和基本用法。\n"
         f"内置字典目录是 `{tools_root / 'dictionaries'}`；需要授权的口令审计或候选值分析时可按需读取其中的文本文件，不要复制到系统目录，也不要把字典内容写入 WP。\n"
-        f"本题工作目录通常是附件路径所在的目录（例如 `{workspace_root / 'download'}` 下对应题目目录）；新建脚本、解压文件和临时文件都放在该目录。\n"
+        f"本题工作目录通常是附件路径所在的目录（例如 `{workspace_root / 'workbench-data' / 'download'}` 下对应题目目录）；新建脚本、解压文件和临时文件都放在该目录。\n"
         "使用工具前先检查对应路径和命令是否存在；不要把工具安装到系统目录，也不要修改与本题无关的文件。\n"
         "禁止运行上游技能包中的 `scripts/install_ctf_tools.sh`，也禁止执行会写入系统目录的 `apt`、`brew`、`gem`、`go install`、`cargo install` 等安装命令。缺少工具时，优先等待用户在本工作台工具管理中安装；确需临时使用时，只能将可信来源的便携归档或脚本下载、解压到本题工作目录。\n"
         "禁止直接调用 Docker CLI 或修改 Docker；题目环境只能通过本地 Web API 操作。\n\n"
     )
 
 
-def render_exercise_block(data: _ExerciseData, workspace_root: Path) -> str:
+def render_exercise_block(
+    data: _ExerciseData,
+    workspace_root: Path,
+    download_root: Path | None = None,
+) -> str:
     detail = data.detail
     description = detail.description.strip() or "（无题目说明）"
     lines = [
@@ -427,9 +445,13 @@ def render_exercise_block(data: _ExerciseData, workspace_root: Path) -> str:
     if data.attachments:
         challenge_dir = workspace_root / Path(data.attachments[0].path).parent
     else:
+        selected_download_root = Path(
+            download_root or workspace_root / "workbench-data" / "download"
+        )
+        if not selected_download_root.is_absolute():
+            selected_download_root = workspace_root / selected_download_root
         challenge_dir = (
-            workspace_root
-            / "download"
+            selected_download_root
             / safe_writeup_segment(data.category, "Uncategorized")
             / f"{detail.id}-{safe_writeup_segment(detail.name, 'exercise')}"
         )

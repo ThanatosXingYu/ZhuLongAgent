@@ -26,6 +26,7 @@ from internal.model_router import ModelRouter
 from internal.solver import SolverService
 from internal.tool_manager import ToolManager
 from internal.web import create_app
+from internal.workspace import prepare_workspace_layout
 
 LOGGER = logging.getLogger("gcsis-tools")
 
@@ -35,8 +36,8 @@ def build_application(config: Config | None = None) -> FastAPI:
 
     workspace = Path.cwd().absolute()
     cfg = config or load(workspace / ".env")
-    runtime_root = workspace / "runtime"
-    runtime_root.mkdir(parents=True, exist_ok=True)
+    layout = prepare_workspace_layout(workspace)
+    runtime_root = layout.runtime
     config_path = runtime_root / "config.json"
     legacy_config = workspace / ".runtime-config.json"
     if not config_path.exists() and legacy_config.is_file():
@@ -54,15 +55,25 @@ def build_application(config: Config | None = None) -> FastAPI:
         identity_path=runtime_root / "platform-identities.json",
     )
     cached = CachedService(upstream)
-    downloads = DownloadService(workspace / "download", cached, timeout=300.0)
+    downloads = DownloadService(layout.download, cached, timeout=300.0)
     event_broker = EventBroker()
     attachment_tasks = AttachmentTaskManager(
         downloads, event_publisher=event_broker.publish
     )
-    tools = ToolManager(workspace, event_publisher=event_broker.publish)
+    tools = ToolManager(
+        workspace,
+        event_publisher=event_broker.publish,
+        data_root=layout.data_root,
+    )
     model = ModelRouter(runtime)
     solver = SolverService(
-        cached, downloads, model, "auto", workspace / "writeups", workspace
+        cached,
+        downloads,
+        model,
+        "auto",
+        layout.writeups,
+        workspace,
+        download_root=layout.download,
     )
     binary = shutil.which("codex") or ""
     codex_home = runtime_root / "codex"
@@ -99,9 +110,10 @@ def build_application(config: Config | None = None) -> FastAPI:
             prompt=solver,
             runner=ProcessRunner(binary),
             max_concurrency=runtime.codex_max_concurrency,
-            runs_root=workspace / "codex-runs",
-            writeup_root=workspace / "writeups",
+            runs_root=layout.codex_runs,
+            writeup_root=layout.writeups,
             workspace_root=workspace,
+            download_root=layout.download,
             system_prompt=runtime.codex_system_prompt,
             tasks_path=runtime_root / "codex" / "tasks.json",
             auto_resume_interrupted=runtime.codex_auto_resume_interrupted,

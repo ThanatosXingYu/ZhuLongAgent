@@ -82,5 +82,5 @@ def _resolve_executable(workspace: Path, key: str) -> str | None:
 
 def _local_environment(workspace: Path) -> dict[str, str]:
     env = dict(os.environ)
-    env["XDG_CACHE_HOME"] = str(workspace / "tools" / "cache")
+    env["XDG_CACHE_HOME"] = str(workspace / "workbench-data" / "cache" / "environment")
     return env

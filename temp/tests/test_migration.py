@@ -66,6 +66,7 @@ from internal.openai_client import FunctionCall, Message, ToolCall
 from internal.solver import ModelNotConfigured, SolverService, normalize_flag
 from internal.tool_manager import TOOL_SPECS, ToolBusyError, ToolManager
 from internal.web import create_app
+from internal.workspace import prepare_workspace_layout
 from main import _listen_parts
 
 
@@ -580,6 +581,38 @@ def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:
         _listen_parts("8080")
     with pytest.raises(ValueError, match="host:port"):
         _listen_parts("::1:8080")
+
+
+def test_workspace_data_migrates_legacy_generated_directories(
+    tmp_path: Path,
+) -> None:
+    for relative in (
+        "runtime/config.json",
+        "download/Web/1-demo/a.zip",
+        "writeups/Web/1-demo.md",
+        "codex-runs/task/events.jsonl",
+        "tools/cache/pip/example",
+        "tools/tmp/example",
+        "tools/go/pkg/example",
+    ):
+        target = tmp_path / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(relative, encoding="utf-8")
+
+    layout = prepare_workspace_layout(tmp_path)
+
+    assert layout.runtime == tmp_path / "workbench-data" / "runtime"
+    assert (layout.runtime / "config.json").read_text() == "runtime/config.json"
+    assert (layout.download / "Web" / "1-demo" / "a.zip").read_text() == (
+        "download/Web/1-demo/a.zip"
+    )
+    assert (layout.writeups / "Web" / "1-demo.md").exists()
+    assert (layout.codex_runs / "task" / "events.jsonl").exists()
+    assert (layout.cache / "tools" / "pip" / "example").exists()
+    assert (layout.cache / "tools-tmp" / "example").exists()
+    assert (layout.cache / "go" / "pkg" / "example").exists()
+    assert not (tmp_path / "runtime").exists()
+    assert not (tmp_path / "download").exists()
 
 
 def test_cache_refresh_retries_rate_limit_and_preserves_value() -> None:
@@ -1191,16 +1224,17 @@ def test_tool_manager_uninstall_api_requires_header_and_supports_delete() -> Non
         assert response.status_code == 200
 
 
-def test_tool_manager_keeps_tools_and_caches_under_visible_workspace_root(
+def test_tool_manager_keeps_tools_and_caches_under_workspace_data(
     tmp_path: Path,
 ) -> None:
     manager = ToolManager(tmp_path)
     assert manager.root == tmp_path / "tools"
     assert manager.catalog()["root"] == "tools"
     environment = manager._local_environment()
-    assert environment["PIP_CACHE_DIR"] == str(tmp_path / "tools" / "cache" / "pip")
-    assert environment["XDG_CACHE_HOME"] == str(tmp_path / "tools" / "cache")
-    assert environment["TMPDIR"] == str(tmp_path / "tools" / "tmp")
+    cache_root = tmp_path / "workbench-data" / "cache"
+    assert environment["PIP_CACHE_DIR"] == str(cache_root / "tools" / "pip")
+    assert environment["XDG_CACHE_HOME"] == str(cache_root / "tools")
+    assert environment["TMPDIR"] == str(cache_root / "tools-tmp")
     assert not (tmp_path / ".tools").exists()
 
 
@@ -1270,9 +1304,10 @@ def test_tool_manager_python_launcher_keeps_tool_caches_in_workspace(
     manager = ToolManager(tmp_path)
     manager._write_venv_launcher("pwn")
     launcher = (tmp_path / "tools" / "bin" / "pwn").read_text(encoding="utf-8")
-    assert f"XDG_CACHE_HOME={tmp_path / 'tools' / 'cache'}" in launcher
-    assert f"XDG_CONFIG_HOME={tmp_path / 'tools' / 'cache' / 'config'}" in launcher
-    assert f"TMPDIR={tmp_path / 'tools' / 'tmp'}" in launcher
+    cache_root = tmp_path / "workbench-data" / "cache"
+    assert f"XDG_CACHE_HOME={cache_root / 'tools'}" in launcher
+    assert f"XDG_CONFIG_HOME={cache_root / 'tools' / 'config'}" in launcher
+    assert f"TMPDIR={cache_root / 'tools-tmp'}" in launcher
 
 
 def test_codex_delete_remains_available_when_cli_is_not_configured() -> None:
@@ -2447,8 +2482,11 @@ def test_codex_open_terminal_writes_workspace_local_resume_script(
         "internal.codex._open_system_path", opened_paths.append
     )
     folder_result = manager.open_challenge_folder(task.id)
-    challenge_directory = tmp_path / "download" / "Web" / "7-x"
-    assert folder_result == {"opened": True, "path": "download/Web/7-x"}
+    challenge_directory = tmp_path / "workbench-data" / "download" / "Web" / "7-x"
+    assert folder_result == {
+        "opened": True,
+        "path": "workbench-data/download/Web/7-x",
+    }
     assert opened_paths == [challenge_directory]
     assert challenge_directory.is_dir()
     manager.close()
@@ -2504,8 +2542,11 @@ def test_codex_legacy_folder_recovery_and_download_boundary(
 
     result = manager.open_challenge_folder(task_id)
 
-    expected = tmp_path / "download" / "Web" / "7-x"
-    assert result == {"opened": True, "path": "download/Web/7-x"}
+    expected = tmp_path / "workbench-data" / "download" / "Web" / "7-x"
+    assert result == {
+        "opened": True,
+        "path": "workbench-data/download/Web/7-x",
+    }
     assert opened_paths == [expected]
 
     task = manager._tasks[task_id]

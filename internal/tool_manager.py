@@ -168,10 +168,16 @@ def _tool_category(spec: ToolSpec) -> tuple[str, str]:
 
 class ToolManager:
     def __init__(
-        self, workspace: Path, event_publisher: EventPublisher | None = None
+        self,
+        workspace: Path,
+        event_publisher: EventPublisher | None = None,
+        data_root: str | Path | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
         self.root = self.workspace / "tools"
+        self.data_root = Path(data_root or self.workspace / "workbench-data")
+        self.cache_root = self.data_root / "cache" / "tools"
+        self.tmp_root = self.data_root / "cache" / "tools-tmp"
         self.manifest_path = self.root / "installed-tools.txt"
         self._migrate_legacy_root()
         self._repair_legacy_paths()
@@ -642,17 +648,17 @@ class ToolManager:
             [sys.executable, "-m", "venv", str(self.venv)],
             self._local_environment(),
             timeout=120,
-            progress_root=self.root / "tmp",
+            progress_root=self.tmp_root,
         )
 
     def _local_environment(self) -> dict[str, str]:
         env = dict(os.environ)
-        env["PIP_CACHE_DIR"] = str(self.root / "cache" / "pip")
-        env["XDG_CACHE_HOME"] = str(self.root / "cache")
-        env["TMPDIR"] = str(self.root / "tmp")
+        env["PIP_CACHE_DIR"] = str(self.cache_root / "pip")
+        env["XDG_CACHE_HOME"] = str(self.cache_root)
+        env["TMPDIR"] = str(self.tmp_root)
         if os.name == "nt":
-            env["TMP"] = str(self.root / "tmp")
-            env["TEMP"] = str(self.root / "tmp")
+            env["TMP"] = str(self.tmp_root)
+            env["TEMP"] = str(self.tmp_root)
         Path(env["PIP_CACHE_DIR"]).mkdir(parents=True, exist_ok=True)
         Path(env["TMPDIR"]).mkdir(parents=True, exist_ok=True)
         return env
@@ -742,7 +748,7 @@ class ToolManager:
     def _install_go(self, spec: ToolSpec) -> None:
         if not shutil.which("go"):
             raise OSError("未找到 Go，无法安装 ffuf")
-        go_root = self.root / "go"
+        go_root = self.data_root / "cache" / "go"
         bin_root = self.root / "bin"
         go_root.mkdir(parents=True, exist_ok=True)
         bin_root.mkdir(parents=True, exist_ok=True)
@@ -1027,8 +1033,8 @@ class ToolManager:
         bin_root.mkdir(parents=True, exist_ok=True)
         launcher = self._launcher_path(name)
         target = self._venv_command(name)
-        cache_root = self.root / "cache"
-        tmp_root = self.root / "tmp"
+        cache_root = self.cache_root
+        tmp_root = self.tmp_root
         if os.name == "nt":
             config_root = cache_root / "config"
             content = (

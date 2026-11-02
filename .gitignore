@@ -19,6 +19,7 @@
 /*.egg-info/
 
 # Workspace-local configuration and generated runtime data.
+/workbench-data/
 /.env
 /.runtime-config.json
 /.runtime-config.json.*

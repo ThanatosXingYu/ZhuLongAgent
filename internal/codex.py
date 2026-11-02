@@ -987,6 +987,7 @@ class ManagerConfig:
     tasks_path: str | Path = ""
     auto_resume_interrupted: bool = False
     event_publisher: EventPublisher | None = None
+    download_root: str | Path = ""
 
 
 @dataclass
@@ -1017,12 +1018,15 @@ class CodexManager:
         self.workspace_root = Path(
             config.workspace_root or config.process.workspace or Path.cwd()
         )
+        self.download_root = Path(
+            config.download_root or (self.workspace_root / "workbench-data" / "download")
+        )
         self.system_prompt = config.system_prompt.strip() or DEFAULT_CODEX_SYSTEM_PROMPT
         self.auto_resume_interrupted = config.auto_resume_interrupted
         self.tasks_path = (
             Path(config.tasks_path)
             if config.tasks_path
-            else self.workspace_root / "runtime" / "codex" / "tasks.json"
+            else self.workspace_root / "workbench-data" / "runtime" / "codex" / "tasks.json"
         )
         self._tasks: dict[str, _Task] = {}
         self._order: list[str] = []
@@ -1358,15 +1362,21 @@ class CodexManager:
             relative_path = self._challenge_path_locked(task)
 
         workspace = self.workspace_root.resolve()
-        download_root = (workspace / "download").resolve()
+        download_root = self.download_root.resolve()
         candidate = Path(relative_path)
         directory = (
             candidate if candidate.is_absolute() else workspace / candidate
         ).resolve()
         try:
             relative = directory.relative_to(download_root)
-        except ValueError as exc:
-            raise CodexError("题目目录必须位于项目 download 目录内") from exc
+        except ValueError:
+            legacy_root = (workspace / "download").resolve()
+            try:
+                legacy_relative = directory.relative_to(legacy_root)
+            except ValueError as exc:
+                raise CodexError("题目目录必须位于项目 data/download 目录内") from exc
+            relative = legacy_relative
+            directory = (download_root / relative).resolve()
         if relative == Path("."):
             raise CodexError("题目目录无效")
         try:
@@ -1506,7 +1516,10 @@ class CodexManager:
             mode,
         )
         challenge_path = challenge_path_for(
-            self.workspace_root, prompt_result, exercise_id
+            self.workspace_root,
+            self.download_root,
+            prompt_result,
+            exercise_id,
         )
         snapshot = Snapshot(
             task_id,
@@ -2753,7 +2766,10 @@ def writeup_path_for(
 
 
 def challenge_path_for(
-    workspace_root: Path, prompt: PromptResult, exercise_id: int
+    workspace_root: Path,
+    download_root: Path,
+    prompt: PromptResult,
+    exercise_id: int,
 ) -> str:
     if prompt.attachments:
         attachment_path = Path(prompt.attachments[0].path)
@@ -2762,7 +2778,7 @@ def challenge_path_for(
     else:
         category = safe_writeup_segment(prompt.category, "Uncategorized")
         name = safe_writeup_segment(prompt.exercise_name, "exercise")
-        absolute = workspace_root / "download" / category / f"{exercise_id}-{name}"
+        absolute = download_root / category / f"{exercise_id}-{name}"
     try:
         return (
             absolute.resolve(strict=False)
@@ -2972,7 +2988,7 @@ def _time_wire(value: datetime) -> str:
 CODEX_INSTRUCTIONS = DEFAULT_CODEX_SYSTEM_PROMPT
 
 CODEX_PURE_INSTRUCTIONS = """你是通过本机 Codex CLI 启动的受限 CTF 解题代理。请只处理这一个题目。
-这是纯解题模式：禁止启动或回收容器/靶机，禁止阅读任何文档或配置文件（包括 docs/api_doc.md、.env、runtime/config.json、.runtime-config.json），禁止调用竞赛 API，禁止提交 Flag。
+这是纯解题模式：禁止启动或回收容器/靶机，禁止阅读任何文档或配置文件（包括 docs/api_doc.md、.env、workbench-data/runtime/config.json、.runtime-config.json），禁止调用竞赛 API，禁止提交 Flag。
 只根据任务中给出的题目说明和本地已下载附件进行分析，允许执行本地命令处理附件；需要补充背景知识时可以搜索公开资料，但不要把未经验证的推测当成结论。禁止爆破、穷举、猜测或伪造 Flag；不要攻击任何竞赛平台、登录接口、比赛接口或网关，也不要修改与本题无关的项目文件。
 最终回复必须是 Flag 值加上一份可复现的中文 Markdown WP，包含实际命令、利用过程、Flag 推导和结果说明；不要暴露任何凭据，不要编造 Flag。"""
 
