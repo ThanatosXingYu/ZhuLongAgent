@@ -19,6 +19,7 @@ import { filterAttachmentExercise } from "./modules/attachment-model.js?v=202611
 import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout10";
 import { createApiClient } from "./modules/api.js?v=20261103-layout10";
 import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout10";
+import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261103-layout10";
 import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout10";
 import { createAppState } from "./modules/state.js?v=20261103-layout10";
 import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout10";
@@ -75,10 +76,7 @@ import {
   let platformAuthController = null;
   let platformAuthEpoch = 0;
   let portablePlatformSession = "";
-  let modelRoutingStrategy = "round-robin";
-  let modelActiveProviderId = "";
-  let modelPoolEnabled = true;
-  let modelProviderSequence = 0;
+  let modelRoutingController = null;
   let modelRoutingTrigger = null;
   let codexTaskTrigger = null;
   let activePrimaryView = "exercise";
@@ -749,244 +747,21 @@ import {
     setPlatformAuthentication(status);
   }
 
-  function setModelRoutingStatus(message, kind = "") {
-    els.modelRoutingStatus.textContent = message;
-    els.modelRoutingStatus.className = `settings-status${kind ? ` ${kind}` : ""}`;
-  }
-
-  function setRoutingStrategy(value) {
-    modelRoutingStrategy = value === "failover" ? "failover" : "round-robin";
-    els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
-      const active = button.dataset.routing === modelRoutingStrategy;
-      button.classList.toggle("is-active", active);
-      button.setAttribute("aria-pressed", String(active));
-    });
-    updateModelRoutingSummary();
-  }
-
-  function updateModelRoutingSummary() {
-    if (!els.modelProviderList) return;
-    const providers = [...els.modelProviderList.querySelectorAll(".model-provider-item")];
-    const active = providers.filter((item) => item.querySelector(".provider-enabled")?.checked).length;
-    const total = providers.length;
-    const activeItem = providers.find((item) => item.dataset.providerId === modelActiveProviderId);
-    const participants = providers.filter((item) => {
-      if (!item.querySelector(".provider-enabled")?.checked) return false;
-      return item.dataset.providerId === modelActiveProviderId || item.querySelector(".provider-pool")?.checked;
-    }).length;
-    if (els.modelActiveProviderCount) els.modelActiveProviderCount.textContent = formatNumber(active);
-    if (els.modelTotalProviderCount) els.modelTotalProviderCount.textContent = `共 ${formatNumber(total)} 个`;
-    if (els.modelActiveProviderName) {
-      els.modelActiveProviderName.textContent = activeItem?.querySelector(".provider-name")?.value.trim() || "未选择";
-    }
-    if (els.modelPoolEnabled) els.modelPoolEnabled.checked = modelPoolEnabled;
-    if (els.modelPoolState) els.modelPoolState.textContent = modelPoolEnabled ? "已开启" : "已关闭";
-    if (els.modelPoolParticipantCount) {
-      els.modelPoolParticipantCount.textContent = modelPoolEnabled
-        ? `${formatNumber(participants)} 个参与项`
-        : "仅使用默认提供商";
-    }
-    if (els.modelStrategySummary) {
-      els.modelStrategySummary.textContent = modelRoutingStrategy === "failover" ? "故障转移" : "每次轮询";
-    }
-    if (els.modelRecoverySummary) {
-      els.modelRecoverySummary.textContent = `${formatNumber(Number(els.modelRecoveryInterval?.value || 60))} 秒`;
-    }
-    providers.forEach((item, index) => {
-      item.style.setProperty("--provider-index", String(index + 1));
-      const order = item.querySelector(".provider-order");
-      if (order) order.textContent = `#${index + 1}`;
-      const enabled = item.querySelector(".provider-enabled")?.checked;
-      const isActive = item.dataset.providerId === modelActiveProviderId;
-      item.classList.toggle("is-disabled", !enabled);
-      item.classList.toggle("is-active-provider", isActive);
-      const activeRadio = item.querySelector(".provider-active");
-      if (activeRadio) activeRadio.checked = isActive;
-      const pool = item.querySelector(".provider-pool");
-      if (pool) {
-        if (isActive) pool.checked = true;
-        pool.disabled = !modelPoolEnabled || !enabled || isActive;
-        pool.title = isActive ? "默认提供商始终用于首选请求" : "决定是否进入轮询候选链";
-      }
-    });
-  }
-
-  function setModelPoolEnabled(enabled) {
-    modelPoolEnabled = Boolean(enabled);
-    updateModelRoutingSummary();
-  }
-
-  function setActiveProvider(id) {
-    if (!id) return;
-    modelActiveProviderId = String(id);
-    updateModelRoutingSummary();
-  }
-
-  function addProviderRow(provider = {}) {
-    const id = String(provider.id || `provider-${Date.now()}-${++modelProviderSequence}`);
-    const item = createElement("article", "model-provider-item");
-    item.dataset.providerId = id;
-    item.dataset.legacy = provider.legacy ? "true" : "false";
-    const heading = createElement("div", "model-provider-heading");
-    const providerOrder = createElement("span", "provider-order", "#");
-    const providerStatus = createElement("span", "provider-status-dot");
-    const enabledLabel = createElement("label", "settings-checkbox");
-    const enabled = document.createElement("input");
-    enabled.type = "checkbox";
-    enabled.checked = provider.enabled !== false;
-    enabled.className = "provider-enabled";
-    enabled.addEventListener("change", updateModelRoutingSummary);
-    enabledLabel.append(enabled, createElement("span", "", "启用"));
-    const activeLabel = createElement("label", "provider-choice provider-default-choice");
-    const activeRadio = document.createElement("input");
-    activeRadio.type = "radio";
-    activeRadio.name = "model-default-provider";
-    activeRadio.className = "provider-active";
-    activeRadio.value = id;
-    activeRadio.checked = modelActiveProviderId === id;
-    activeRadio.addEventListener("change", () => setActiveProvider(id));
-    activeLabel.append(activeRadio, createElement("span", "", "设为默认"));
-    const poolLabel = createElement("label", "provider-choice provider-pool-choice");
-    const pool = document.createElement("input");
-    pool.type = "checkbox";
-    pool.className = "provider-pool";
-    pool.checked = provider.poolExclude !== true;
-    pool.addEventListener("change", updateModelRoutingSummary);
-    poolLabel.append(pool, createElement("span", "", "参与轮询"));
-    const routingOptions = createElement("div", "provider-routing-options");
-    routingOptions.append(enabledLabel, activeLabel, poolLabel);
-    const name = document.createElement("input");
-    name.type = "text";
-    name.className = "provider-name";
-    name.maxLength = 128;
-    name.placeholder = "提供商名称";
-    name.value = String(provider.name || "");
-    name.addEventListener("input", updateModelRoutingSummary);
-    const remove = createElement("button", "model-provider-remove", "删除");
-    remove.type = "button";
-    remove.addEventListener("click", () => {
-      item.remove();
-      updateModelRoutingSummary();
-    });
-    const identity = createElement("div", "provider-identity");
-    identity.append(providerOrder, providerStatus, name);
-    heading.append(identity, routingOptions, remove);
-    if (!modelActiveProviderId) modelActiveProviderId = id;
-
-    const grid = createElement("div", "model-provider-grid");
-    const baseUrl = document.createElement("input");
-    baseUrl.type = "url";
-    baseUrl.className = "provider-base-url";
-    baseUrl.placeholder = "https://api.example.com/v1";
-    baseUrl.value = String(provider.baseUrl || "");
-    const protocol = document.createElement("select");
-    protocol.className = "provider-protocol";
-    [
-      ["openai-responses", "OpenAI Responses"],
-      ["openai-chat", "OpenAI Chat"],
-      ["anthropic", "Anthropic Messages"],
-    ].forEach(([value, label]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      protocol.append(option);
-    });
-    protocol.value = String(provider.protocol || "openai-chat");
-    const protocolWrap = createElement("span", "select-wrap");
-    protocolWrap.append(protocol, icon("chevron-down"));
-    const baseField = createElement("label", "provider-field");
-    baseField.append(createElement("span", "", "接口地址"), baseUrl);
-    const protocolField = createElement("label", "provider-field");
-    protocolField.append(createElement("span", "", "协议"), protocolWrap);
-    grid.append(baseField, protocolField);
-
-    const modelGrid = createElement("div", "model-provider-grid");
-    const picker = createElement("span", "model-picker");
-    const model = document.createElement("input");
-    model.type = "text";
-    model.className = "provider-model";
-    model.placeholder = "模型名称";
-    model.value = String(provider.model || "");
-    model.addEventListener("input", () => {
-      menu.hidden = true;
-    });
-    const fetchButton = createElement("button", "button button-ghost button-compact", "获取模型");
-    fetchButton.type = "button";
-    const menu = createElement("div", "model-options-menu model-provider-menu");
-    menu.hidden = true;
-    picker.append(model, fetchButton, menu);
-    const apiKey = document.createElement("input");
-    apiKey.type = "password";
-    apiKey.className = "provider-api-key";
-    apiKey.autocomplete = "new-password";
-    apiKey.placeholder = provider.apiKeyConfigured
-      ? `当前 Key：${provider.apiKeyMasked || "已配置"}（留空保持）`
-      : "API Key";
-    const modelField = createElement("label", "provider-field");
-    modelField.append(createElement("span", "", "模型"), picker);
-    const keyField = createElement("label", "provider-field");
-    keyField.append(createElement("span", "", "API Key"), apiKey);
-    modelGrid.append(modelField, keyField);
-    fetchButton.addEventListener("click", async () => {
-      const value = baseUrl.value.trim();
-      if (!value) {
-        setModelRoutingStatus("请先填写模型地址", "error");
-        return;
-      }
-      await withButton(fetchButton, async () => {
-        try {
-          const result = await request("/api/models", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              baseUrl: value,
-              apiKey: apiKey.value.trim() || undefined,
-              providerId: provider.apiKeyConfigured && !provider.legacy ? id : undefined,
-              protocol: protocol.value,
-              kind: "model",
-            }),
-          });
-          const models = Array.isArray(result.models) ? result.models : [];
-          if (!model.value.trim() && models.length === 1) model.value = models[0];
-          menu.replaceChildren();
-          models.forEach((name) => {
-            const option = createElement("button", "model-option", String(name));
-            option.type = "button";
-            option.addEventListener("click", () => {
-              model.value = String(name);
-              menu.hidden = true;
-            });
-            menu.append(option);
-          });
-          menu.hidden = models.length === 0;
-          setModelRoutingStatus(models.length ? `获取到 ${models.length} 个模型` : "没有可用模型", models.length ? "success" : "error");
-        } catch (error) {
-          setModelRoutingStatus(`获取模型失败：${error.message}`, "error");
-        }
+  function ensureModelRoutingController() {
+    if (!modelRoutingController) {
+      modelRoutingController = createModelRoutingController({
+        els,
+        request,
+        createElement,
+        icon,
+        refreshIcons,
+        withButton,
+        formatNumber,
+        showToast,
+        onConfigLoaded: fillRuntimeConfig,
       });
-    });
-    item.append(heading, grid, modelGrid);
-    els.modelProviderList.append(item);
-    updateModelRoutingSummary();
-  }
-
-  function collectModelProviders() {
-    return [...els.modelProviderList.querySelectorAll(".model-provider-item")].map((item) => {
-      const key = item.querySelector(".provider-api-key").value.trim();
-      const provider = {
-        id: item.dataset.providerId,
-        name: item.querySelector(".provider-name").value.trim(),
-        baseUrl: item.querySelector(".provider-base-url").value.trim(),
-        model: item.querySelector(".provider-model").value.trim(),
-        protocol: item.querySelector(".provider-protocol").value,
-        enabled: item.querySelector(".provider-enabled").checked,
-        poolExclude: item.dataset.providerId === modelActiveProviderId
-          ? false
-          : !item.querySelector(".provider-pool").checked,
-      };
-      if (key) provider.apiKey = key;
-      return provider;
-    });
+    }
+    return modelRoutingController;
   }
 
   function openModelRoutingPage(trigger = null) {
@@ -1031,93 +806,14 @@ import {
 
   async function loadModelRoutingPage(trigger = null) {
     openModelRoutingPage(trigger);
-    setModelRoutingStatus("正在读取配置…");
+    const controller = ensureModelRoutingController();
+    controller.setStatus("正在读取配置…");
     try {
       const config = await request("/api/config");
-      fillRuntimeConfig(config);
-      const providers = Array.isArray(config.modelProviders) ? config.modelProviders : [];
-      modelPoolEnabled = config.modelPoolEnabled !== false;
-      modelActiveProviderId = String(config.modelActiveProviderId || "");
-      els.modelProviderList.replaceChildren();
-      if (providers.length) providers.forEach(addProviderRow);
-      else if (config.modelBaseUrl && config.modelName) {
-        addProviderRow({
-          name: "默认提供商",
-          baseUrl: config.modelBaseUrl,
-          model: config.modelName,
-          protocol: config.modelProtocol || "openai-chat",
-          enabled: true,
-          legacy: true,
-          apiKeyConfigured: config.modelApiKeyConfigured,
-          apiKeyMasked: config.modelApiKeyMasked,
-        });
-      } else {
-        addProviderRow();
-      }
-      if (!modelActiveProviderId) {
-        modelActiveProviderId = [...els.modelProviderList.querySelectorAll(".model-provider-item")]
-          .find((item) => item.querySelector(".provider-enabled")?.checked)
-          ?.dataset.providerId || els.modelProviderList.querySelector(".model-provider-item")?.dataset.providerId || "";
-      }
-      setRoutingStrategy(config.modelRoutingStrategy || "round-robin");
-      els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
-      els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
-      els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
-      updateModelRoutingSummary();
-      setModelRoutingStatus("选择默认提供商，并按需开启轮询");
-      refreshIcons();
+      controller.load(config);
     } catch (error) {
-      setModelRoutingStatus(`读取配置失败：${error.message}`, "error");
+      controller.setStatus(`读取配置失败：${error.message}`, "error");
     }
-  }
-
-  async function saveModelRouting() {
-    const providers = collectModelProviders();
-    if (!providers.length) {
-      setModelRoutingStatus("至少添加一个模型提供商", "error");
-      return;
-    }
-    if (!modelActiveProviderId || !providers.some((provider) => provider.id === modelActiveProviderId)) {
-      setModelRoutingStatus("请选择一个默认提供商", "error");
-      return;
-    }
-    const delays = els.modelRetryDelays.value.split(",").map((item) => Number(item.trim())).filter((item) => Number.isFinite(item) && item >= 0);
-    if (!delays.length) {
-      setModelRoutingStatus("重试间隔格式无效", "error");
-      return;
-    }
-    await withButton(els.saveModelRouting, async () => {
-      setModelRoutingStatus("正在保存…");
-      try {
-        const config = await request("/api/config", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            modelProviders: providers,
-            modelActiveProviderId,
-            modelPoolEnabled,
-            modelRoutingStrategy,
-            modelRetryDelays: delays,
-            modelRecoveryInterval: Number(els.modelRecoveryInterval.value || 60),
-            codexAutoCompactTokenLimit: Number(els.codexAutoCompactTokenLimit.value || 500000),
-          }),
-        });
-        fillRuntimeConfig(config);
-        const savedProviders = Array.isArray(config.modelProviders) ? config.modelProviders : [];
-        modelActiveProviderId = String(config.modelActiveProviderId || modelActiveProviderId);
-        modelPoolEnabled = config.modelPoolEnabled !== false;
-        if (savedProviders.length) {
-          els.modelProviderList.replaceChildren();
-          savedProviders.forEach(addProviderRow);
-          refreshIcons();
-        }
-        setModelRoutingStatus("模型路由已保存并生效", "success");
-        updateModelRoutingSummary();
-        showToast("模型提供商与轮询策略已保存", "success");
-      } catch (error) {
-        setModelRoutingStatus(`保存失败：${error.message}`, "error");
-      }
-    });
   }
 
   function invalidatePlatformAuthCheck() {
@@ -5237,16 +4933,7 @@ import {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);
-      els.addModelProvider.addEventListener("click", () => {
-        addProviderRow();
-        refreshIcons();
-      });
-      els.modelPoolEnabled.addEventListener("change", () => setModelPoolEnabled(els.modelPoolEnabled.checked));
-      els.modelRecoveryInterval.addEventListener("input", updateModelRoutingSummary);
-      els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
-        button.addEventListener("click", () => setRoutingStrategy(button.dataset.routing || "round-robin"));
-      });
-      els.saveModelRouting.addEventListener("click", () => void saveModelRouting());
+      ensureModelRoutingController().bind();
       document.addEventListener("keydown", (event) => {
         if (event.key === "Escape" && !els.modelRoutingPage.hidden) closeModelRoutingPage();
       });
