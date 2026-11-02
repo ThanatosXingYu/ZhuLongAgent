@@ -621,6 +621,31 @@ def test_cache_retries_rate_limit_errors_wrapped_by_a_service() -> None:
     assert waits == [0.25]
 
 
+def test_cache_expires_after_configured_ttl() -> None:
+    class SourceStub:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def overview(self, _refresh: bool = False) -> Overview:
+            self.calls += 1
+            return Overview(float(self.calls), self.calls)
+
+    now = [0.0]
+    source = SourceStub()
+    cached = CachedService(
+        source,
+        cache_ttl=10,
+        clock=lambda: now[0],
+    )
+    assert cached.overview().stage_rank == 1
+    now[0] = 9.9
+    assert cached.overview().stage_rank == 1
+    assert source.calls == 1
+    now[0] = 10.0
+    assert cached.overview().stage_rank == 2
+    assert source.calls == 2
+
+
 def test_download_sanitizes_paths_and_inspects_content(tmp_path: Path) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802

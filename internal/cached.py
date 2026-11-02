@@ -22,6 +22,7 @@ from .ichunqiu_session import ImportedSession
 
 MAX_RATE_LIMIT_RETRIES = 5
 RETRY_BASE_DELAY = 0.250
+DEFAULT_CACHE_TTL_SECONDS = 30.0
 
 T = TypeVar("T")
 K = TypeVar("K")
@@ -84,17 +85,25 @@ class SourceProtocol(Protocol):
 
 
 class _ValueCache(Generic[T]):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        ttl: float = DEFAULT_CACHE_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._condition = threading.Condition()
+        self._ttl = max(0.0, float(ttl))
+        self._clock = clock
         self._value: T | None = None
         self._valid = False
+        self._expires_at = 0.0
         self._loading = False
         self._last_value: T | None = None
         self._last_error: BaseException | None = None
 
     def get(self, refresh: bool, load: Callable[[], T]) -> T:
         with self._condition:
-            if self._valid and not refresh:
+            if self._valid and not refresh and self._clock() < self._expires_at:
                 if self._value is None:
                     raise RuntimeError("cache value is unexpectedly empty")
                 return self._value
@@ -120,6 +129,7 @@ class _ValueCache(Generic[T]):
             self._value = value
             self._last_value = value
             self._valid = True
+            self._expires_at = self._clock() + self._ttl
             self._loading = False
             self._last_error = None
             self._condition.notify_all()
@@ -127,13 +137,22 @@ class _ValueCache(Generic[T]):
 
 
 class _KeyedCache(Generic[K, T]):
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        ttl: float = DEFAULT_CACHE_TTL_SECONDS,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
         self._lock = threading.Lock()
+        self._ttl = ttl
+        self._clock = clock
         self._items: dict[K, _ValueCache[T]] = {}
 
     def get(self, key: K, refresh: bool, load: Callable[[], T]) -> T:
         with self._lock:
-            slot = self._items.setdefault(key, _ValueCache[T]())
+            slot = self._items.setdefault(
+                key, _ValueCache[T](ttl=self._ttl, clock=self._clock)
+            )
         return slot.get(refresh, load)
 
 
@@ -141,18 +160,29 @@ class _KeyedCache(Generic[K, T]):
 class CachedService:
     source: SourceProtocol
     wait: Callable[[float], None] = time.sleep
+    cache_ttl: float = DEFAULT_CACHE_TTL_SECONDS
+    clock: Callable[[], float] = time.monotonic
 
     def __post_init__(self) -> None:
         self._cache_lock = threading.Lock()
         self._reset_caches()
 
     def _reset_caches(self) -> None:
-        self._match_info: _ValueCache[MatchInfo] = _ValueCache()
-        self._overview: _ValueCache[Overview] = _ValueCache()
-        self._exercises: _ValueCache[list[ExerciseGroup]] = _ValueCache()
-        self._exercise: _KeyedCache[int, ExerciseDetail] = _KeyedCache()
-        self._notices: _ValueCache[list[Notice]] = _ValueCache()
-        self._notice: _KeyedCache[int, NoticeDetail] = _KeyedCache()
+        ttl = max(0.0, float(self.cache_ttl))
+        self._match_info: _ValueCache[MatchInfo] = _ValueCache(
+            ttl=ttl, clock=self.clock
+        )
+        self._overview: _ValueCache[Overview] = _ValueCache(ttl=ttl, clock=self.clock)
+        self._exercises: _ValueCache[list[ExerciseGroup]] = _ValueCache(
+            ttl=ttl, clock=self.clock
+        )
+        self._exercise: _KeyedCache[int, ExerciseDetail] = _KeyedCache(
+            ttl=ttl, clock=self.clock
+        )
+        self._notices: _ValueCache[list[Notice]] = _ValueCache(ttl=ttl, clock=self.clock)
+        self._notice: _KeyedCache[int, NoticeDetail] = _KeyedCache(
+            ttl=ttl, clock=self.clock
+        )
 
     def invalidate(self) -> None:
         self.source.invalidate()
@@ -246,17 +276,17 @@ class CachedService:
     def build_environment(self, exercise_id: int) -> None:
         self.source.build_environment(exercise_id)
         with self._cache_lock:
-            self._exercise = _KeyedCache()
+            self._exercise = _KeyedCache(ttl=max(0.0, float(self.cache_ttl)), clock=self.clock)
 
     def recover_environment(self, exercise_id: int) -> None:
         self.source.recover_environment(exercise_id)
         with self._cache_lock:
-            self._exercise = _KeyedCache()
+            self._exercise = _KeyedCache(ttl=max(0.0, float(self.cache_ttl)), clock=self.clock)
 
     def renew_environment(self, exercise_id: int) -> None:
         self.source.renew_environment(exercise_id)
         with self._cache_lock:
-            self._exercise = _KeyedCache()
+            self._exercise = _KeyedCache(ttl=max(0.0, float(self.cache_ttl)), clock=self.clock)
 
     def notices(self, refresh: bool = False) -> list[Notice]:
         with self._cache_lock:

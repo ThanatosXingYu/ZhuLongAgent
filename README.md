@@ -133,6 +133,8 @@ API 端点和请求示例见 [`docs/api_doc.md`](docs/api_doc.md)。完成平台
 
 需要排查平台接口升级时，可读取 `GET /api/platform/schema` 查看字段诊断。接口只返回字段名、增删变化和时间，不返回 Token、手机号、Flag 或其他响应值。平台认证接口失败会统一返回 `AUTH_EXPIRED`，前端会停止成绩/公告自动刷新并提示重新登录；普通网络错误不会误判为登录过期。
 
+题目、题目详情、公告和比赛统计使用线程安全的内存缓存，默认 TTL 为 30 秒。缓存过期后自动重新读取平台数据；显式刷新、登录态变化、提交 Flag 和环境状态变化仍会立即失效相关缓存。
+
 ```bash
 .venv/bin/python scripts/submit_answer.py 17 'flag{example}'
 ```
