@@ -583,6 +583,41 @@ def test_codex_proxy_lists_configured_chat_models(tmp_path: Path) -> None:
     assert response.json()["data"][0]["id"] == "deepseek-v4.1-flash"
 
 
+def test_codex_proxy_prefers_active_chat_provider() -> None:
+    providers = [
+        {
+            "id": "primary",
+            "name": "Primary",
+            "baseUrl": "https://primary.example/v1",
+            "apiKey": "primary-key",
+            "model": "primary-model",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": False,
+        },
+        {
+            "id": "secondary",
+            "name": "Secondary",
+            "baseUrl": "https://secondary.example/v1",
+            "apiKey": "secondary-key",
+            "model": "secondary-model",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": False,
+        },
+    ]
+    config = Config(
+        model_providers_json=json.dumps(providers),
+        model_active_provider_id="secondary",
+        model_pool_enabled=False,
+    )
+
+    assert web_module._codex_chat_upstream(config) == (
+        "https://secondary.example/v1",
+        "secondary-key",
+    )
+
+
 def test_codex_proxy_streams_initial_heartbeat_and_response_events(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -2083,22 +2083,40 @@ def _codex_chat_upstream(config: Config) -> tuple[str, str]:
         providers = json.loads(config.model_providers_json or "[]")
     except json.JSONDecodeError:
         providers = []
-    enabled = [
+    chat_providers = [
         item
         for item in providers
         if isinstance(item, Mapping)
         and bool(item.get("enabled", True))
         and str(item.get("protocol", "") or "") == "openai-chat"
     ]
-    matching = next(
+    active = next(
         (
             item
-            for item in enabled
-            if str(item.get("model", "") or "") == config.codex_model
+            for item in chat_providers
+            if str(item.get("id", "") or "") == config.model_active_provider_id
         ),
         None,
     )
-    selected = matching or (enabled[0] if enabled else None)
+    pool_candidates = [
+        item for item in chat_providers if not bool(item.get("poolExclude", False))
+    ]
+    selected = active or (
+        pool_candidates[0]
+        if config.model_pool_enabled and pool_candidates
+        else None
+    )
+    if selected is None and not config.model_pool_enabled:
+        selected = chat_providers[0] if chat_providers else None
+    if selected is None:
+        selected = next(
+            (
+                item
+                for item in chat_providers
+                if str(item.get("model", "") or "") == config.codex_model
+            ),
+            chat_providers[0] if chat_providers else None,
+        )
     if isinstance(selected, Mapping):
         return (
             str(selected.get("baseUrl", "") or "").strip().rstrip("/"),
