@@ -102,7 +102,7 @@ Codex 默认最多同时运行 10 个任务；这里的 `10` 是同时运行的�
 
 浏览器统一连接 `GET /api/events` 接收 Codex、附件下载和工具安装事件。事件包含单调递增的 `id`、`type`、`resourceId`、UTC 时间和结构化 `data`；浏览器断线重连会携带 `Last-Event-ID`，服务端在回放窗口内续传缺失事件，超出窗口时发送 `stream.reset` 让页面用当前 API 快照校准。SSE 连接异常不会阻断业务接口，前端会先重连，连续失败后切换为低频轮询，恢复后再停止轮询。
 
-后端正在按清晰边界渐进拆分：`internal/events.py` 负责线程安全事件发布与回放，`internal/routers/realtime.py` 只负责 SSE HTTP 协议；原有 API 路径、请求体和响应格式保持兼容。前端以 `static/app.js` 为渐进迁移入口，`static/modules/api.js`、`state.js`、`dom.js` 和 `realtime.js` 分别承载 API 客户端、状态初始化、故障隔离/全局错误边界和 SSE 连接管理，避免继续把基础设施逻辑堆入单个文件。任一业务模块初始化失败时会在页面顶部指出模块、缺失元素 ID 与原因，并允许单独重试，不阻断其他模块和首屏数据加载。
+后端正在按清晰边界渐进拆分：`internal/events.py` 负责线程安全事件发布与回放，`internal/routers/realtime.py` 只负责 SSE HTTP 协议，`internal/codex_models.py` 和 `internal/codex_paths.py` 承载 Codex 进程模型、任务路径及格式化规则，`internal/workspace.py` 负责统一数据目录和旧路径迁移；原有 API 路径、请求体和响应格式保持兼容。前端以 `static/app.js` 为渐进迁移入口，`static/modules/api.js`、`state.js`、`dom.js`、`realtime.js`、`formatters.js` 和 `codex-presenters.js` 分别承载 API 客户端、状态初始化、故障隔离、SSE、通用格式化和 Codex 日志展示，避免继续把基础设施逻辑堆入单个文件。任一业务模块初始化失败时会在页面顶部指出模块、缺失元素 ID 与原因，并允许单独重试，不阻断其他模块和首屏数据加载。
 
 ## 数据目录
 
