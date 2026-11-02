@@ -404,6 +404,12 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await rows.nth(0).locator(".provider-base-url").fill("https://a.example/v1");
   await rows.nth(0).locator(".provider-model").fill("model-a");
   await rows.nth(0).locator(".provider-protocol").selectOption("anthropic");
+  await rows.nth(0).locator(".provider-active").check();
+  await expect(rows.nth(0)).toHaveClass(/is-active-provider/);
+  await expect(page.locator("#model-active-provider-name")).toHaveText("Provider A");
+  await page.locator(".model-pool-switch").click();
+  await expect(page.locator("#model-pool-state")).toHaveText("已关闭");
+  await page.locator(".model-pool-switch").click();
 
   await page.locator("#add-model-provider").click();
   await expect(rows).toHaveCount(2);
@@ -411,6 +417,7 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await rows.nth(1).locator(".provider-base-url").fill("https://b.example/v1");
   await rows.nth(1).locator(".provider-model").fill("model-b");
   await rows.nth(1).locator(".provider-protocol").selectOption("openai-responses");
+  await rows.nth(1).locator(".provider-pool").uncheck();
   await rows.nth(1).locator(".provider-enabled").uncheck();
   await expect(page.locator("#model-active-provider-count")).toHaveText("1");
   await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
@@ -421,8 +428,11 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator("#model-recovery-interval").fill("60");
   await expect(page.locator("#codex-auto-compact-limit")).toHaveValue("500000");
   await page.locator("#save-model-routing").click();
+  const activeProviderId = await rows.nth(0).getAttribute("data-provider-id");
 
   await expect.poll(() => requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body).toMatchObject({
+    modelActiveProviderId: activeProviderId,
+    modelPoolEnabled: true,
     modelRoutingStrategy: "failover",
     modelRetryDelays: [1, 5, 10, 10, 15],
     modelRecoveryInterval: 60,
@@ -430,8 +440,8 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   });
   const saved = requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body;
   expect(saved.modelProviders).toHaveLength(2);
-  expect(saved.modelProviders[0]).toMatchObject({ name: "Provider A", protocol: "anthropic", enabled: true });
-  expect(saved.modelProviders[1]).toMatchObject({ name: "Provider B", protocol: "openai-responses", enabled: false });
+  expect(saved.modelProviders[0]).toMatchObject({ name: "Provider A", protocol: "anthropic", enabled: true, poolExclude: false });
+  expect(saved.modelProviders[1]).toMatchObject({ name: "Provider B", protocol: "openai-responses", enabled: false, poolExclude: true });
   await expect(page.locator("#model-routing-status")).toContainText("已保存");
   await page.locator("#show-exercise-view").click();
   await expect(routingPage).toBeHidden();

@@ -56,6 +56,8 @@ class Config:
     model_name: str = ""
     model_protocol: str = DEFAULT_MODEL_PROTOCOL
     model_providers_json: str = "[]"
+    model_active_provider_id: str = ""
+    model_pool_enabled: bool = True
     model_routing_strategy: str = "round-robin"
     model_retry_delays: str = DEFAULT_MODEL_RETRY_DELAYS
     model_recovery_interval: int = DEFAULT_MODEL_RECOVERY_INTERVAL
@@ -129,6 +131,16 @@ class RuntimeConfigStore:
                 model_providers_json=_value(
                     values, "model_providers_json", current.model_providers_json
                 ),
+                model_active_provider_id=_value(
+                    values,
+                    "model_active_provider_id",
+                    current.model_active_provider_id,
+                ),
+                model_pool_enabled=_bool_value(
+                    values,
+                    "model_pool_enabled",
+                    current.model_pool_enabled,
+                ),
                 model_routing_strategy=_value(
                     values, "model_routing_strategy", current.model_routing_strategy
                 ),
@@ -191,6 +203,8 @@ class RuntimeConfigStore:
             "modelName": config.model_name,
             "modelProtocol": config.model_protocol,
             "modelProviders": _public_model_providers(config.model_providers_json),
+            "modelActiveProviderId": config.model_active_provider_id,
+            "modelPoolEnabled": config.model_pool_enabled,
             "modelRoutingStrategy": config.model_routing_strategy,
             "modelRetryDelays": _parse_retry_delays(config.model_retry_delays),
             "modelRecoveryInterval": config.model_recovery_interval,
@@ -246,6 +260,16 @@ class RuntimeConfigStore:
                 ),
                 model_providers_json=_persisted_value(
                     raw, "model_providers_json", current.model_providers_json
+                ),
+                model_active_provider_id=_persisted_value(
+                    raw,
+                    "model_active_provider_id",
+                    current.model_active_provider_id,
+                ),
+                model_pool_enabled=_persisted_bool(
+                    raw,
+                    "model_pool_enabled",
+                    current.model_pool_enabled,
                 ),
                 model_routing_strategy=_persisted_value(
                     raw,
@@ -353,7 +377,10 @@ def validate_runtime_config(config: Config) -> None:
         raise ConfigError("model_retry_delays is invalid")
     if not 10 <= config.model_recovery_interval <= 3600:
         raise ConfigError("model_recovery_interval is invalid")
-    _load_model_providers(config.model_providers_json)
+    providers = _load_model_providers(config.model_providers_json)
+    provider_ids = {str(provider["id"]) for provider in providers}
+    if config.model_active_provider_id and config.model_active_provider_id not in provider_ids:
+        raise ConfigError("model_active_provider_id is invalid")
     if config.model_base_url:
         _validate_http_url(config.model_base_url, "model baseurl")
     if not config.codex_base_url and config.codex_model:
@@ -523,6 +550,7 @@ def _load_model_providers(value: str) -> list[dict[str, Any]]:
         protocol = str(provider.get("protocol", "") or "").strip()
         api_key = str(provider.get("apiKey", "") or "")
         enabled = provider.get("enabled", True)
+        pool_exclude = provider.get("poolExclude", False)
         if (
             not provider_id
             or len(provider_id) > 64
@@ -534,6 +562,7 @@ def _load_model_providers(value: str) -> list[dict[str, Any]]:
             or protocol not in MODEL_PROTOCOLS
             or len(api_key) > 4096
             or not isinstance(enabled, bool)
+            or not isinstance(pool_exclude, bool)
         ):
             raise ConfigError("model_providers_json is invalid")
         _validate_http_url(base_url, "provider baseUrl")
@@ -547,6 +576,7 @@ def _load_model_providers(value: str) -> list[dict[str, Any]]:
                 "model": model,
                 "protocol": protocol,
                 "enabled": enabled,
+                "poolExclude": pool_exclude,
             }
         )
     if len(providers) > 16:

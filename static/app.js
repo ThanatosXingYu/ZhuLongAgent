@@ -76,6 +76,8 @@ import {
   let platformAuthEpoch = 0;
   let portablePlatformSession = "";
   let modelRoutingStrategy = "round-robin";
+  let modelActiveProviderId = "";
+  let modelPoolEnabled = true;
   let modelProviderSequence = 0;
   let modelRoutingTrigger = null;
   let codexTaskTrigger = null;
@@ -165,6 +167,10 @@ import {
     modelRoutingPage: $("model-routing-page"),
     modelActiveProviderCount: $("model-active-provider-count"),
     modelTotalProviderCount: $("model-total-provider-count"),
+    modelActiveProviderName: $("model-active-provider-name"),
+    modelPoolEnabled: $("model-pool-enabled"),
+    modelPoolState: $("model-pool-state"),
+    modelPoolParticipantCount: $("model-pool-participant-count"),
     modelStrategySummary: $("model-strategy-summary"),
     modelRecoverySummary: $("model-recovery-summary"),
     modelProviderList: $("model-provider-list"),
@@ -763,8 +769,23 @@ import {
     const providers = [...els.modelProviderList.querySelectorAll(".model-provider-item")];
     const active = providers.filter((item) => item.querySelector(".provider-enabled")?.checked).length;
     const total = providers.length;
+    const activeItem = providers.find((item) => item.dataset.providerId === modelActiveProviderId);
+    const participants = providers.filter((item) => {
+      if (!item.querySelector(".provider-enabled")?.checked) return false;
+      return item.dataset.providerId === modelActiveProviderId || item.querySelector(".provider-pool")?.checked;
+    }).length;
     if (els.modelActiveProviderCount) els.modelActiveProviderCount.textContent = formatNumber(active);
     if (els.modelTotalProviderCount) els.modelTotalProviderCount.textContent = `共 ${formatNumber(total)} 个`;
+    if (els.modelActiveProviderName) {
+      els.modelActiveProviderName.textContent = activeItem?.querySelector(".provider-name")?.value.trim() || "未选择";
+    }
+    if (els.modelPoolEnabled) els.modelPoolEnabled.checked = modelPoolEnabled;
+    if (els.modelPoolState) els.modelPoolState.textContent = modelPoolEnabled ? "已开启" : "已关闭";
+    if (els.modelPoolParticipantCount) {
+      els.modelPoolParticipantCount.textContent = modelPoolEnabled
+        ? `${formatNumber(participants)} 个参与项`
+        : "仅使用默认提供商";
+    }
     if (els.modelStrategySummary) {
       els.modelStrategySummary.textContent = modelRoutingStrategy === "failover" ? "故障转移" : "每次轮询";
     }
@@ -775,11 +796,30 @@ import {
       item.style.setProperty("--provider-index", String(index + 1));
       const order = item.querySelector(".provider-order");
       if (order) order.textContent = `#${index + 1}`;
-      item.classList.toggle(
-        "is-disabled",
-        !item.querySelector(".provider-enabled")?.checked,
-      );
+      const enabled = item.querySelector(".provider-enabled")?.checked;
+      const isActive = item.dataset.providerId === modelActiveProviderId;
+      item.classList.toggle("is-disabled", !enabled);
+      item.classList.toggle("is-active-provider", isActive);
+      const activeRadio = item.querySelector(".provider-active");
+      if (activeRadio) activeRadio.checked = isActive;
+      const pool = item.querySelector(".provider-pool");
+      if (pool) {
+        if (isActive) pool.checked = true;
+        pool.disabled = !modelPoolEnabled || !enabled || isActive;
+        pool.title = isActive ? "默认提供商始终用于首选请求" : "决定是否进入轮询候选链";
+      }
     });
+  }
+
+  function setModelPoolEnabled(enabled) {
+    modelPoolEnabled = Boolean(enabled);
+    updateModelRoutingSummary();
+  }
+
+  function setActiveProvider(id) {
+    if (!id) return;
+    modelActiveProviderId = String(id);
+    updateModelRoutingSummary();
   }
 
   function addProviderRow(provider = {}) {
@@ -797,12 +837,31 @@ import {
     enabled.className = "provider-enabled";
     enabled.addEventListener("change", updateModelRoutingSummary);
     enabledLabel.append(enabled, createElement("span", "", "启用"));
+    const activeLabel = createElement("label", "provider-choice provider-default-choice");
+    const activeRadio = document.createElement("input");
+    activeRadio.type = "radio";
+    activeRadio.name = "model-default-provider";
+    activeRadio.className = "provider-active";
+    activeRadio.value = id;
+    activeRadio.checked = modelActiveProviderId === id;
+    activeRadio.addEventListener("change", () => setActiveProvider(id));
+    activeLabel.append(activeRadio, createElement("span", "", "设为默认"));
+    const poolLabel = createElement("label", "provider-choice provider-pool-choice");
+    const pool = document.createElement("input");
+    pool.type = "checkbox";
+    pool.className = "provider-pool";
+    pool.checked = provider.poolExclude !== true;
+    pool.addEventListener("change", updateModelRoutingSummary);
+    poolLabel.append(pool, createElement("span", "", "参与轮询"));
+    const routingOptions = createElement("div", "provider-routing-options");
+    routingOptions.append(enabledLabel, activeLabel, poolLabel);
     const name = document.createElement("input");
     name.type = "text";
     name.className = "provider-name";
     name.maxLength = 128;
     name.placeholder = "提供商名称";
     name.value = String(provider.name || "");
+    name.addEventListener("input", updateModelRoutingSummary);
     const remove = createElement("button", "model-provider-remove", "删除");
     remove.type = "button";
     remove.addEventListener("click", () => {
@@ -811,7 +870,8 @@ import {
     });
     const identity = createElement("div", "provider-identity");
     identity.append(providerOrder, providerStatus, name);
-    heading.append(identity, enabledLabel, remove);
+    heading.append(identity, routingOptions, remove);
+    if (!modelActiveProviderId) modelActiveProviderId = id;
 
     const grid = createElement("div", "model-provider-grid");
     const baseUrl = document.createElement("input");
@@ -920,6 +980,9 @@ import {
         model: item.querySelector(".provider-model").value.trim(),
         protocol: item.querySelector(".provider-protocol").value,
         enabled: item.querySelector(".provider-enabled").checked,
+        poolExclude: item.dataset.providerId === modelActiveProviderId
+          ? false
+          : !item.querySelector(".provider-pool").checked,
       };
       if (key) provider.apiKey = key;
       return provider;
@@ -973,6 +1036,8 @@ import {
       const config = await request("/api/config");
       fillRuntimeConfig(config);
       const providers = Array.isArray(config.modelProviders) ? config.modelProviders : [];
+      modelPoolEnabled = config.modelPoolEnabled !== false;
+      modelActiveProviderId = String(config.modelActiveProviderId || "");
       els.modelProviderList.replaceChildren();
       if (providers.length) providers.forEach(addProviderRow);
       else if (config.modelBaseUrl && config.modelName) {
@@ -989,12 +1054,17 @@ import {
       } else {
         addProviderRow();
       }
+      if (!modelActiveProviderId) {
+        modelActiveProviderId = [...els.modelProviderList.querySelectorAll(".model-provider-item")]
+          .find((item) => item.querySelector(".provider-enabled")?.checked)
+          ?.dataset.providerId || els.modelProviderList.querySelector(".model-provider-item")?.dataset.providerId || "";
+      }
       setRoutingStrategy(config.modelRoutingStrategy || "round-robin");
       els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
       els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
       els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
       updateModelRoutingSummary();
-      setModelRoutingStatus("勾选参与轮询的提供商");
+      setModelRoutingStatus("选择默认提供商，并按需开启轮询");
       refreshIcons();
     } catch (error) {
       setModelRoutingStatus(`读取配置失败：${error.message}`, "error");
@@ -1005,6 +1075,10 @@ import {
     const providers = collectModelProviders();
     if (!providers.length) {
       setModelRoutingStatus("至少添加一个模型提供商", "error");
+      return;
+    }
+    if (!modelActiveProviderId || !providers.some((provider) => provider.id === modelActiveProviderId)) {
+      setModelRoutingStatus("请选择一个默认提供商", "error");
       return;
     }
     const delays = els.modelRetryDelays.value.split(",").map((item) => Number(item.trim())).filter((item) => Number.isFinite(item) && item >= 0);
@@ -1020,6 +1094,8 @@ import {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             modelProviders: providers,
+            modelActiveProviderId,
+            modelPoolEnabled,
             modelRoutingStrategy,
             modelRetryDelays: delays,
             modelRecoveryInterval: Number(els.modelRecoveryInterval.value || 60),
@@ -1028,6 +1104,8 @@ import {
         });
         fillRuntimeConfig(config);
         const savedProviders = Array.isArray(config.modelProviders) ? config.modelProviders : [];
+        modelActiveProviderId = String(config.modelActiveProviderId || modelActiveProviderId);
+        modelPoolEnabled = config.modelPoolEnabled !== false;
         if (savedProviders.length) {
           els.modelProviderList.replaceChildren();
           savedProviders.forEach(addProviderRow);
@@ -5155,7 +5233,7 @@ import {
   }
 
   function bindModelRoutingEvents() {
-    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "model-retry-delays", "model-recovery-interval", "codex-auto-compact-limit", "model-routing-status", "save-model-routing"], () => {
+    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "model-pool-enabled", "add-model-provider", "model-retry-delays", "model-recovery-interval", "codex-auto-compact-limit", "model-routing-status", "save-model-routing"], () => {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);
@@ -5163,6 +5241,7 @@ import {
         addProviderRow();
         refreshIcons();
       });
+      els.modelPoolEnabled.addEventListener("change", () => setModelPoolEnabled(els.modelPoolEnabled.checked));
       els.modelRecoveryInterval.addEventListener("input", updateModelRoutingSummary);
       els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
         button.addEventListener("click", () => setRoutingStrategy(button.dataset.routing || "round-robin"));

@@ -243,6 +243,7 @@ class ModelProviderPatch(BaseModel):
     model: str = Field(min_length=1, max_length=256)
     protocol: Literal["openai-responses", "openai-chat", "anthropic"]
     enabled: bool = True
+    pool_exclude: bool = Field(default=False, alias="poolExclude")
 
 
 class RuntimeConfigPatch(BaseModel):
@@ -261,6 +262,12 @@ class RuntimeConfigPatch(BaseModel):
     ] | None = Field(default=None, alias="modelProtocol")
     model_providers: list[ModelProviderPatch] | None = Field(
         default=None, alias="modelProviders", max_length=16
+    )
+    model_active_provider_id: str | None = Field(
+        default=None, alias="modelActiveProviderId", max_length=64
+    )
+    model_pool_enabled: bool | None = Field(
+        default=None, alias="modelPoolEnabled"
     )
     model_routing_strategy: Literal["round-robin", "failover"] | None = Field(
         default=None, alias="modelRoutingStrategy"
@@ -2226,6 +2233,7 @@ def _runtime_patch_values(
                     "model": str(provider_data.get("model", "") or ""),
                     "protocol": protocol,
                     "enabled": bool(provider_data.get("enabled", True)),
+                    "poolExclude": bool(provider_data.get("pool_exclude", False)),
                 }
             )
         values["model_providers_json"] = json.dumps(

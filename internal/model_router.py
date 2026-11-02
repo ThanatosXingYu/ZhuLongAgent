@@ -19,6 +19,7 @@ class _ProviderState:
     model: str
     client: OpenAIClient
     enabled: bool
+    pool_exclude: bool = False
     unavailable_until: float = 0.0
     last_error: str = ""
 
@@ -37,6 +38,8 @@ class ModelRouter:
         self._sleep = sleep
         self._now = now
         self._providers: list[_ProviderState] = []
+        self._active_provider_id = ""
+        self._pool_enabled = True
         self._strategy = "round-robin"
         self._delays: list[float] = []
         self._recovery_seconds = 60
@@ -74,11 +77,26 @@ class ModelRouter:
                         str(item["model"]),
                         client,
                         bool(item.get("enabled", True)),
+                        bool(item.get("poolExclude", False)),
                         old.unavailable_until if old is not None else 0.0,
                         old.last_error if old is not None else "",
                     )
                 )
             self._providers = states
+            selected_ids = {provider.provider_id for provider in states}
+            self._active_provider_id = (
+                config.model_active_provider_id
+                if config.model_active_provider_id in selected_ids
+                else next(
+                    (
+                        provider.provider_id
+                        for provider in states
+                        if provider.enabled
+                    ),
+                    "",
+                )
+            )
+            self._pool_enabled = config.model_pool_enabled
             self._strategy = config.model_routing_strategy
             self._delays = [
                 float(value.strip())
@@ -91,7 +109,7 @@ class ModelRouter:
 
     def enabled(self) -> bool:
         with self._lock:
-            return any(provider.enabled for provider in self._providers)
+            return bool(self._eligible_providers())
 
     def complete(
         self, _model: str, messages: list[Message], tools: list[Tool] | None = None
@@ -100,7 +118,7 @@ class ModelRouter:
             now = self._now()
             available = [
                 provider
-                for provider in self._providers
+                for provider in self._eligible_providers()
                 if provider.enabled and provider.unavailable_until <= now
             ]
             if not available:
@@ -165,10 +183,59 @@ class ModelRouter:
 
     def _ordered_providers(self, available: list[_ProviderState]) -> list[_ProviderState]:
         if self._strategy == "failover":
-            return available
+            active = [
+                provider
+                for provider in available
+                if provider.provider_id == self._active_provider_id
+            ]
+            return active + [
+                provider
+                for provider in available
+                if provider.provider_id != self._active_provider_id
+            ]
         start = self._cursor % len(available)
         self._cursor = (start + 1) % len(available)
         return available[start:] + available[:start]
+
+    def _eligible_providers(self) -> list[_ProviderState]:
+        if not self._pool_enabled:
+            return [
+                provider
+                for provider in self._providers
+                if provider.provider_id == self._active_provider_id
+            ]
+        return [
+            provider
+            for provider in self._providers
+            if provider.provider_id == self._active_provider_id
+            or not provider.pool_exclude
+        ]
+
+    def status(self) -> dict[str, Any]:
+        with self._lock:
+            now = self._now()
+            return {
+                "activeProviderId": self._active_provider_id,
+                "poolEnabled": self._pool_enabled,
+                "strategy": self._strategy,
+                "providers": [
+                    {
+                        "id": provider.provider_id,
+                        "name": provider.name,
+                        "enabled": provider.enabled,
+                        "poolExclude": provider.pool_exclude,
+                        "isActive": provider.provider_id == self._active_provider_id,
+                        "available": provider.enabled
+                        and provider.unavailable_until <= now
+                        and provider in self._eligible_providers(),
+                        "cooldownSeconds": max(
+                            0, int(provider.unavailable_until - now)
+                        ),
+                        "lastError": provider.last_error,
+                    }
+                    for provider in self._providers
+                ],
+            }
 
     def _mark_unavailable(self, provider: _ProviderState) -> None:
         provider.unavailable_until = self._now() + self._recovery_seconds

@@ -122,6 +122,20 @@ X-GCSIS-Action: tools-manager
     "platformTokenConfigured": true,
     "modelBaseUrl": "https://model.example.test/v1",
     "modelName": "solver-model",
+    "modelActiveProviderId": "provider-a",
+    "modelPoolEnabled": true,
+    "modelProviders": [
+      {
+        "id": "provider-a",
+        "name": "Primary",
+        "baseUrl": "https://model.example.test/v1",
+        "model": "solver-model",
+        "protocol": "openai-chat",
+        "enabled": true,
+        "poolExclude": false,
+        "apiKeyConfigured": true
+      }
+    ],
     "modelApiKeyConfigured": true,
     "codexBaseUrl": "https://codex.example.test/v1",
     "codexModel": "codex-model",
@@ -143,6 +157,20 @@ X-GCSIS-Action: tools-manager
   "modelBaseUrl": "https://model.example.test/v1",
   "modelName": "solver-model",
   "modelApiKey": "example-model-key",
+  "modelActiveProviderId": "provider-a",
+  "modelPoolEnabled": true,
+  "modelProviders": [
+    {
+      "id": "provider-a",
+      "name": "Primary",
+      "baseUrl": "https://model.example.test/v1",
+      "apiKey": "example-model-key",
+      "model": "solver-model",
+      "protocol": "openai-chat",
+      "enabled": true,
+      "poolExclude": false
+    }
+  ],
   "codexBaseUrl": "https://codex.example.test/v1",
   "codexModel": "codex-model",
   "codexApiKey": "example-codex-key",
@@ -150,7 +178,7 @@ X-GCSIS-Action: tools-manager
 }
 ```
 
-字段可以省略；省略的敏感字段保持原值。传入空字符串会清空对应值。`codexMaxConcurrency` 允许 `1` 到 `16`，默认值为 `10`；超过并发上限的 Codex 任务会进入队列，正在运行的任务不会被暂停或取消。`codexCtfSkillsEnabled` 默认为 `true`，用于启用或关闭项目内置 CTF 技能包。比赛地址和登录态必须使用平台接口修改，不能通过此接口写入。
+字段可以省略；省略的敏感字段保持原值。传入空字符串会清空对应值。`modelActiveProviderId` 指定唯一默认提供商，`modelPoolEnabled=false` 时只使用默认项；提供商的 `poolExclude=true` 表示仍可配置但不会进入轮询候选链。`codexMaxConcurrency` 允许 `1` 到 `16`，默认值为 `10`；超过并发上限的 Codex 任务会进入队列，正在运行的任务不会被暂停或取消。`codexCtfSkillsEnabled` 默认为 `true`，用于启用或关闭项目内置 CTF 技能包。比赛地址和登录态必须使用平台接口修改，不能通过此接口写入。
 
 ## 比赛绑定与登录
 

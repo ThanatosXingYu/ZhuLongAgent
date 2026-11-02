@@ -462,6 +462,7 @@ def test_runtime_config_accepts_multi_provider_routing_without_echoing_keys(
                         "model": "model-a",
                         "protocol": "openai-chat",
                         "enabled": True,
+                        "poolExclude": False,
                     },
                     {
                         "id": "provider-b",
@@ -471,8 +472,11 @@ def test_runtime_config_accepts_multi_provider_routing_without_echoing_keys(
                         "model": "model-b",
                         "protocol": "anthropic",
                         "enabled": False,
+                        "poolExclude": True,
                     },
                 ],
+                "modelActiveProviderId": "provider-a",
+                "modelPoolEnabled": False,
                 "modelRoutingStrategy": "failover",
                 "modelRetryDelays": [1, 5, 10, 10, 15],
                 "modelRecoveryInterval": 60,
@@ -498,9 +502,14 @@ def test_runtime_config_accepts_multi_provider_routing_without_echoing_keys(
     assert kept.status_code == 200
     data = response.json()["data"]
     assert data["modelRoutingStrategy"] == "failover"
+    assert data["modelActiveProviderId"] == "provider-a"
+    assert data["modelPoolEnabled"] is False
     assert data["modelRetryDelays"] == [1, 5, 10, 10, 15]
     assert len(data["modelProviders"]) == 2
     assert data["modelProviders"][0]["apiKeyConfigured"] is True
+    assert data["modelProviders"][1]["poolExclude"] is True
+    assert store.get().model_active_provider_id == "provider-a"
+    assert store.get().model_pool_enabled is False
     assert "secret-a" not in response.text
     persisted = path.read_text(encoding="utf-8")
     assert "secret-a" in persisted

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -38,6 +39,7 @@ def _config(strategy: str = "round-robin") -> Config:
             "model": "model-a",
             "protocol": "openai-chat",
             "enabled": True,
+            "poolExclude": False,
         },
         {
             "id": "b",
@@ -47,10 +49,13 @@ def _config(strategy: str = "round-robin") -> Config:
             "model": "model-b",
             "protocol": "anthropic",
             "enabled": True,
+            "poolExclude": False,
         },
     ]
     return Config(
         model_providers_json=json.dumps(providers),
+        model_active_provider_id="a",
+        model_pool_enabled=True,
         model_routing_strategy=strategy,
         model_retry_delays="1,2",
         model_recovery_interval=60,
@@ -131,3 +136,29 @@ def test_model_router_restarts_retry_delays_for_each_provider() -> None:
         router.complete("auto", [Message("user", "solve")])
 
     assert sleeps == [1.0, 2.0, 2.0, 1.0, 2.0]
+
+
+def test_model_router_pool_disabled_uses_only_active_provider() -> None:
+    config = replace(_config("failover"), model_pool_enabled=False)
+    router = ModelRouter(config, sleep=lambda _seconds: None)
+    active = FakeClient("active")
+    excluded = FakeClient("fallback")
+    router._providers[0].client = active  # type: ignore[assignment]
+    router._providers[1].client = excluded  # type: ignore[assignment]
+
+    assert router.complete("auto", [Message("user", "solve")]).content == "active"
+    assert active.calls == 1
+    assert excluded.calls == 0
+
+
+def test_model_router_skips_provider_excluded_from_pool() -> None:
+    router = ModelRouter(_config("failover"), sleep=lambda _seconds: None)
+    router._providers[0].client = FakeClient(RuntimeError("primary down"))  # type: ignore[assignment]
+    fallback = FakeClient("fallback")
+    router._providers[1].client = fallback  # type: ignore[assignment]
+    router._providers[1].pool_exclude = True
+
+    with pytest.raises(RuntimeError, match="所有模型提供商均失败"):
+        router.complete("auto", [Message("user", "solve")])
+
+    assert fallback.calls == 0

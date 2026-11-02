@@ -2412,3 +2412,82 @@ dialog.is-page-dialog .dialog-header,
   width: 100%;
   min-width: 0;
 }
+
+/* Model routing */
+.model-routing-overview {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.model-routing-metric { min-width: 0; }
+.model-routing-metric strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.model-routing-control-strip {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin: 4px 0 2px;
+  padding: 12px 14px;
+  background: #f5f8f6;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.model-routing-control-strip > div { min-width: 0; }
+.model-routing-control-strip h3 { margin: 0; font-size: 13px; font-weight: 760; }
+.model-routing-control-strip p { margin: 3px 0 0; color: var(--text-muted); font-size: 11px; }
+.model-pool-switch { flex: 0 0 auto; color: var(--text); }
+.model-provider-heading {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+}
+.provider-routing-options {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 7px 11px;
+}
+.provider-choice {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+.provider-choice input { margin: 0; accent-color: var(--brand); }
+.provider-choice:has(input:disabled) { opacity: 0.5; }
+.model-provider-item.is-active-provider {
+  background: #fbfefc;
+  border-color: #9fcdb8;
+  box-shadow: 0 0 0 2px rgba(23, 107, 80, 0.08);
+}
+.model-provider-item.is-active-provider::before {
+  position: absolute;
+  top: 12px;
+  left: -1px;
+  bottom: 12px;
+  width: 3px;
+  background: var(--brand);
+  border-radius: 0 3px 3px 0;
+  content: "";
+}
+.model-provider-item.is-disabled .provider-pool-choice { opacity: 0.45; }
+
+@media (max-width: 1100px) {
+  .model-routing-overview { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 760px) {
+  .model-routing-overview { grid-template-columns: 1fr; }
+  .model-routing-control-strip { align-items: flex-start; flex-direction: column; gap: 10px; }
+  .model-provider-heading { grid-template-columns: minmax(0, 1fr) auto; }
+  .provider-routing-options { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
+}
