@@ -686,6 +686,71 @@ test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
   await expect(page.locator(".active-environment-item")).toContainText("可续期 1/3 次");
 });
 
+test("容器准备轮询遇到临时错误会退避后继续", async ({ page }) => {
+  const pageErrors = [];
+  page.on("pageerror", (error) => pageErrors.push(error.message));
+  let started = false;
+  let pollAttempts = 0;
+  await openWorkbench(page, {
+    handler: async ({ route, request, url }) => {
+      if (url.pathname === "/api/exercises/1/environment/start" && request.method() === "POST") {
+        started = true;
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({ accepted: true })),
+        });
+        return true;
+      }
+      if (url.pathname === "/api/exercises/1" && request.method() === "GET" && started) {
+        pollAttempts += 1;
+        if (pollAttempts === 1) {
+          await route.fulfill({
+            status: 503,
+            contentType: "application/json",
+            body: JSON.stringify({ error: { code: "TEMPORARY_UNAVAILABLE", message: "临时网络错误" } }),
+          });
+          return true;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(success({
+            id: 1,
+            name: "Cold Forge",
+            category: "Pwn",
+            description: "Cold Forge detail",
+            attachment: { files: [] },
+            endpointType: "docker",
+            isNeedInit: false,
+            isNeedCheck: false,
+            endpoints: [{
+              exposeIps: ["10.0.0.8"],
+              ports: ["8080"],
+              users: [],
+              portMappings: [],
+              proxyIps: [],
+              isProxy: false,
+              expireTime: Date.now() + 55 * 60 * 1000,
+            }],
+            renewRemaining: 2,
+            renewLimit: 3,
+          })),
+        });
+        return true;
+      }
+      return false;
+    },
+  });
+
+  await page.locator(".exercise-item", { hasText: "Cold Forge" }).click();
+  await page.locator("#environment-action button", { hasText: "启动容器" }).click();
+  await expect(page.locator(".toast.success", { hasText: "环境启动请求已提交" })).toBeVisible();
+  await expect(page.locator(".toast.success", { hasText: "容器已就绪" })).toBeVisible({ timeout: 10000 });
+  expect(pollAttempts).toBeGreaterThanOrEqual(2);
+  expect(pageErrors).toEqual([]);
+});
+
 test("Codex 会话树按页加载并显示总数", async ({ page }) => {
   const tasks = Array.from({ length: 75 }, (_, index) => task({
     id: `task-${index + 1}`,

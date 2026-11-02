@@ -34,7 +34,8 @@ import {
   const SCORE_REFRESH_MS = 5000;
   const NOTICE_REFRESH_MS = 10000;
   const BUILD_POLL_MS = 2000;
-  const BUILD_POLL_TIMEOUT_MS = 60000;
+  const BUILD_POLL_MAX_MS = 10000;
+  const BUILD_POLL_TIMEOUT_MS = 180000;
   const FALLBACK_POLL_MS = 10000;
   const PLATFORM_ACTION_TIMEOUT_MS = 15000;
   // Legacy cadence names remain for compatibility; SSE/fallback paths use FALLBACK_POLL_MS.
@@ -3277,7 +3278,7 @@ import {
         }
         renderDetail();
         showToast("环境启动请求已提交", "success");
-        pollEnvironment(id, token);
+        void pollEnvironment(id, token);
       } catch (error) {
         showToast(`启动失败：${error.message}`, "error");
       }
@@ -3403,13 +3404,25 @@ import {
 
   async function pollEnvironment(id, token) {
     const deadline = Date.now() + BUILD_POLL_TIMEOUT_MS;
+    let delayMs = BUILD_POLL_MS;
+    let consecutiveFailures = 0;
     while (Date.now() < deadline) {
-      await delay(BUILD_POLL_MS);
-      if (!state.trackedEnvironmentIds.has(id)) return;
-      const detail = await fetchExerciseDetail(id, { refresh: true, observe: true, silent: true });
-      if (!detail) {
+      await delay(delayMs);
+      if (token !== state.pollToken || !state.trackedEnvironmentIds.has(id)) return;
+      let detail = null;
+      try {
+        detail = await fetchExerciseDetail(id, { refresh: true, observe: true, silent: true });
+      } catch (error) {
+        consecutiveFailures += 1;
+        delayMs = Math.min(BUILD_POLL_MAX_MS, delayMs * 2);
+        if (consecutiveFailures === 3 && state.selectedExerciseId === id) {
+          showToast(`容器状态暂时读取失败，正在自动重试：${error.message}`, "warning");
+        }
         continue;
       }
+      if (token !== state.pollToken) return;
+      consecutiveFailures = 0;
+      delayMs = BUILD_POLL_MS;
       if (state.selectedExerciseId === id) {
         state.detail = detail;
         renderDetail();
