@@ -175,7 +175,7 @@ class ToolManager:
     ) -> None:
         self.workspace = workspace.resolve()
         self.root = self.workspace / "tools"
-        self.data_root = Path(data_root or self.workspace / "workbench-data")
+        self.data_root = Path(data_root or self.workspace / "work")
         self.cache_root = self.data_root / "cache" / "tools"
         self.tmp_root = self.data_root / "cache" / "tools-tmp"
         self.manifest_path = self.root / "installed-tools.txt"

@@ -145,7 +145,7 @@ class SolverService:
         self.download_root = (
             Path(download_root)
             if download_root
-            else self.workspace_root / "workbench-data" / "download"
+            else self.workspace_root / "work" / "download"
         )
 
     def configure_model(self, model: ModelProtocol | None, model_name: str) -> None:
@@ -418,7 +418,7 @@ def render_tool_block(workspace_root: Path) -> str:
         f"Python 工具虚拟环境是 `{tools_root / 'venv'}`，命令行工具目录是 `{tools_root / 'bin'}`。\n"
         f"工具清单文件是 `{manifest}`；如果文件存在，请先阅读它获取当前已安装工具、入口路径和基本用法。\n"
         f"内置字典目录是 `{tools_root / 'dictionaries'}`；需要授权的口令审计或候选值分析时可按需读取其中的文本文件，不要复制到系统目录，也不要把字典内容写入 WP。\n"
-        f"本题工作目录通常是附件路径所在的目录（例如 `{workspace_root / 'workbench-data' / 'download'}` 下对应题目目录）；新建脚本、解压文件和临时文件都放在该目录。\n"
+        f"本题工作目录通常是附件路径所在的目录（例如 `{workspace_root / 'work' / 'download'}` 下对应题目目录）；新建脚本、解压文件和临时文件都放在该目录。\n"
         "使用工具前先检查对应路径和命令是否存在；不要把工具安装到系统目录，也不要修改与本题无关的文件。\n"
         "禁止运行上游技能包中的 `scripts/install_ctf_tools.sh`，也禁止执行会写入系统目录的 `apt`、`brew`、`gem`、`go install`、`cargo install` 等安装命令。缺少工具时，优先等待用户在本工作台工具管理中安装；确需临时使用时，只能将可信来源的便携归档或脚本下载、解压到本题工作目录。\n"
         "禁止直接调用 Docker CLI 或修改 Docker；题目环境只能通过本地 Web API 操作。\n\n"
@@ -446,7 +446,7 @@ def render_exercise_block(
         challenge_dir = workspace_root / Path(data.attachments[0].path).parent
     else:
         selected_download_root = Path(
-            download_root or workspace_root / "workbench-data" / "download"
+            download_root or workspace_root / "work" / "download"
         )
         if not selected_download_root.is_absolute():
             selected_download_root = workspace_root / selected_download_root

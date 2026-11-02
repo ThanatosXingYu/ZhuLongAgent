@@ -25,7 +25,7 @@ class WorkspaceLayout:
 
 def prepare_workspace_layout(workspace: str | Path) -> WorkspaceLayout:
     root = Path(workspace).resolve()
-    data_root = root / "workbench-data"
+    data_root = root / "work"
     layout = WorkspaceLayout(
         root=root,
         data_root=data_root,
@@ -36,6 +36,7 @@ def prepare_workspace_layout(workspace: str | Path) -> WorkspaceLayout:
         cache=data_root / "cache",
     )
     data_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    _migrate_directory(root / "workbench-data", data_root)
     _migrate_directory(root / "runtime", layout.runtime)
     _migrate_directory(root / "download", layout.download)
     _migrate_directory(root / "writeups", layout.writeups)

@@ -10,12 +10,12 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["temp/tests"]
+testpaths = ["tests/python"]
 pythonpath = ["."]
-cache_dir = "workbench-data/cache/pytest"
+cache_dir = "work/cache/pytest"
 
 [tool.mypy]
-cache_dir = "workbench-data/cache/mypy"
+cache_dir = "work/cache/mypy"
 
 [tool.ruff]
-cache-dir = "workbench-data/cache/ruff"
+cache-dir = "work/cache/ruff"

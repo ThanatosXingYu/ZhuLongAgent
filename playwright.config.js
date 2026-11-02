@@ -6,7 +6,7 @@ export default defineConfig({
   expect: { timeout: 8_000 },
   fullyParallel: false,
   workers: 1,
-  outputDir: "./workbench-data/test-results",
+  outputDir: "./work/test-results",
   reporter: [["list"]],
   use: {
     baseURL: "http://127.0.0.1:43817",

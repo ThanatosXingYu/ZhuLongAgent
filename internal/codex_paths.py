@@ -53,7 +53,7 @@ def challenge_path_from_writeup(writeup_path: str, task_id: str, mode: str) -> s
     """Recover pre-migration task folders from their trusted writeup names."""
 
     path = Path(writeup_path)
-    if len(path.parts) < 3 or path.parts[0] not in {"writeups", "workbench-data"}:
+    if len(path.parts) < 3 or path.parts[0] not in {"writeups", "work"}:
         return ""
     marker = "codex-pure" if mode == "pure" else "codex"
     suffix = f"-{marker}-{task_id}.md"
@@ -62,9 +62,9 @@ def challenge_path_from_writeup(writeup_path: str, task_id: str, mode: str) -> s
     exercise_directory = path.name[: -len(suffix)]
     if not exercise_directory:
         return ""
-    if path.parts[0] == "workbench-data" and len(path.parts) >= 4:
+    if path.parts[0] == "work" and len(path.parts) >= 4:
         return (
-            Path("workbench-data") / "download" / path.parts[2] / exercise_directory
+            Path("work") / "download" / path.parts[2] / exercise_directory
         ).as_posix()
     return (Path("download") / path.parts[1] / exercise_directory).as_posix()
 

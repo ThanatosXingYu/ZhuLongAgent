@@ -27,7 +27,7 @@
 python3 -m venv .venv
 
 # 2. 将 pip 下载缓存放在统一的项目数据目录
-PIP_CACHE_DIR="$PWD/workbench-data/cache/tools/pip" .venv/bin/python -m pip install -r requirements.txt
+PIP_CACHE_DIR="$PWD/work/cache/tools/pip" .venv/bin/python -m pip install -r requirements.txt
 
 # 3. 启动本地 Web 服务
 .venv/bin/python main.py
@@ -92,11 +92,11 @@ Codex 默认最多同时运行 10 个任务；这里的 `10` 是同时运行的�
 
 首页顶部的模型路由按钮用于管理多个快捷 AI 提供商。默认重试间隔为 `1,5,10,10,15` 秒，失败提供商进入 60 秒恢复窗口；窗口结束后会重新参与轮询。每次请求轮询会在健康提供商之间轮换，故障转移会先重试当前提供商，再切换下一家。
 
-任务元数据会原子保存到 `workbench-data/runtime/codex/tasks.json`。程序重启后，已完成、已停止、排队中的任务及其运行日志、会话 ID 和 WP 路径都会恢复；重启时无法继续存在的运行中任务会标记为“程序重启时任务中断”，可使用“继续”恢复。该文件只保存任务元数据，不保存 Codex API Key。
+任务元数据会原子保存到 `work/runtime/codex/tasks.json`。程序重启后，已完成、已停止、排队中的任务及其运行日志、会话 ID 和 WP 路径都会恢复；重启时无法继续存在的运行中任务会标记为“程序重启时任务中断”，可使用“继续”恢复。该文件只保存任务元数据，不保存 Codex API Key。
 
 项目内置 [`ljagiello/ctf-skills`](https://github.com/ljagiello/ctf-skills) 技能源，位于 `tools/skills/ctf-skills`，默认启用。设置页可以关闭技能包；关闭只影响本项目创建的 Codex 进程，不会修改系统级 Codex 配置。Codex 任务会获得本项目的工作区路径、`tools/bin`、`tools/venv` 和已启用技能目录信息。
 
-`workbench-data/runtime/codex/` 是 Codex CLI 的项目专用 HOME。它不是空模板：首次运行后会包含线程历史、任务状态、日志数据库、配置和 shell 快照；数据库中的表可能为空（例如没有排队任务时 queue 表为 0 行）是正常现象。该目录已加入 `.gitignore`，不会提交到 GitHub。
+`work/runtime/codex/` 是 Codex CLI 的项目专用 HOME。它不是空模板：首次运行后会包含线程历史、任务状态、日志数据库、配置和 shell 快照；数据库中的表可能为空（例如没有排队任务时 queue 表为 0 行）是正常现象。该目录已加入 `.gitignore`，不会提交到 GitHub。
 
 ## 实时事件与模块边界
 
@@ -110,21 +110,21 @@ Codex 默认最多同时运行 10 个任务；这里的 `10` 是同时运行的�
 
 | 路径 | 用途 |
 | --- | --- |
-| `workbench-data/runtime/config.json` | Web 页面保存的比赛、模型和 Codex 配置，权限为 `0600` |
-| `workbench-data/runtime/codex/` | 本项目专用 Codex HOME、会话数据库、日志和技能副本 |
-| `workbench-data/runtime/codex/tasks.json` | Codex 任务列表和会话元数据（不含 API Key） |
-| `workbench-data/runtime/platform-schema.json` | 最近观测到的平台接口字段集合及变化记录，只包含字段名 |
-| `workbench-data/runtime/platform-identities.json` | 平台题目、分类和公告到稳定本地 ID 的持久映射 |
-| `workbench-data/download/` | 题目附件及下载临时文件 |
-| `workbench-data/writeups/` | Codex 或手动生成的解题报告 |
-| `workbench-data/codex-runs/` | Codex 任务运行记录 |
-| `workbench-data/cache/` | PyPI、Go、mypy、Ruff、pytest 和运行环境的缓存 |
+| `work/runtime/config.json` | Web 页面保存的比赛、模型和 Codex 配置，权限为 `0600` |
+| `work/runtime/codex/` | 本项目专用 Codex HOME、会话数据库、日志和技能副本 |
+| `work/runtime/codex/tasks.json` | Codex 任务列表和会话元数据（不含 API Key） |
+| `work/runtime/platform-schema.json` | 最近观测到的平台接口字段集合及变化记录，只包含字段名 |
+| `work/runtime/platform-identities.json` | 平台题目、分类和公告到稳定本地 ID 的持久映射 |
+| `work/download/` | 题目附件及下载临时文件 |
+| `work/writeups/` | Codex 或手动生成的解题报告 |
+| `work/codex-runs/` | Codex 任务运行记录 |
+| `work/cache/` | PyPI、Go、mypy、Ruff、pytest 和运行环境的缓存 |
 | `tools/` | 工具、Python 虚拟环境、Go 缓存、pip 缓存和下载临时文件 |
 | `tools/dictionaries/` | Agent 自带的授权 CTF 字典；仅用于题目分析，不会写入系统目录 |
 | `.venv/` | 工作台自身的 Python 虚拟环境 |
-| `temp/tests/` | 测试代码；其他临时内容也应放在 `temp/` |
+| `tests/python/` | Python 测试代码；Playwright 测试位于 `tests/e2e/` |
 
-`workbench-data/`、工具安装目录、虚拟环境和系统噪声均已加入 `.gitignore`。旧版顶层 `runtime/`、`download/`、`writeups/`、`codex-runs/` 和 `tools/cache/` 会在下次启动时自动迁移到统一目录。随项目提供的 `tools/skills/ctf-skills` 技能源和 `tools/dictionaries/` 字典资源会保留在 Git 中；实际安装的工具、缓存和运行数据不会提交。
+`work/`、工具安装目录、虚拟环境和系统噪声均已加入 `.gitignore`。旧版顶层 `runtime/`、`download/`、`writeups/`、`codex-runs/` 和 `tools/cache/` 会在下次启动时自动迁移到统一目录。随项目提供的 `tools/skills/ctf-skills` 技能源和 `tools/dictionaries/` 字典资源会保留在 Git 中；实际安装的工具、缓存和运行数据不会提交。
 
 ## 本地 API
 
@@ -145,17 +145,17 @@ API 端点和请求示例见 [`docs/api_doc.md`](docs/api_doc.md)。完成平台
 ## 开发与检查
 
 ```bash
-PIP_CACHE_DIR="$PWD/workbench-data/cache/tools/pip" .venv/bin/python -m pip install -r requirements-dev.txt
-.venv/bin/ruff check internal main.py scripts temp/tests
+PIP_CACHE_DIR="$PWD/work/cache/tools/pip" .venv/bin/python -m pip install -r requirements.txt
+.venv/bin/ruff check internal main.py scripts tests/python
 .venv/bin/mypy --strict internal main.py scripts
-.venv/bin/pytest -q temp/tests
+.venv/bin/pytest -q tests/python
 npm ci
 npm run check:js
 npm run test:e2e
 git diff --check
 ```
 
-Playwright 会启动隔离的本地静态/API/SSE 测试服务，并通过 Chromium 真实点击验证首屏自动加载、题目搜索与组合筛选、Codex 会话树选择和关闭、Escape/背景关闭、Toast 顶层显示、Side 请求正文、警告分级以及 SSE 增量日志/状态更新。测试不读取或修改 `workbench-data/runtime/` 中的真实登录态和任务数据。
+Playwright 会启动隔离的本地静态/API/SSE 测试服务，并通过 Chromium 真实点击验证首屏自动加载、题目搜索与组合筛选、Codex 会话树选择和关闭、Escape/背景关闭、Toast 顶层显示、Side 请求正文、警告分级以及 SSE 增量日志/状态更新。测试不读取或修改 `work/runtime/` 中的真实登录态和任务数据。
 
 提交前请确认暂存区没有 Token、密码、下载产物或运行数据库：
 

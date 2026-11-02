@@ -33,7 +33,12 @@ from .codex_paths import (
     challenge_path_from_writeup,
     writeup_path_for,
 )
-from .codex_models import Event, ProcessConfig, ProcessResult, TokenUsage
+from .codex_models import (
+    Event as Event,
+    ProcessConfig as ProcessConfig,
+    ProcessResult as ProcessResult,
+    TokenUsage as TokenUsage,
+)
 from .events import EventPublisher
 from .solver import PromptResult
 
@@ -909,14 +914,14 @@ class CodexManager:
             config.workspace_root or config.process.workspace or Path.cwd()
         )
         self.download_root = Path(
-            config.download_root or (self.workspace_root / "workbench-data" / "download")
+            config.download_root or (self.workspace_root / "work" / "download")
         )
         self.system_prompt = config.system_prompt.strip() or DEFAULT_CODEX_SYSTEM_PROMPT
         self.auto_resume_interrupted = config.auto_resume_interrupted
         self.tasks_path = (
             Path(config.tasks_path)
             if config.tasks_path
-            else self.workspace_root / "workbench-data" / "runtime" / "codex" / "tasks.json"
+            else self.workspace_root / "work" / "runtime" / "codex" / "tasks.json"
         )
         self._tasks: dict[str, _Task] = {}
         self._order: list[str] = []
@@ -2811,7 +2816,7 @@ def _time_wire(value: datetime) -> str:
 CODEX_INSTRUCTIONS = DEFAULT_CODEX_SYSTEM_PROMPT
 
 CODEX_PURE_INSTRUCTIONS = """你是通过本机 Codex CLI 启动的受限 CTF 解题代理。请只处理这一个题目。
-这是纯解题模式：禁止启动或回收容器/靶机，禁止阅读任何文档或配置文件（包括 docs/api_doc.md、.env、workbench-data/runtime/config.json、.runtime-config.json），禁止调用竞赛 API，禁止提交 Flag。
+这是纯解题模式：禁止启动或回收容器/靶机，禁止阅读任何文档或配置文件（包括 docs/api_doc.md、.env、work/runtime/config.json、.runtime-config.json），禁止调用竞赛 API，禁止提交 Flag。
 只根据任务中给出的题目说明和本地已下载附件进行分析，允许执行本地命令处理附件；需要补充背景知识时可以搜索公开资料，但不要把未经验证的推测当成结论。禁止爆破、穷举、猜测或伪造 Flag；不要攻击任何竞赛平台、登录接口、比赛接口或网关，也不要修改与本题无关的项目文件。
 最终回复必须是 Flag 值加上一份可复现的中文 Markdown WP，包含实际命令、利用过程、Flag 推导和结果说明；不要暴露任何凭据，不要编造 Flag。"""
 

@@ -409,7 +409,7 @@ DELETE /api/exercises/{id}/attachments
 POST   /api/exercises/{id}/attachments/redownload
 ```
 
-附件只会保存到当前工作目录的 `workbench-data/download/` 下。
+附件只会保存到当前工作目录的 `work/download/` 下。
 
 页面使用后台任务接口执行下载。启动全部缺失附件下载：
 
@@ -520,7 +520,7 @@ POST /api/codex/tasks/{task_id}/continue
 DELETE /api/codex/tasks/{task_id}
 ```
 
-`GET /api/codex/tasks` 即使当前 Codex CLI 暂不可用也会返回已经持久化的任务，并通过 `available: false` 标识不可启动新任务。任务元数据保存在 `workbench-data/runtime/codex/tasks.json`，不包含 API Key。
+`GET /api/codex/tasks` 即使当前 Codex CLI 暂不可用也会返回已经持久化的任务，并通过 `available: false` 标识不可启动新任务。任务元数据保存在 `work/runtime/codex/tasks.json`，不包含 API Key。
 
 任务列表支持 `offset`、`limit` 和 `query` 查询参数。`limit` 默认 `50`，最大 `200`；响应额外包含 `total`、`offset`、`pageSize` 和 `hasMore`。前端先加载首屏，用户滚动到会话树底部或点击“加载更多会话”时继续请求，不再一次传输全部历史。
 

@@ -601,7 +601,7 @@ def test_workspace_data_migrates_legacy_generated_directories(
 
     layout = prepare_workspace_layout(tmp_path)
 
-    assert layout.runtime == tmp_path / "workbench-data" / "runtime"
+    assert layout.runtime == tmp_path / "work" / "runtime"
     assert (layout.runtime / "config.json").read_text() == "runtime/config.json"
     assert (layout.download / "Web" / "1-demo" / "a.zip").read_text() == (
         "download/Web/1-demo/a.zip"
@@ -1231,7 +1231,7 @@ def test_tool_manager_keeps_tools_and_caches_under_workspace_data(
     assert manager.root == tmp_path / "tools"
     assert manager.catalog()["root"] == "tools"
     environment = manager._local_environment()
-    cache_root = tmp_path / "workbench-data" / "cache"
+    cache_root = tmp_path / "work" / "cache"
     assert environment["PIP_CACHE_DIR"] == str(cache_root / "tools" / "pip")
     assert environment["XDG_CACHE_HOME"] == str(cache_root / "tools")
     assert environment["TMPDIR"] == str(cache_root / "tools-tmp")
@@ -1304,7 +1304,7 @@ def test_tool_manager_python_launcher_keeps_tool_caches_in_workspace(
     manager = ToolManager(tmp_path)
     manager._write_venv_launcher("pwn")
     launcher = (tmp_path / "tools" / "bin" / "pwn").read_text(encoding="utf-8")
-    cache_root = tmp_path / "workbench-data" / "cache"
+    cache_root = tmp_path / "work" / "cache"
     assert f"XDG_CACHE_HOME={cache_root / 'tools'}" in launcher
     assert f"XDG_CONFIG_HOME={cache_root / 'tools' / 'config'}" in launcher
     assert f"TMPDIR={cache_root / 'tools-tmp'}" in launcher
@@ -2482,10 +2482,10 @@ def test_codex_open_terminal_writes_workspace_local_resume_script(
         "internal.codex._open_system_path", opened_paths.append
     )
     folder_result = manager.open_challenge_folder(task.id)
-    challenge_directory = tmp_path / "workbench-data" / "download" / "Web" / "7-x"
+    challenge_directory = tmp_path / "work" / "download" / "Web" / "7-x"
     assert folder_result == {
         "opened": True,
-        "path": "workbench-data/download/Web/7-x",
+        "path": "work/download/Web/7-x",
     }
     assert opened_paths == [challenge_directory]
     assert challenge_directory.is_dir()
@@ -2542,10 +2542,10 @@ def test_codex_legacy_folder_recovery_and_download_boundary(
 
     result = manager.open_challenge_folder(task_id)
 
-    expected = tmp_path / "workbench-data" / "download" / "Web" / "7-x"
+    expected = tmp_path / "work" / "download" / "Web" / "7-x"
     assert result == {
         "opened": True,
-        "path": "workbench-data/download/Web/7-x",
+        "path": "work/download/Web/7-x",
     }
     assert opened_paths == [expected]
 
