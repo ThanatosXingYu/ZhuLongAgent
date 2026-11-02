@@ -125,9 +125,53 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
 
 
 _CATEGORY_LABELS: dict[str, str] = {
-    "python-library": "Python 库",
-    "go-project": "Go 开源项目",
-    "binary-package": "独立工具 / 发行包",
+    "general": "通用",
+    "web": "Web / 网络",
+    "pwn": "Pwn / 二进制利用",
+    "reverse": "Reverse / 逆向",
+    "crypto": "Crypto / 密码学",
+    "forensics": "Forensics / 取证",
+    "misc": "Misc / 综合",
+}
+_TOOL_CHALLENGE_CATEGORIES: dict[str, str] = {
+    "basic-libraries": "general",
+    "json": "general",
+    "base64": "general",
+    "hashlib": "general",
+    "re": "general",
+    "struct": "general",
+    "urllib": "general",
+    "sqlmap": "web",
+    "dirsearch": "web",
+    "ffuf": "web",
+    "gobuster": "web",
+    "pwntools": "pwn",
+    "checksec": "pwn",
+    "qiling": "pwn",
+    "ropper": "pwn",
+    "ropgadget": "pwn",
+    "gdb": "pwn",
+    "pwndbg": "pwn",
+    "z3": "crypto",
+    "sympy": "crypto",
+    "john": "crypto",
+    "hashcat": "crypto",
+    "pyelftools": "reverse",
+    "capstone": "reverse",
+    "unicorn": "reverse",
+    "angr": "reverse",
+    "frida-tools": "reverse",
+    "jadx": "reverse",
+    "apktool": "reverse",
+    "binwalk": "forensics",
+    "volatility3": "forensics",
+    "yara-python": "forensics",
+    "pefile": "forensics",
+    "exiftool": "forensics",
+    "foremost": "forensics",
+    "7z": "misc",
+    "scapy": "misc",
+    "impacket": "misc",
 }
 _PLATFORM_LABELS: dict[str, str] = {
     "linux": "Linux",
@@ -157,13 +201,8 @@ _GITHUB_MIRRORS: tuple[str, ...] = (
 
 
 def _tool_category(spec: ToolSpec) -> tuple[str, str]:
-    if spec.category:
-        return spec.category, _CATEGORY_LABELS.get(spec.category, "其他工具")
-    if spec.kind == "python":
-        return "python-library", _CATEGORY_LABELS["python-library"]
-    if spec.kind == "go":
-        return "go-project", _CATEGORY_LABELS["go-project"]
-    return "binary-package", _CATEGORY_LABELS["binary-package"]
+    category = _TOOL_CHALLENGE_CATEGORIES.get(spec.name, "misc")
+    return category, _CATEGORY_LABELS[category]
 
 
 class ToolManager:

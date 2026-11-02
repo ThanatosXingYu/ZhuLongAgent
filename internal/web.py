@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal, Protocol, TypeGuard, TypeVar
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -176,8 +176,15 @@ class CodexProtocol(Protocol):
     def enabled(self) -> bool: ...
 
     def list(
-        self, offset: int = 0, limit: int = 50, query: str = ""
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        query: str = "",
+        status: str = "",
+        archived: str = "active",
     ) -> Any: ...
+
+    def set_archived(self, task_id: str, archived: bool) -> Any: ...
 
     def get(self, task_id: str) -> Any: ...
 
@@ -324,6 +331,24 @@ class CodexRenameRequest(BaseModel):
 class CodexPendingMessageRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
     message: str = Field(min_length=1, max_length=16_000)
+
+
+class CodexArchiveRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    task_ids: list[str] = Field(
+        alias="taskIds", min_length=1, max_length=100
+    )
+    archived: bool = True
+
+    @model_validator(mode="after")
+    def validate_task_ids(self) -> "CodexArchiveRequest":
+        if any(not _valid_task_id(task_id) for task_id in self.task_ids):
+            raise ValueError("invalid task id")
+        if len(set(self.task_ids)) != len(self.task_ids):
+            raise ValueError("duplicate task id")
+        return self
 
 
 class MatchBindRequest(BaseModel):
@@ -1427,6 +1452,8 @@ def create_app(
         except ValueError:
             return _error_response(400, "INVALID_REQUEST", "会话分页参数无效")
         query = request.query_params.get("query", "").strip()[:200]
+        status = request.query_params.get("status", "").strip()
+        archived = request.query_params.get("archived", "active").strip() or "active"
         if offset < 0 or not 1 <= limit <= 200:
             return _error_response(400, "INVALID_REQUEST", "会话分页参数无效")
         try:
@@ -1436,6 +1463,8 @@ def create_app(
                     offset,
                     limit,
                     query,
+                    status,
+                    archived,
                 )
             )
         except ValueError as exc:
@@ -1443,6 +1472,33 @@ def create_app(
         if isinstance(data, dict):
             data["available"] = services.codex.enabled()
         return _success_response(data)
+
+    @app.api_route(
+        "/api/codex/tasks/archive",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def archive_codex_tasks(request: Request) -> JSONResponse:
+        if not _method(request, "POST"):
+            return _method_error("POST")
+        if services.codex is None:
+            return _error_response(503, "CODEX_UNAVAILABLE", "Codex CLI 未配置或不可用")
+        parsed, error = await _validated_request(request, CodexArchiveRequest)
+        if error is not None:
+            return error
+        assert parsed is not None
+        results = []
+        try:
+            for task_id in parsed.task_ids:
+                results.append(
+                    await asyncio.to_thread(
+                        services.codex.set_archived,
+                        task_id,
+                        parsed.archived,
+                    )
+                )
+        except Exception as exc:
+            return _codex_error(exc)
+        return _success_response({"tasks": results})
 
     @app.api_route(
         "/api/codex/tasks/{task_id}",
@@ -1711,6 +1767,28 @@ def create_app(
         else Path(__file__).resolve().parent.parent / "static"
     )
     if static_path.is_dir():
+        index_path = static_path / "index.html"
+
+        async def app_page() -> Response:
+            if not index_path.is_file():
+                return _error_response(404, "NOT_FOUND", "页面不存在")
+            return FileResponse(index_path, media_type="text/html")
+
+        for page_path in (
+            "/competition",
+            "/exercises",
+            "/attachments",
+            "/tools",
+            "/codex",
+            "/models",
+            "/settings",
+        ):
+            app.add_api_route(
+                page_path,
+                app_page,
+                methods=["GET"],
+                include_in_schema=False,
+            )
         app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
     return app
 

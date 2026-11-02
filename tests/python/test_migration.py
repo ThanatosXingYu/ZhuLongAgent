@@ -1244,7 +1244,21 @@ def test_tool_catalog_exposes_install_categories_and_idle_progress(
     manager = ToolManager(tmp_path)
     catalog = manager.catalog()
     categories = {item["category"] for item in catalog["tools"]}
-    assert categories == {"python-library", "go-project", "binary-package"}
+    assert categories == {
+        "general",
+        "web",
+        "pwn",
+        "reverse",
+        "crypto",
+        "forensics",
+        "misc",
+    }
+    assert next(
+        item for item in catalog["tools"] if item["name"] == "sqlmap"
+    )["category"] == "web"
+    assert next(
+        item for item in catalog["tools"] if item["name"] == "pwntools"
+    )["category"] == "pwn"
     # Built-in entries are always available and count as installed;
     # third-party packages and external binaries remain uninstalled.
     builtin_names = {item["name"] for item in catalog["tools"] if item["kind"] == "builtin"}
@@ -1375,6 +1389,17 @@ def test_codex_task_list_supports_pagination_and_query(tmp_path: Path) -> None:
     assert filtered.total == 1
     assert filtered.tasks[0].title == "task 10"
     assert filtered.has_more is False
+
+    archived_id = page.tasks[0].id
+    for _ in range(200):
+        if manager.get(archived_id).status == "completed":
+            break
+        time.sleep(0.01)
+    manager.set_archived(archived_id, True)
+    active_page = manager.list(offset=0, limit=50)
+    archived_page = manager.list(offset=0, limit=50, archived="archived")
+    assert archived_id not in {task.id for task in active_page.tasks}
+    assert [task.id for task in archived_page.tasks] == [archived_id]
     manager.close()
 
 
@@ -1386,8 +1411,15 @@ def test_codex_tasks_route_forwards_pagination() -> None:
         def enabled(self) -> bool:
             return True
 
-        def list(self, offset: int = 0, limit: int = 50, query: str = ""):
-            self.request = (offset, limit, query)
+        def list(
+            self,
+            offset: int = 0,
+            limit: int = 50,
+            query: str = "",
+            status: str = "",
+            archived: str = "active",
+        ):
+            self.request = (offset, limit, query, status, archived)
             return {
                 "tasks": [],
                 "active": 0,
@@ -1398,14 +1430,41 @@ def test_codex_tasks_route_forwards_pagination() -> None:
                 "hasMore": False,
             }
 
+        def set_archived(self, task_id: str, archived: bool):
+            return {"id": task_id, "archived": archived}
+
     codex = Codex()
     app = create_app(Source(), codex=codex)
     with TestClient(app) as client:
         response = client.get(
             "/api/codex/tasks?offset=20&limit=25&query=Cold%20Forge"
+            "&status=completed,failed&archived=all"
         )
     assert response.status_code == 200
-    assert codex.request == (20, 25, "Cold Forge")
+    assert codex.request == (20, 25, "Cold Forge", "completed,failed", "all")
+
+
+def test_codex_archive_route_archives_tasks() -> None:
+    class Codex:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, bool]] = []
+
+        def enabled(self) -> bool:
+            return True
+
+        def set_archived(self, task_id: str, archived: bool):
+            self.calls.append((task_id, archived))
+            return {"id": task_id, "archived": archived}
+
+    codex = Codex()
+    app = create_app(Source(), codex=codex)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/codex/tasks/archive",
+            json={"taskIds": ["a" * 32, "b" * 32], "archived": True},
+        )
+    assert response.status_code == 200
+    assert codex.calls == [("a" * 32, True), ("b" * 32, True)]
 
 
 def test_download_rejects_oversized_response(tmp_path: Path) -> None:
@@ -1708,6 +1767,23 @@ def test_web_routes_preserve_envelopes_and_attachment_guard() -> None:
             response.status_code == 404
             and response.json()["error"]["code"] == "NOT_FOUND"
         )
+
+
+def test_primary_frontend_routes_serve_application_shell() -> None:
+    app = create_app(Source(), None, None, None)
+    with TestClient(app) as client:
+        for path in (
+            "/competition",
+            "/exercises",
+            "/attachments",
+            "/tools",
+            "/codex",
+            "/models",
+            "/settings",
+        ):
+            response = client.get(path)
+            assert response.status_code == 200
+            assert 'id="app-sidebar"' in response.text
 
 
 def test_web_preserves_specific_flag_and_model_error_codes() -> None:

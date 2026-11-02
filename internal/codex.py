@@ -755,6 +755,7 @@ class Snapshot:
     process_id: int = 0
     process_alive: bool = False
     process_started_at: datetime | None = None
+    archived_at: datetime | None = None
 
     def to_dict(self, include_events: bool = True) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -826,6 +827,9 @@ class Snapshot:
             result["processAlive"] = self.process_alive
         if self.process_started_at:
             result["processStartedAt"] = _time_wire(self.process_started_at)
+        result["archived"] = self.archived_at is not None
+        if self.archived_at:
+            result["archivedAt"] = _time_wire(self.archived_at)
         usage = self.usage
         completed_turns = self.completed_turns
         if completed_turns <= 0 and usage == TokenUsage():
@@ -1460,12 +1464,31 @@ class CodexManager:
         offset: int = 0,
         limit: int = DEFAULT_TASK_PAGE_SIZE,
         query: str = "",
+        status: str = "",
+        archived: str = "active",
     ) -> TaskList:
         if offset < 0:
             raise ValueError("offset must be non-negative")
         if not 1 <= limit <= MAX_TASK_PAGE_SIZE:
             raise ValueError(f"limit must be between 1 and {MAX_TASK_PAGE_SIZE}")
         normalized_query = query.strip().casefold()
+        selected_statuses = {
+            value.strip()
+            for value in status.split(",")
+            if value.strip()
+        }
+        allowed_statuses = {
+            "queued",
+            "running",
+            "completed",
+            "failed",
+            "canceled",
+            "interrupted",
+        }
+        if selected_statuses - allowed_statuses:
+            raise ValueError("status filter is invalid")
+        if archived not in {"active", "archived", "all"}:
+            raise ValueError("archive filter is invalid")
         with self._condition:
             self._refresh_queue_positions()
             active = self._active_count()
@@ -1474,6 +1497,24 @@ class CodexManager:
                 for task_id in reversed(self._order)
                 if task_id in self._tasks
             ]
+            if archived == "active":
+                snapshots = [
+                    snapshot
+                    for snapshot in snapshots
+                    if snapshot.archived_at is None
+                ]
+            elif archived == "archived":
+                snapshots = [
+                    snapshot
+                    for snapshot in snapshots
+                    if snapshot.archived_at is not None
+                ]
+            if selected_statuses:
+                snapshots = [
+                    snapshot
+                    for snapshot in snapshots
+                    if snapshot.status in selected_statuses
+                ]
             if normalized_query:
                 snapshots = [
                     snapshot
@@ -1499,6 +1540,30 @@ class CodexManager:
                 page_size=limit,
                 has_more=offset + len(page) < total,
             )
+
+    def set_archived(self, task_id: str, archived: bool) -> Snapshot:
+        with self._condition:
+            task = self._tasks.get(task_id)
+            if task is None:
+                raise TaskNotFound("codex task not found")
+            if task.snapshot.status in {"queued", "running"}:
+                raise CodexError("运行中或排队中的任务不能归档")
+            task.snapshot = _replace_snapshot(
+                task.snapshot,
+                archived_at=datetime.now(timezone.utc) if archived else None,
+            )
+            self._append_event_locked(
+                task,
+                Event(
+                    datetime.now(timezone.utc),
+                    "task.archived" if archived else "task.unarchived",
+                    "任务已归档" if archived else "任务已取消归档",
+                    status="completed",
+                ),
+                round_number=max(1, task.snapshot.current_round),
+            )
+            self._persist_tasks_locked()
+            return self._snapshot(task)
 
     def get(self, task_id: str) -> Snapshot:
         with self._condition:
@@ -2629,6 +2694,7 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         process_id=process_id,
         process_alive=bool(raw.get("processAlive", False)),
         process_started_at=_parse_time(raw.get("processStartedAt")),
+        archived_at=_parse_time(raw.get("archivedAt")),
     )
 
 
