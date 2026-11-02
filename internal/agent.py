@@ -38,14 +38,29 @@ class MatchInfo:
 class Overview:
     stage_point: float = 0.0
     stage_rank: int = 0
+    solved_count: int = 0
+    team_name: str = ""
+    organization: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {"stagePoint": self.stage_point, "stageRank": self.stage_rank}
+        return {
+            "stagePoint": self.stage_point,
+            "stageRank": self.stage_rank,
+            "solvedCount": self.solved_count,
+            "teamName": self.team_name,
+            "organization": self.organization,
+        }
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any] | None) -> "Overview":
         data = value or {}
-        return cls(_as_float(data.get("stagePoint")), _as_int(data.get("stageRank")))
+        return cls(
+            _as_float(data.get("stagePoint")),
+            _as_int(data.get("stageRank")),
+            _as_int(data.get("solvedCount")),
+            str(data.get("teamName", "") or ""),
+            str(data.get("organization", "") or ""),
+        )
 
 
 @dataclass(frozen=True)

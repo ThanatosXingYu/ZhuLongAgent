@@ -188,7 +188,11 @@ class AgentClient:
     def overview(self, _refresh: bool = False) -> Overview:
         data = _mapping(self._api.post("/match/team/info", {"team_id": ""}))
         return Overview(
-            _as_float(data.get("total_score")), _as_int(data.get("team_rank"))
+            _as_float(data.get("total_score")),
+            _as_int(data.get("team_rank")),
+            _as_int(data.get("total_number")),
+            str(data.get("team_name", "") or ""),
+            str(data.get("school", "") or ""),
         )
 
     def exercises(self, _refresh: bool = False) -> list[ExerciseGroup]:

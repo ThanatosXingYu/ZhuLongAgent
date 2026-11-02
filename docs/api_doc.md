@@ -271,7 +271,10 @@ Header：`X-GCSIS-Action: platform-auth`
   "ok": true,
   "data": {
     "stagePoint": 88.5,
-    "stageRank": 7
+  "stageRank": 7,
+  "solvedCount": 19,
+  "teamName": "Example Team",
+  "organization": "Example University"
   }
 }
 ```

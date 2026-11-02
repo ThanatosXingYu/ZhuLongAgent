@@ -672,7 +672,17 @@ def test_agent_maps_questions_flags_notices_and_environments() -> None:
             return _json_response({"code": 203, "message": "比赛已结束", "data": None})
         if path == "/match/team/info":
             return _json_response(
-                {"code": 0, "message": "", "data": {"total_score": 300, "team_rank": 7}}
+                {
+                    "code": 0,
+                    "message": "",
+                    "data": {
+                        "total_score": 300,
+                        "team_rank": 7,
+                        "total_number": 9,
+                        "team_name": "Demo Team",
+                        "school": "Demo University",
+                    },
+                }
             )
         if path == "/match/notice/lists":
             assert payload["type"] == 1
@@ -729,7 +739,13 @@ def test_agent_maps_questions_flags_notices_and_environments() -> None:
     assert len(crypto.attachment.files) == 1
     assert crypto.attachment.files[0].name == "crypto.zip"
     assert crypto.attachment.files[0].url == "https://files.example.test/crypto.zip"
-    assert client.overview().to_dict() == {"stagePoint": 300.0, "stageRank": 7}
+    assert client.overview().to_dict() == {
+        "stagePoint": 300.0,
+        "stageRank": 7,
+        "solvedCount": 9,
+        "teamName": "Demo Team",
+        "organization": "Demo University",
+    }
     assert client.notices() == []
 
     assert client.submit_flag(1, "flag{demo}").is_correct is True
