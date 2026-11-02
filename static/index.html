@@ -844,8 +844,11 @@
       </button>
     </header>
     <div class="codex-task-layout">
-      <aside id="codex-task-list" class="codex-task-list" aria-label="Codex 会话树" aria-live="polite">
-        <div class="empty-state compact">暂无 Codex 任务</div>
+      <aside class="codex-task-sidebar" aria-label="Codex 会话树">
+        <div id="codex-task-list" class="codex-task-list" aria-live="polite">
+          <div class="empty-state compact">暂无 Codex 任务</div>
+        </div>
+        <button id="codex-load-more-tasks" class="button button-ghost codex-load-more-tasks" type="button" hidden>加载更多会话</button>
       </aside>
       <section class="codex-task-detail" aria-live="polite">
         <div class="codex-task-detail-header">

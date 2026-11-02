@@ -34,6 +34,8 @@ from .solver import PromptResult, safe_writeup_segment
 MAX_TASK_EVENTS = 128
 DEFAULT_EVENT_PAGE_SIZE = 64
 MAX_EVENT_PAGE_SIZE = 256
+DEFAULT_TASK_PAGE_SIZE = 50
+MAX_TASK_PAGE_SIZE = 200
 CONTINUE_MESSAGE = "刚才程序意外退出了，请你仔细思考，继续未完成的操作"
 AUTO_CONTINUE_MESSAGE = (
     "继续执行。不要只输出计划、承诺或进度说明；立即调用工具推进任务，"
@@ -955,12 +957,20 @@ class TaskList:
     tasks: tuple[Snapshot, ...]
     active: int
     limit: int
+    total: int = 0
+    offset: int = 0
+    page_size: int = DEFAULT_TASK_PAGE_SIZE
+    has_more: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "tasks": [task.to_dict(include_events=False) for task in self.tasks],
             "active": self.active,
             "limit": self.limit,
+            "total": self.total,
+            "offset": self.offset,
+            "pageSize": self.page_size,
+            "hasMore": self.has_more,
         }
 
 
@@ -1537,16 +1547,50 @@ class CodexManager:
             self._persist_tasks_locked()
             return self._snapshot(task)
 
-    def list(self) -> TaskList:
+    def list(
+        self,
+        offset: int = 0,
+        limit: int = DEFAULT_TASK_PAGE_SIZE,
+        query: str = "",
+    ) -> TaskList:
+        if offset < 0:
+            raise ValueError("offset must be non-negative")
+        if not 1 <= limit <= MAX_TASK_PAGE_SIZE:
+            raise ValueError(f"limit must be between 1 and {MAX_TASK_PAGE_SIZE}")
+        normalized_query = query.strip().casefold()
         with self._condition:
             self._refresh_queue_positions()
             active = self._active_count()
-            snapshots = tuple(
+            snapshots = [
                 self._snapshot(self._tasks[task_id], active)
                 for task_id in reversed(self._order)
                 if task_id in self._tasks
+            ]
+            if normalized_query:
+                snapshots = [
+                    snapshot
+                    for snapshot in snapshots
+                    if normalized_query
+                    in " ".join(
+                        (
+                            snapshot.id,
+                            str(snapshot.exercise_id),
+                            snapshot.title,
+                            snapshot.source_message,
+                        )
+                    ).casefold()
+                ]
+            total = len(snapshots)
+            page = tuple(snapshots[offset : offset + limit])
+            return TaskList(
+                tasks=page,
+                active=active,
+                limit=self.limit,
+                total=total,
+                offset=offset,
+                page_size=limit,
+                has_more=offset + len(page) < total,
             )
-            return TaskList(snapshots, active, self.limit)
 
     def get(self, task_id: str) -> Snapshot:
         with self._condition:

@@ -528,3 +528,43 @@ test("容器下发后立即进入侧栏并支持续期", async ({ page }) => {
   expect(requests.some((item) => item.path === "/api/exercises/1/environment/renew")).toBeTruthy();
   await expect(page.locator(".active-environment-item")).toContainText("可续期 1/3 次");
 });
+
+test("Codex 会话树按页加载并显示总数", async ({ page }) => {
+  const tasks = Array.from({ length: 75 }, (_, index) => task({
+    id: `task-${index + 1}`,
+    title: `分页会话 ${index + 1}`,
+    exerciseId: 1,
+    sessionId: `session-${index + 1}`,
+  }));
+  await openWorkbench(page, {
+    handler: async ({ route, url }) => {
+      if (url.pathname !== "/api/codex/tasks") return false;
+      const offset = Number(url.searchParams.get("offset") || 0);
+      const limit = Number(url.searchParams.get("limit") || 50);
+      const pageTasks = tasks.slice(offset, offset + limit);
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify(success({
+          available: true,
+          active: 0,
+          limit: 10,
+          total: tasks.length,
+          offset,
+          pageSize: limit,
+          hasMore: offset + pageTasks.length < tasks.length,
+          tasks: pageTasks.map(({ events, ...item }) => item),
+        })),
+      });
+      return true;
+    },
+  });
+
+  await expect(page.locator("#codex-active-count")).toHaveText("75");
+  await page.locator("#open-codex-tasks").click();
+  await expect.poll(() => page.locator(".codex-tree-item").count()).toBeGreaterThanOrEqual(50);
+  await expect(page.locator("#codex-load-more-tasks")).toBeVisible();
+  await page.locator("#codex-load-more-tasks").click();
+  await expect.poll(() => page.locator(".codex-tree-item").count()).toBeGreaterThanOrEqual(75);
+  await expect(page.locator("#codex-load-more-tasks")).toBeHidden();
+});

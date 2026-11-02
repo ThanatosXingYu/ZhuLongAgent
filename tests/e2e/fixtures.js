@@ -84,7 +84,16 @@ export async function installApiMock(page, overrides = {}) {
       case "/api/attachments/sizes": data = { status: "completed", totalFiles: 1, completedFiles: 1 }; break;
       case "/api/tools": data = state.toolCatalog; break;
       case "/api/environment": data = { items: [], summary: "环境可用" }; break;
-      case "/api/codex/tasks": data = { available: true, active: state.codexTasks.filter((item) => ["running", "queued"].includes(item.status)).length, limit: 10, tasks: state.codexTasks.map(({ events, ...item }) => item) }; break;
+      case "/api/codex/tasks": data = {
+        available: true,
+        active: state.codexTasks.filter((item) => ["running", "queued"].includes(item.status)).length,
+        limit: 10,
+        total: state.codexTasks.length,
+        offset: 0,
+        pageSize: state.codexTasks.length,
+        hasMore: false,
+        tasks: state.codexTasks.map(({ events, ...item }) => item),
+      }; break;
       default: {
         const codexTask = url.pathname.match(/^\/api\/codex\/tasks\/([^/]+)$/);
         if (codexTask && request.method() === "GET") data = state.codexTasks.find((item) => item.id === decodeURIComponent(codexTask[1])) || task();

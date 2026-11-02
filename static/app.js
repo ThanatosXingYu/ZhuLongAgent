@@ -229,6 +229,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
     saveSettings: $("save-settings"),
     codexTaskPage: $("codex-task-page"),
     codexTaskList: $("codex-task-list"),
+    codexLoadMoreTasks: $("codex-load-more-tasks"),
     codexTaskStatus: $("codex-task-status"),
     codexTaskMeta: $("codex-task-meta"),
     codexTaskResume: $("codex-task-resume"),
@@ -4091,17 +4092,36 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
   }
 
   async function loadCodexTasks(options = {}) {
+    const append = Boolean(options.append);
+    if (append && (!state.codexTaskHasMore || state.codexTaskLoadingMore)) return null;
+    if (append) state.codexTaskLoadingMore = true;
     try {
       const previous = new Map(state.codexTasks.map((task) => [task.id, task.status]));
       const previousDetails = new Map(state.codexTasks.map((task) => [task.id, task]));
-      const result = await request("/api/codex/tasks");
+      const offset = append ? state.codexTasks.length : 0;
+      const pageSize = append ? 50 : Math.max(50, Math.min(state.codexTasks.length || 50, 200));
+      const parameters = new URLSearchParams({
+        offset: String(offset),
+        limit: String(pageSize),
+      });
+      const result = await request(`/api/codex/tasks?${parameters}`);
       state.codexAvailable = result.available === undefined ? true : Boolean(result.available);
       state.codexLimit = Number(result.limit || state.codexLimit || 10);
-      state.codexTasks = (Array.isArray(result.tasks) ? result.tasks : []).map((task) => ({
+      const incoming = (Array.isArray(result.tasks) ? result.tasks : []).map((task) => ({
         ...task,
         events: state.codexLoadedEvents.get(task.id) || previousDetails.get(task.id)?.events || [],
       }));
+      const incomingIds = new Set(incoming.map((task) => task.id));
+      state.codexTasks = append
+        ? [...state.codexTasks, ...incoming.filter((task) => !previousDetails.has(task.id))]
+        : [...incoming, ...state.codexTasks.filter((task) => !incomingIds.has(task.id))];
+      state.codexTaskTotal = Math.max(
+        Number(result.total || 0),
+        state.codexTasks.length,
+      );
+      state.codexTaskHasMore = state.codexTasks.length < state.codexTaskTotal;
       updateCodexCounter();
+      updateCodexLoadMore();
       if (state.codexSelectedTaskId === null && state.codexTasks.length) state.codexSelectedTaskId = state.codexTasks[0].id;
       if (state.codexSelectedTaskId && state.codexTasks.some((task) => task.id === state.codexSelectedTaskId)) {
         await loadCodexTask(state.codexSelectedTaskId, { select: false, render: false, silent: true });
@@ -4134,7 +4154,24 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
       }
       stopCodexPollingIfIdle();
       return null;
+    } finally {
+      if (append) state.codexTaskLoadingMore = false;
     }
+  }
+
+  function updateCodexLoadMore() {
+    if (!els.codexLoadMoreTasks) return;
+    const shown = state.codexTasks.length;
+    const total = Math.max(state.codexTaskTotal, shown);
+    els.codexLoadMoreTasks.hidden = !state.codexTaskHasMore;
+    els.codexLoadMoreTasks.disabled = state.codexTaskLoadingMore;
+    els.codexLoadMoreTasks.textContent = state.codexTaskLoadingMore
+      ? "正在加载…"
+      : `加载更多会话（${formatNumber(shown)} / ${formatNumber(total)}）`;
+  }
+
+  async function loadMoreCodexTasks() {
+    await loadCodexTasks({ append: true, silent: true, notify: true });
   }
 
   async function loadEarlierCodexEvents() {
@@ -4476,10 +4513,13 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
       try {
         await request(`/api/codex/tasks/${encodeURIComponent(id)}`, { method: "DELETE" });
         state.codexTasks = state.codexTasks.filter((task) => task.id !== id);
+        state.codexTaskTotal = Math.max(0, state.codexTaskTotal - 1);
+        state.codexTaskHasMore = state.codexTasks.length < state.codexTaskTotal;
         state.codexLoadedEvents.delete(id);
         state.codexHasMoreEvents.delete(id);
         state.codexSelectedTaskId = state.codexTasks[0]?.id || null;
         renderCodexTaskState();
+        updateCodexLoadMore();
         renderExercises();
         showToast("Codex 任务已删除", "success");
       } catch (error) {
@@ -4545,7 +4585,7 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
 
   function updateCodexCounter() {
     const active = state.codexTasks.filter((task) => ["running", "queued"].includes(task.status)).length;
-    const total = state.codexTasks.length;
+    const total = Math.max(Number(state.codexTaskTotal || 0), state.codexTasks.length);
     els.codexActiveCount.textContent = state.codexAvailable === false ? "不可用" : formatNumber(total);
     els.codexActiveCount.title = state.codexAvailable === false
       ? "Codex 未配置"
@@ -4562,7 +4602,12 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
       events: previous?.events || incoming.events || [],
     };
     if (index >= 0) state.codexTasks.splice(index, 1, task);
-    else state.codexTasks.unshift(task);
+    else {
+      state.codexTasks.unshift(task);
+      state.codexTaskTotal += 1;
+    }
+    state.codexTaskHasMore = state.codexTasks.length < state.codexTaskTotal;
+    updateCodexLoadMore();
     if (!state.codexSelectedTaskId) state.codexSelectedTaskId = task.id;
     return { task, previous };
   }
@@ -4636,9 +4681,12 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
         break;
       case "codex.deleted":
         state.codexTasks = state.codexTasks.filter((task) => task.id !== event.resourceId);
+        state.codexTaskTotal = Math.max(0, state.codexTaskTotal - 1);
+        state.codexTaskHasMore = state.codexTasks.length < state.codexTaskTotal;
         state.codexLoadedEvents.delete(event.resourceId);
         if (state.codexSelectedTaskId === event.resourceId) state.codexSelectedTaskId = state.codexTasks[0]?.id || null;
         updateCodexCounter();
+        updateCodexLoadMore();
         renderCodexTaskState();
         renderExercises();
         break;
@@ -4912,8 +4960,9 @@ import { createAppState } from "./modules/state.js?v=20261102-layout6";
   }
 
   function bindCodexEvents() {
-    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-page", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
+    bindModuleOnce("Codex", ["open-codex-tasks", "close-codex-tasks", "codex-task-page", "codex-task-list", "codex-load-more-tasks", "codex-primary-action", "codex-task-compose", "codex-wp-menu", "codex-wp-desensitized", "codex-wp-raw", "delete-codex-task", "rename-codex-task", "codex-return-parent", "copy-codex-log", "download-codex-log", "export-codex-json", "open-codex-log-file", "finish-codex-task", "codex-load-earlier", "codex-collapse-all", "codex-expand-all", "codex-prev-round", "codex-next-round", "codex-latest-round", "codex-task-events", "codex-task-follow-up", "codex-task-side", "open-codex-terminal", "open-codex-folder", "show-codex-task-details", "close-codex-task-details", "codex-task-details-dialog", "confirm-codex-start", "cancel-codex-start", "close-codex-prompt", "codex-prompt-dialog"], () => {
       els.openCodexTasks.addEventListener("click", (event) => openCodexTaskPage(event.currentTarget));
+      els.codexLoadMoreTasks.addEventListener("click", () => void loadMoreCodexTasks());
       els.codexPrimaryAction.addEventListener("click", handleCodexPrimaryAction);
       els.codexTaskCompose.addEventListener("click", () => void sendCodexRecoveryPrompt());
       els.codexWpDesensitized.addEventListener("click", () => void sendCodexWpPrompt(true));

@@ -610,8 +610,10 @@ body.codex-task-open { overflow: hidden; }
 .codex-task-page[hidden] { display: none; }
 .codex-task-page-header { min-height: 68px; padding: 16px 20px; background: rgba(250, 252, 252, 0.98); box-shadow: 0 2px 12px rgba(27, 44, 52, 0.05); }
 .codex-task-layout { min-height: 0; display: grid; grid-template-columns: minmax(280px, 330px) minmax(0, 1fr); }
-.codex-task-list { min-height: 0; overflow: auto; padding: 10px 8px 16px; background: var(--surface-muted); border-right: 1px solid var(--line); }
+.codex-task-sidebar { min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; background: var(--surface-muted); border-right: 1px solid var(--line); }
+.codex-task-list { min-height: 0; overflow: auto; padding: 10px 8px 16px; }
 .codex-task-list .empty-state { min-height: 170px; }
+.codex-load-more-tasks { margin: 0 10px 12px; min-height: 34px; font-size: 12px; }
 .codex-tree-group + .codex-tree-group { margin-top: 12px; }
 .codex-tree-group-heading { width: 100%; display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: 6px; padding: 7px 8px; color: var(--text-muted); background: transparent; border: 0; border-radius: 5px; text-align: left; }
 .codex-tree-group-heading:hover { color: var(--text); background: rgba(255, 255, 255, 0.72); }
@@ -968,7 +970,7 @@ body.codex-task-open { overflow: hidden; }
   .codex-task-details-dialog { width: calc(100% - 20px); max-height: calc(100vh - 20px); }
   .codex-prompt-dialog { width: calc(100% - 20px); max-height: calc(100vh - 20px); }
   .codex-task-layout { grid-template-columns: 1fr; grid-template-rows: minmax(122px, 0.34fr) minmax(0, 1fr); }
-  .codex-task-list { border-right: 0; border-bottom: 1px solid var(--line); }
+  .codex-task-sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
   .codex-task-detail { position: relative; grid-template-rows: auto minmax(260px, 1fr) auto auto; padding: 12px 10px; overflow-x: hidden; overflow-y: auto; }
   .codex-task-detail-header { align-items: stretch; flex-direction: column; gap: 8px; }
   .codex-task-detail-actions { position: static; width: 100%; order: 2; margin: 0; padding: 0; background: transparent; border-top: 0; box-shadow: none; }

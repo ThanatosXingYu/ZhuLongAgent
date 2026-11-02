@@ -175,7 +175,9 @@ class ToolManagerProtocol(Protocol):
 class CodexProtocol(Protocol):
     def enabled(self) -> bool: ...
 
-    def list(self) -> Any: ...
+    def list(
+        self, offset: int = 0, limit: int = 50, query: str = ""
+    ) -> Any: ...
 
     def get(self, task_id: str) -> Any: ...
 
@@ -1419,7 +1421,25 @@ def create_app(
                     503, "CODEX_UNAVAILABLE", "Codex CLI 未配置或不可用"
                 )
         assert services.codex is not None
-        data = _wire(services.codex.list())
+        try:
+            offset = int(request.query_params.get("offset", "0") or 0)
+            limit = int(request.query_params.get("limit", "50") or 50)
+        except ValueError:
+            return _error_response(400, "INVALID_REQUEST", "会话分页参数无效")
+        query = request.query_params.get("query", "").strip()[:200]
+        if offset < 0 or not 1 <= limit <= 200:
+            return _error_response(400, "INVALID_REQUEST", "会话分页参数无效")
+        try:
+            data = _wire(
+                await asyncio.to_thread(
+                    services.codex.list,
+                    offset,
+                    limit,
+                    query,
+                )
+            )
+        except ValueError as exc:
+            return _error_response(400, "INVALID_REQUEST", str(exc))
         if isinstance(data, dict):
             data["available"] = services.codex.enabled()
         return _success_response(data)

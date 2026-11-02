@@ -1295,6 +1295,84 @@ def test_codex_delete_remains_available_when_cli_is_not_configured() -> None:
         assert codex.deleted == "task-1"
 
 
+def test_codex_task_list_supports_pagination_and_query(tmp_path: Path) -> None:
+    class Prompt:
+        def prompt(self, exercise_id: int):
+            from internal.solver import PromptResult
+
+            return PromptResult(
+                "prompt",
+                False,
+                "",
+                exercise_id,
+                "Web",
+                f"task {exercise_id}",
+            )
+
+    class Runner:
+        def run(self, config: ProcessConfig, _prompt: str, _on_event, _cancel):
+            Path(config.output_path).parent.mkdir(parents=True, exist_ok=True)
+            Path(config.output_path).write_text("flag{paged}", encoding="utf-8")
+            return ProcessResult(0, "flag{paged}", f"session-{config.model}")
+
+    manager = CodexManager(
+        ManagerConfig(
+            ProcessConfig("codex", str(tmp_path), "http://model", model="m"),
+            Prompt(),
+            Runner(),
+            1,
+            tmp_path / "runs",
+            tmp_path / "writeups",
+            tmp_path,
+        )
+    )
+    for exercise_id in range(1, 13):
+        manager.start(exercise_id)
+
+    page = manager.list(offset=3, limit=4)
+    assert page.total == 12
+    assert page.offset == 3
+    assert page.page_size == 4
+    assert len(page.tasks) == 4
+    assert page.has_more is True
+
+    filtered = manager.list(offset=0, limit=50, query="task 10")
+    assert filtered.total == 1
+    assert filtered.tasks[0].title == "task 10"
+    assert filtered.has_more is False
+    manager.close()
+
+
+def test_codex_tasks_route_forwards_pagination() -> None:
+    class Codex:
+        def __init__(self) -> None:
+            self.request = None
+
+        def enabled(self) -> bool:
+            return True
+
+        def list(self, offset: int = 0, limit: int = 50, query: str = ""):
+            self.request = (offset, limit, query)
+            return {
+                "tasks": [],
+                "active": 0,
+                "limit": 10,
+                "total": 0,
+                "offset": offset,
+                "pageSize": limit,
+                "hasMore": False,
+            }
+
+    codex = Codex()
+    app = create_app(Source(), codex=codex)
+    with TestClient(app) as client:
+        response = client.get(
+            "/api/codex/tasks?offset=20&limit=25&query=Cold%20Forge"
+        )
+    assert response.status_code == 200
+    assert codex.request == (20, 25, "Cold Forge")
+
+
 def test_download_rejects_oversized_response(tmp_path: Path) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
