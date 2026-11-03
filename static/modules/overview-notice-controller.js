@@ -57,13 +57,16 @@ export function createOverviewNoticeController({
       }
     });
     if (nextRank > 0) {
+      const cutoff = Date.now() - 15 * 60 * 1000;
       state.overviewRankHistory.unshift({
         at: Date.now(),
         rank: nextRank,
         score: Number(data.stagePoint || 0),
         delta: rankDelta,
       });
-      state.overviewRankHistory = state.overviewRankHistory.slice(0, 8);
+      state.overviewRankHistory = state.overviewRankHistory
+        .filter((item) => item.at >= cutoff)
+        .slice(0, 5);
       renderRankHistory();
     }
   }

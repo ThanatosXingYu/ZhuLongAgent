@@ -76,6 +76,11 @@ test("比赛概览完整展示队伍数据、排名变化和公告区隔", async
   await expect(page.locator("#overview-rank-value")).toHaveText("5");
   await expect(page.locator("#overview-rank-history-count")).toHaveText("2");
   await expect(page.locator(".overview-rank-event").first()).toContainText("↑ 3");
+  for (rank of [4, 3, 2, 1, 0]) {
+    await page.locator("#refresh-overview").click();
+  }
+  await expect(page.locator("#overview-rank-history-count")).toHaveText("5");
+  await expect(page.locator(".overview-rank-event")).toHaveCount(5);
 });
 
 test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) => {
@@ -112,16 +117,12 @@ test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) 
       const icon = link.querySelector("svg").getBoundingClientRect();
       return Math.round(icon.x + icon.width / 2);
     });
-    const groupGaps = [...document.querySelectorAll(".sidebar-group")].map((group) => {
-      const tops = [...group.querySelectorAll(".sidebar-link")].map((link) =>
-        Math.round(link.getBoundingClientRect().top),
-      );
-      return new Set(tops.slice(1).map((top, index) => top - tops[index])).size;
-    });
-    return { iconCenters: new Set(iconCenters).size, groupGaps };
+    const tops = links.map((link) => Math.round(link.getBoundingClientRect().top));
+    const gaps = tops.slice(1).map((top, index) => top - tops[index]);
+    return { iconCenters: new Set(iconCenters).size, gaps: new Set(gaps).size };
   });
   expect(iconAlignment.iconCenters).toBe(1);
-  expect(iconAlignment.groupGaps.every((size) => size <= 1)).toBeTruthy();
+  expect(iconAlignment.gaps).toBe(1);
 
   await collapse.click();
   await page.waitForTimeout(60);
@@ -552,6 +553,8 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
       topbarHeight: topbar.height,
       workspaceLeft: workspace.left,
       workspaceTop: workspace.top,
+      overviewScrollHeight: document.querySelector(".topbar-overview").scrollHeight,
+      overviewClientHeight: document.querySelector(".topbar-overview").clientHeight,
       overflow: document.documentElement.scrollWidth - window.innerWidth,
     };
   });
@@ -560,6 +563,7 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
   expect(desktop.topbarHeight).toBeLessThan(90);
   expect(desktop.workspaceLeft).toBeGreaterThan(desktop.sidebarRight);
   expect(desktop.workspaceTop).toBeGreaterThan(desktop.topbarHeight);
+  expect(desktop.overviewScrollHeight).toBeLessThanOrEqual(desktop.overviewClientHeight + 1);
   expect(desktop.overflow).toBeLessThanOrEqual(1);
 
   await page.locator("#collapse-sidebar").click();

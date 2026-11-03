@@ -1629,11 +1629,20 @@ body.sidebar-collapsed .sidebar-footer .realtime-status {
   transition: opacity 80ms ease 105ms, visibility 0s linear 105ms, height var(--sidebar-motion), margin var(--sidebar-motion), line-height var(--sidebar-motion);
 }
 body.sidebar-collapsed .sidebar-group-label {
+  position: absolute;
   height: 0;
   margin-block: 0;
   line-height: 0;
   overflow: hidden;
 }
+body.sidebar-collapsed .sidebar-nav {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+}
+body.sidebar-collapsed .sidebar-group { display: contents; }
+body.sidebar-collapsed .sidebar-group + .sidebar-group { margin-top: 0; }
+body.sidebar-collapsed .sidebar-link { margin: 0 auto; }
 body.sidebar-collapsed .sidebar-collapse {
   top: 62px;
   right: 14px;
@@ -1656,6 +1665,13 @@ body.sidebar-collapsed .sidebar-link {
   margin-inline: auto;
   padding: 0;
   overflow: hidden;
+}
+body.sidebar-collapsed .sidebar-link > span {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
 }
 body.sidebar-collapsed .sidebar-link svg { width: 17px; height: 17px; }
 body.sidebar-collapsed .sidebar-link .sidebar-badge {
@@ -2115,6 +2131,7 @@ body { font-size: 14px; line-height: 1.55; }
 }
 .topbar-overview .scoreboard {
   height: 42px;
+  margin: 0;
   align-items: center;
   gap: 18px;
   padding-right: 14px;
@@ -2379,14 +2396,26 @@ body { font-size: 14px; line-height: 1.55; }
 }
 
 @media (max-width: 900px) {
-  .topbar-inner { grid-template-columns: minmax(0, 1fr) auto; }
-  .topbar-overview { grid-template-columns: 1fr; height: auto; }
-  .topbar-overview { grid-column: 1 / -1; grid-row: 2; }
-  .topbar-overview .scoreboard { display: none; }
+  .topbar-inner { grid-template-columns: minmax(140px, 0.7fr) minmax(360px, 1.3fr) auto; }
+  .topbar-overview { grid-template-columns: auto minmax(0, 1fr); height: 58px; }
+  .topbar-overview .scoreboard { display: flex; }
+  .topbar-overview #overview-updated-at { display: none; }
   .overview-hero { grid-template-columns: 1fr; }
   .overview-main-column { grid-template-rows: auto auto; }
   .overview-briefing-grid { grid-template-columns: 1fr; min-height: 0; }
   .overview-briefing-block + .overview-briefing-block { border-left: 1px solid var(--line); }
+}
+
+@media (max-width: 720px) {
+  .topbar-inner { grid-template-columns: minmax(0, 1fr) auto; }
+  .topbar-overview {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+  .topbar-overview .scoreboard { display: none; }
+  .topbar-overview #overview-updated-at { display: block; }
 }
 
 /* Routed workspaces use the sidebar as the only page chrome. */
