@@ -1123,6 +1123,13 @@ def test_platform_exports_portable_session_only_after_login(tmp_path: Path) -> N
     browser_script = exported.json()["data"]["browserScript"]
     assert "localStorage.setItem" in browser_script
     assert '"token":"login:portable-token"' in browser_script
+    browser_login = exported.json()["data"]["browserLogin"]
+    assert browser_login == {
+        "matchUrl": "https://match.ichunqiu.com/demo-match",
+        "sourceId": "source-id",
+        "token": "login:portable-token",
+        "cookies": [],
+    }
 
     anonymous_store = RuntimeConfigStore(
         Config(

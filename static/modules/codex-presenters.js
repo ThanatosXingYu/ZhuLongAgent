@@ -1,4 +1,4 @@
-import { formatDate, formatDuration, formatNumber } from "./formatters.js?v=20261103-layout15";
+import { formatDate, formatDuration, formatNumber } from "./formatters.js?v=20261104-archive1";
 
 export function codexStatusLabel(status) {
   return {

@@ -630,8 +630,10 @@ body.codex-task-open { overflow: hidden; }
 .codex-session-controls select:focus { border-color: #8fc6b0; box-shadow: 0 0 0 2px rgba(23, 107, 80, 0.08); }
 .codex-batch-toolbar { min-height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 5px 8px; }
 .codex-batch-toolbar > span { color: var(--text-faint); font-size: 10px; }
-.codex-batch-toolbar > div { display: flex; gap: 5px; }
+.codex-batch-toolbar > div { min-width: 0; display: flex; align-items: center; gap: 5px; }
 .codex-batch-toolbar .button { min-height: 27px; padding-inline: 7px; font-size: 10px; }
+.codex-export-format { height: 27px; min-width: 76px; padding: 0 5px; color: var(--text-muted); background: #ffffff; border: 1px solid var(--line); border-radius: 6px; outline: 0; font-size: 10px; }
+.codex-export-format:focus { border-color: #8fc6b0; box-shadow: 0 0 0 2px rgba(23, 107, 80, 0.08); }
 .codex-task-list { min-height: 0; overflow: auto; padding: 10px 8px 16px; }
 .codex-task-list .empty-state { min-height: 170px; }
 .codex-load-more-tasks { margin: 0 10px 12px; min-height: 34px; font-size: 12px; }
@@ -1605,6 +1607,7 @@ body.sidebar-collapsed .sidebar-brand {
   min-height: 96px;
   display: flex;
   flex-direction: row;
+  align-items: flex-start;
   justify-content: center;
   gap: 0;
   padding: 15px 11px 13px;
@@ -1644,10 +1647,10 @@ body.sidebar-collapsed .sidebar-group { display: contents; }
 body.sidebar-collapsed .sidebar-group + .sidebar-group { margin-top: 0; }
 body.sidebar-collapsed .sidebar-link { margin: 0 auto; }
 body.sidebar-collapsed .sidebar-collapse {
-  top: 62px;
+  top: 70px;
   right: 14px;
   width: 28px;
-  height: 24px;
+  height: 20px;
   color: #d8e5df;
   background: transparent;
   border-color: transparent;

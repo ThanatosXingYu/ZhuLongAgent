@@ -98,9 +98,17 @@ test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) 
     const sidebarNode = document.querySelector("#app-sidebar");
     const toggle = document.querySelector("#collapse-sidebar");
     const brand = document.querySelector(".sidebar-brand-mark");
+    const nav = document.querySelector(".sidebar-nav");
     const footer = document.querySelector(".sidebar-footer");
+    const toggleRect = toggle.getBoundingClientRect();
+    const brandRect = brand.getBoundingClientRect();
+    const navRect = nav.getBoundingClientRect();
     return {
-      toggleRight: Math.round(toggle.getBoundingClientRect().right),
+      toggleRight: Math.round(toggleRect.right),
+      toggleTop: Math.round(toggleRect.top),
+      toggleBottom: Math.round(toggleRect.bottom),
+      brandBottom: Math.round(brandRect.bottom),
+      navTop: Math.round(navRect.top),
       sidebarRight: Math.round(sidebarNode.getBoundingClientRect().right),
       brandWidth: Math.round(brand.getBoundingClientRect().width),
       footerDisplay: getComputedStyle(footer).display,
@@ -108,6 +116,8 @@ test("侧栏宽度、折叠边界与文字显隐时序稳定", async ({ page }) 
     };
   });
   expect(collapsedState.toggleRight).toBeLessThanOrEqual(collapsedState.sidebarRight);
+  expect(collapsedState.toggleTop - collapsedState.brandBottom).toBeGreaterThanOrEqual(16);
+  expect(collapsedState.toggleBottom).toBeLessThanOrEqual(collapsedState.navTop);
   expect(collapsedState.brandWidth).toBe(34);
   expect(collapsedState.footerDisplay).toBe("none");
   expect(collapsedState.labelOpacity).toBe("0");
@@ -346,6 +356,12 @@ test("设置页支持默认比赛、三种模型协议与请求包登录", async
           body: JSON.stringify(success({
             session: "ichunqiu-login-v1:portable-session-value",
             browserScript: "localStorage.setItem('source-id','session');location.reload();",
+            browserLogin: {
+              matchUrl: "https://match.ichunqiu.com/2026qwbs10",
+              sourceId: "source-id",
+              token: "login:test",
+              cookies: [],
+            },
           })),
         });
         return true;
@@ -391,6 +407,23 @@ test("设置页支持默认比赛、三种模型协议与请求包登录", async
   await page.locator("#session-export-menu summary").click();
   await expect(page.locator("#copy-agent-session")).toBeVisible();
   await expect(page.locator("#copy-browser-session")).toBeVisible();
+  await page.evaluate(() => {
+    document.documentElement.dataset.gcsisBrowserHelper = "test-extension";
+    Object.defineProperty(globalThis, "chrome", {
+      configurable: true,
+      value: {
+        runtime: {
+          lastError: null,
+          sendMessage: (_extensionId, _message, callback) => callback({
+            ok: true,
+            message: "已注入登录态并打开比赛页面",
+          }),
+        },
+      },
+    });
+  });
+  await page.locator("#copy-browser-session").click();
+  await expect(page.locator(".toast.success", { hasText: "已注入登录态并打开比赛页面" })).toBeVisible();
 });
 
 test("模型配置全屏页面支持多提供商、轮询和重试策略", async ({ page }) => {
@@ -828,7 +861,7 @@ test("Codex 会话树按页加载并显示总数", async ({ page }) => {
   await expect(page.locator("#codex-load-more-tasks")).toBeHidden();
 });
 
-test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page }) => {
+test("Codex 会话支持搜索、状态筛选、压缩归档和双格式导出", async ({ page }) => {
   page.on("dialog", (dialog) => dialog.accept());
   await openWorkbench(page, {
     state: {
@@ -839,7 +872,7 @@ test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page 
     },
   });
   await page.locator("#open-codex-tasks").click();
-  await expect(page.locator("#codex-session-archive")).toHaveValue("all");
+  await expect(page.locator("#codex-session-archive")).toHaveValue("active");
   await expect(page.locator(".codex-tree-item")).toHaveCount(2);
 
   await page.locator("#codex-session-search").fill("Broken");
@@ -857,17 +890,43 @@ test("Codex 会话支持搜索、状态筛选、归档和导出", async ({ page 
   await expect(page.locator(".codex-tree-item")).toHaveCount(1);
   await page.locator(".codex-task-select").check();
   await page.locator("#codex-archive-selected").click();
-  await expect(page.locator(".toast.success")).toContainText("已归档");
-  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
-  await expect(page.locator(".codex-tree-item")).toContainText("已归档");
+  await expect(page.locator(".toast.success")).toContainText("压缩归档");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(0);
 
   await page.locator("#codex-session-status").selectOption("");
-  await expect(page.locator(".codex-tree-item")).toHaveCount(2);
-  await page.locator("#codex-session-archive").selectOption("archived");
+  await expect(page.locator(".codex-tree-item")).toHaveCount(1);
+  await expect(page.locator(".codex-tree-item")).toContainText("正常工作流");
+  await page.locator("#open-codex-archive").click();
+  await expect(page).toHaveURL(/\/codex\/archive$/);
   await expect(page.locator(".codex-tree-item")).toHaveCount(1);
   await page.locator(".codex-task-select").check();
   await expect(page.locator("#codex-export-selected")).toBeEnabled();
-  const download = page.waitForEvent("download");
+  await page.locator("#codex-export-format").selectOption("markdown");
+  const markdownDownload = page.waitForEvent("download");
   await page.locator("#codex-export-selected").click();
-  expect((await download).suggestedFilename()).toMatch(/^codex-sessions-.*\.json$/);
+  expect((await markdownDownload).suggestedFilename()).toMatch(/^codex-sessions-.*\.md$/);
+  await page.locator("#codex-export-format").selectOption("json");
+  const jsonDownload = page.waitForEvent("download");
+  await page.locator("#codex-export-selected").click();
+  expect((await jsonDownload).suggestedFilename()).toMatch(/^codex-sessions-.*\.json$/);
+});
+
+test("Codex 会话支持多选批量删除", async ({ page }) => {
+  page.on("dialog", (dialog) => dialog.accept());
+  const { requests } = await openWorkbench(page, {
+    state: {
+      codexTasks: [
+        task({ id: "task-one", title: "待删除一" }),
+        task({ id: "task-two", title: "待删除二" }),
+      ],
+    },
+  });
+  await page.locator("#open-codex-tasks").click();
+  const checkboxes = page.locator(".codex-task-select");
+  await checkboxes.nth(0).check();
+  await checkboxes.nth(1).check();
+  await expect(page.locator("#codex-delete-selected")).toBeEnabled();
+  await page.locator("#codex-delete-selected").click();
+  await expect.poll(() => requests.find((request) => request.path === "/api/codex/tasks/delete")?.body?.taskIds?.length).toBe(2);
+  await expect(page.locator(".codex-tree-item")).toHaveCount(0);
 });

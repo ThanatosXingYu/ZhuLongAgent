@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261103-layout15">
+  <link rel="stylesheet" href="/styles.css?v=20261104-archive1">
 </head>
 <body>
   <aside id="app-sidebar" class="app-sidebar" aria-label="工作台导航">
@@ -47,6 +47,10 @@
           <i data-lucide="terminal-square" aria-hidden="true"></i>
           <span>Codex 会话</span>
           <span id="codex-active-count" class="sidebar-badge">0</span>
+        </button>
+        <button id="open-codex-archive" class="sidebar-link" type="button" data-sidebar-view="codex-archive-page" title="归档会话">
+          <i data-lucide="archive" aria-hidden="true"></i>
+          <span>归档会话</span>
         </button>
         <button id="open-model-routing" class="sidebar-link" type="button" data-sidebar-view="model-routing-page" title="模型路由">
           <i data-lucide="route" aria-hidden="true"></i>
@@ -452,8 +456,8 @@
                 <span><strong>Agent 登录包</strong><small>粘贴到其他 Agent 的登录态输入框</small></span>
               </button>
               <button id="copy-browser-session" type="button">
-                <i data-lucide="code-2" aria-hidden="true"></i>
-                <span><strong>浏览器注入 JS</strong><small>打开比赛页面后在控制台执行</small></span>
+                <i data-lucide="mouse-pointer-click" aria-hidden="true"></i>
+                <span><strong>浏览器一键登录</strong><small>自动写入比赛登录态；首次需安装浏览器助手</small></span>
               </button>
             </div>
           </details>
@@ -929,7 +933,7 @@
   <section id="codex-task-page" class="codex-task-page" aria-labelledby="codex-task-title" tabindex="-1" hidden>
     <header class="dialog-header codex-task-page-header">
       <div>
-        <p class="eyebrow">Local Codex Runner</p>
+        <p id="codex-task-page-eyebrow" class="eyebrow">Local Codex Runner</p>
         <h2 id="codex-task-title">Codex 会话树</h2>
       </div>
       <button id="close-codex-tasks" class="icon-button" type="button" title="关闭" aria-label="关闭 Codex 任务">
@@ -951,17 +955,18 @@
             <option value="interrupted">已中断</option>
             <option value="canceled">已停止</option>
           </select>
-          <select id="codex-session-archive" aria-label="筛选归档会话">
-            <option value="all" selected>全部会话</option>
-            <option value="active">当前会话</option>
-            <option value="archived">已归档</option>
-          </select>
+          <input id="codex-session-archive" type="hidden" value="active">
         </div>
         <div class="codex-batch-toolbar">
           <span id="codex-selected-count">未选择会话</span>
           <div>
+            <select id="codex-export-format" class="codex-export-format" aria-label="导出格式">
+              <option value="json">JSON</option>
+              <option value="markdown">Markdown</option>
+            </select>
             <button id="codex-export-selected" class="button button-ghost button-compact" type="button" disabled>导出</button>
             <button id="codex-archive-selected" class="button button-ghost button-compact" type="button" disabled>归档</button>
+            <button id="codex-delete-selected" class="button button-danger button-compact" type="button" disabled>删除</button>
           </div>
         </div>
         <div id="codex-task-list" class="codex-task-list" aria-live="polite">
@@ -1097,6 +1102,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="/vendor/lucide.min.js?v=0.468.0" defer></script>
-  <script type="module" src="/app.js?v=20261103-layout15"></script>
+  <script type="module" src="/app.js?v=20261104-archive1"></script>
 </body>
 </html>

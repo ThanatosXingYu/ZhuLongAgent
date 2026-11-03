@@ -86,7 +86,7 @@ def test_frontend_waits_for_platform_configuration_before_loading_workspace() ->
     assert "renderRichText(detail.content" in overview_script
     assert "innerHTML" not in script
     assert "copyCodexResumeCommand" not in script
-    assert "renderCodexEvents" in script
+    assert "codexSessionView.renderEvents" in script
     assert "const canFollowUp" in script and "const canSide" in script
     assert "const SCORE_REFRESH_MS = 5000;" in script
     assert "const NOTICE_REFRESH_MS = 10000;" in script
@@ -1557,11 +1557,22 @@ def test_codex_task_list_supports_pagination_and_query(tmp_path: Path) -> None:
         if manager.get(archived_id).status == "completed":
             break
         time.sleep(0.01)
-    manager.set_archived(archived_id, True)
+    archived = manager.set_archived(archived_id, True)
     active_page = manager.list(offset=0, limit=50)
     archived_page = manager.list(offset=0, limit=50, archived="archived")
     assert archived_id not in {task.id for task in active_page.tasks}
     assert [task.id for task in archived_page.tasks] == [archived_id]
+    archive_file = tmp_path / archived.archive_path
+    assert archived.archive_size > 0
+    assert archived.archive_original_size > 0
+    assert archive_file.is_file()
+    assert not (tmp_path / "runs" / archived_id / "events.jsonl").exists()
+    assert "会话已压缩归档" in manager.log_text(archived_id)
+    restored = manager.set_archived(archived_id, False)
+    assert restored.archived_at is None
+    assert restored.archive_size == 0
+    assert not archive_file.exists()
+    assert (tmp_path / "runs" / archived_id / "events.jsonl").is_file()
     manager.close()
 
 
@@ -1627,6 +1638,33 @@ def test_codex_archive_route_archives_tasks() -> None:
         )
     assert response.status_code == 200
     assert codex.calls == [("a" * 24, True), ("b" * 24, True)]
+
+
+def test_codex_batch_delete_route_deletes_tasks() -> None:
+    class Codex:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        def enabled(self) -> bool:
+            return True
+
+        def delete(self, task_id: str) -> None:
+            self.deleted.append(task_id)
+
+    codex = Codex()
+    app = create_app(Source(), codex=codex)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/codex/tasks/delete",
+            json={"taskIds": ["a" * 24, "b" * 24]},
+        )
+    assert response.status_code == 200
+    assert response.json()["data"] == {
+        "deleted": ["a" * 24, "b" * 24],
+        "count": 2,
+        "partial": False,
+    }
+    assert codex.deleted == ["a" * 24, "b" * 24]
 
 
 def test_download_rejects_oversized_response(tmp_path: Path) -> None:
@@ -1942,12 +1980,30 @@ def test_primary_frontend_routes_serve_application_shell() -> None:
             "/attachments",
             "/tools",
             "/codex",
+            "/codex/archive",
             "/models",
             "/settings",
         ):
             response = client.get(path)
             assert response.status_code == 200
             assert 'id="app-sidebar"' in response.text
+
+
+def test_browser_helper_is_local_and_scoped_to_competition_domain() -> None:
+    root = Path(__file__).parents[2]
+    helper = root / "static" / "browser-helper"
+    manifest = json.loads((helper / "manifest.json").read_text(encoding="utf-8"))
+    background = (helper / "background.js").read_text(encoding="utf-8")
+
+    assert manifest["manifest_version"] == 3
+    assert set(manifest["externally_connectable"]["matches"]) == {
+        "http://127.0.0.1/*",
+        "http://localhost/*",
+    }
+    assert "https://*.ichunqiu.com/*" in manifest["host_permissions"]
+    assert "chrome.cookies.set" in background
+    assert "chrome.scripting.executeScript" in background
+    assert "GCSIS_INJECT_ICHUNQIU_SESSION" in background
 
 
 def test_web_preserves_specific_flag_and_model_error_codes() -> None:
@@ -3338,6 +3394,10 @@ def test_codex_side_conversation_uses_question_summary_and_source(tmp_path: Path
 def test_codex_frontend_contains_tree_round_log_and_filter_controls() -> None:
     root = Path(__file__).parents[2]
     script = (root / "static" / "app.js").read_text(encoding="utf-8")
+    session_view = (
+        root / "static" / "modules" / "codex-session-view.js"
+    ).read_text(encoding="utf-8")
+    codex_sources = f"{script}\n{session_view}"
     page = (root / "static" / "index.html").read_text(encoding="utf-8")
 
     for marker in (
@@ -3351,7 +3411,7 @@ def test_codex_frontend_contains_tree_round_log_and_filter_controls() -> None:
         "codexExerciseActivity",
         "exerciseMatchesFilters",
     ):
-        assert marker in script
+        assert marker in codex_sources
     for element_id in (
         "codex-load-earlier",
         "codex-collapse-all",

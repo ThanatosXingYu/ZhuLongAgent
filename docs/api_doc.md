@@ -65,7 +65,7 @@ X-GCSIS-Action: environment-manager
 | `PUT` | `/api/config` | 保存模型和 Codex 配置 |
 | `POST` | `/api/platform/bind` | 绑定 i春秋比赛 |
 | `GET` | `/api/platform/auth` | 查询比赛登录态 |
-| `GET` | `/api/platform/session-export` | 导出 Agent 登录包和浏览器注入代码 |
+| `GET` | `/api/platform/session-export` | 导出 Agent 登录包和浏览器助手所需的登录数据 |
 | `GET` | `/api/platform/captcha` | 获取人工处理的验证码图片 |
 | `POST` | `/api/platform/login/password` | 密码登录 |
 | `POST` | `/api/platform/login/sms/send` | 发送短信验证码 |
@@ -105,7 +105,8 @@ X-GCSIS-Action: environment-manager
 | `POST` | `/api/exercises/{id}/codex/run` | 启动 Codex 解题任务 |
 | `POST` | `/api/exercises/{id}/codex/pure` | 启动 Codex 纯解题任务 |
 | `GET` | `/api/codex/tasks` | 分页查询 Codex 任务列表 |
-| `POST` | `/api/codex/tasks/archive` | 批量归档或取消归档 Codex 任务 |
+| `POST` | `/api/codex/tasks/archive` | 批量压缩归档或取消归档 Codex 任务 |
+| `POST` | `/api/codex/tasks/delete` | 批量永久删除 Codex 任务 |
 | `GET` | `/api/codex/tasks/{task_id}` | 查询 Codex 任务详情 |
 | `POST` | `/api/codex/tasks/{task_id}/message` | 在当前会话继续输入或创建 Side 对话 |
 | `POST` | `/api/codex/tasks/{task_id}/continue` | 发送标准故障恢复提示并继续任务 |
@@ -247,7 +248,7 @@ https://match.ichunqiu.com/index?k=example_entry_key
 
 Header：`X-GCSIS-Action: platform-auth`
 
-响应中的 `session` 可粘贴到其他 Agent 的登录态输入框。`browserScript` 是可粘贴到 i春秋比赛页面控制台的 JavaScript，会写入平台使用的 `localStorage[s_source_id]`、必要 Cookie 和登录 Token，然后跳转到当前比赛页面。
+响应中的 `session` 可粘贴到其他 Agent 的登录态输入框。`browserLogin` 是浏览器助手使用的结构化登录数据，包含比赛地址、`sourceId`、Token 和 Cookie 列表；安装 `static/browser-helper` 扩展后，页面中的“浏览器一键登录”会直接写入比赛域并打开对应页面，不再需要在控制台粘贴脚本。`browserScript` 仅保留为旧客户端兼容字段。
 
 两项导出内容都包含有效登录凭据，服务端不会写日志或回显到普通页面。
 
@@ -587,7 +588,9 @@ DELETE /api/codex/tasks/{task_id}
 
 `GET /api/codex/tasks` 即使当前 Codex CLI 暂不可用也会返回已经持久化的任务，并通过 `available: false` 标识不可启动新任务。任务元数据保存在 `work/runtime/codex/tasks.json`，不包含 API Key。
 
-任务列表支持 `offset`、`limit`、`query`、`status` 和 `archived` 查询参数。`status` 可传逗号分隔的状态，`archived` 可取 `active`、`archived` 或 `all`。`limit` 默认 `50`，最大 `200`；响应额外包含 `total`、`offset`、`pageSize` 和 `hasMore`。前端先加载首屏，用户滚动到会话树底部或点击“加载更多会话”时继续请求，不再一次传输全部历史。批量归档请求体为 `{"taskIds":["..."],"archived":true}`，归档不删除任务、日志或 WP。
+任务列表支持 `offset`、`limit`、`query`、`status` 和 `archived` 查询参数。`status` 可传逗号分隔的状态，`archived` 可取 `active`、`archived` 或 `all`。`limit` 默认 `50`，最大 `200`；响应额外包含 `total`、`offset`、`pageSize` 和 `hasMore`。主会话页只查询活动会话，压缩归档从独立 `/codex/archive` 页面查看。
+
+批量归档请求体为 `{"taskIds":["..."],"archived":true}`。归档会生成 `codex-runs/_archives/{taskId}.tar.gz`，压缩运行事件与任务元数据，并在校验成功后移除热日志；取消归档会恢复事件日志。批量删除请求体为 `{"taskIds":["..."]}`，只允许删除终态任务，并同时清理运行目录、归档、WP 和输出文件。
 
 附件下载使用工作区内的 `.part` 临时文件和 HTTP `Range` 请求。下载中断后重新启动同一附件会从已有字节继续；服务器返回 `200` 表示不支持 Range 时，服务会覆盖临时文件重新下载，避免内容重复拼接。
 

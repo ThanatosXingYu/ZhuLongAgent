@@ -110,17 +110,18 @@ def encode_portable_session(
 def browser_login_script(
     *, match_url: str, source_id: str, token: str, cookies: str = ""
 ) -> str:
-    cookie_pairs: list[tuple[str, str]] = []
-    if cookies.strip():
-        try:
-            parsed_cookies = SimpleCookie()
-            parsed_cookies.load(cookies)
-            cookie_pairs = [
-                (name, morsel.value)
-                for name, morsel in parsed_cookies.items()
-            ]
-        except CookieError:
-            cookie_pairs = []
+    payload = browser_login_payload(
+        match_url=match_url,
+        source_id=source_id,
+        token=token,
+        cookies=cookies,
+    )
+    raw_cookies = payload.get("cookies")
+    cookie_pairs = [
+        (str(item.get("name", "")), str(item.get("value", "")))
+        for item in raw_cookies
+        if isinstance(item, dict)
+    ] if isinstance(raw_cookies, list) else []
     user = json.dumps(
         {
             "user_id": "ichunqiu-agent-imported",
@@ -147,6 +148,28 @@ def browser_login_script(
         "  location.assign(target);\n"
         "})();"
     )
+
+
+def browser_login_payload(
+    *, match_url: str, source_id: str, token: str, cookies: str = ""
+) -> dict[str, object]:
+    cookie_pairs: list[dict[str, str]] = []
+    if cookies.strip():
+        try:
+            parsed_cookies = SimpleCookie()
+            parsed_cookies.load(cookies)
+            cookie_pairs = [
+                {"name": name, "value": morsel.value}
+                for name, morsel in parsed_cookies.items()
+            ]
+        except CookieError:
+            cookie_pairs = []
+    return {
+        "matchUrl": match_url.strip(),
+        "sourceId": source_id.strip(),
+        "token": token.strip(),
+        "cookies": cookie_pairs,
+    }
 
 
 def parse_session_request(raw: str) -> ImportedSession:

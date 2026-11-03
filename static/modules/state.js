@@ -49,7 +49,7 @@ export function createAppState({ realtimeStopped } = {}) {
     codexTaskLoadingMore: false,
     codexTaskQuery: "",
     codexTaskStatus: "",
-    codexTaskArchive: "all",
+    codexTaskArchive: "active",
     selectedCodexTaskIds: new Set(),
     codexSearchTimer: null,
     codexPollTimer: null,

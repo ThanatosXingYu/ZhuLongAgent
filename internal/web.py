@@ -39,7 +39,11 @@ from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
 from .config import Config, ConfigError, RuntimeConfigStore
 from .ichunqiu_api import AuthStatus, BindResult, CaptchaImage, LoginResult
-from .ichunqiu_session import browser_login_script, encode_portable_session
+from .ichunqiu_session import (
+    browser_login_payload,
+    browser_login_script,
+    encode_portable_session,
+)
 
 MAX_REQUEST_BYTES = 2048
 MAX_PLATFORM_REQUEST_BYTES = 16 * 1024
@@ -362,6 +366,23 @@ class CodexArchiveRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_task_ids(self) -> "CodexArchiveRequest":
+        if any(not _valid_codex_task_id(task_id) for task_id in self.task_ids):
+            raise ValueError("invalid task id")
+        if len(set(self.task_ids)) != len(self.task_ids):
+            raise ValueError("duplicate task id")
+        return self
+
+
+class CodexDeleteRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    task_ids: list[str] = Field(
+        alias="taskIds", min_length=1, max_length=100
+    )
+
+    @model_validator(mode="after")
+    def validate_task_ids(self) -> "CodexDeleteRequest":
         if any(not _valid_codex_task_id(task_id) for task_id in self.task_ids):
             raise ValueError("invalid task id")
         if len(set(self.task_ids)) != len(self.task_ids):
@@ -912,17 +933,28 @@ def create_app(
             token=current.platform_token,
             cookies=current.platform_cookies,
         )
-        script = (
-            browser_login_script(
+        login_payload: dict[str, object] = {}
+        script = ""
+        if current.match_source_id:
+            login_payload = browser_login_payload(
                 match_url=current.match_url,
                 source_id=current.match_source_id,
                 token=current.platform_token,
                 cookies=current.platform_cookies,
             )
-            if current.match_source_id
-            else ""
+            script = browser_login_script(
+                match_url=current.match_url,
+                source_id=current.match_source_id,
+                token=current.platform_token,
+                cookies=current.platform_cookies,
+            )
+        return _success_response(
+            {
+                "session": session,
+                "browserScript": script,
+                "browserLogin": login_payload,
+            }
         )
-        return _success_response({"session": session, "browserScript": script})
 
     @app.api_route(
         "/api/platform/import-session",
@@ -1578,6 +1610,36 @@ def create_app(
         return _success_response({"tasks": results})
 
     @app.api_route(
+        "/api/codex/tasks/delete",
+        methods=["POST"],
+    )
+    async def delete_codex_tasks(request: Request) -> JSONResponse:
+        if services.codex is None:
+            return _error_response(503, "CODEX_UNAVAILABLE", "Codex CLI 未配置或不可用")
+        parsed, error = await _validated_request(request, CodexDeleteRequest)
+        if error is not None:
+            return error
+        assert parsed is not None
+        deleted: list[str] = []
+        try:
+            for task_id in parsed.task_ids:
+                await asyncio.to_thread(services.codex.delete, task_id)
+                deleted.append(task_id)
+        except Exception as exc:
+            if deleted:
+                return _success_response(
+                    {
+                        "deleted": deleted,
+                        "count": len(deleted),
+                        "partial": True,
+                    }
+                )
+            return _codex_error(exc)
+        return _success_response(
+            {"deleted": deleted, "count": len(deleted), "partial": False}
+        )
+
+    @app.api_route(
         "/api/codex/tasks/{task_id}",
         methods=["DELETE"],
     )
@@ -1857,6 +1919,7 @@ def create_app(
             "/attachments",
             "/tools",
             "/codex",
+            "/codex/archive",
             "/models",
             "/settings",
         ):

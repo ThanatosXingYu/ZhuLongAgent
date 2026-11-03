@@ -115,16 +115,38 @@ export async function installApiMock(page, overrides = {}) {
       case "/api/codex/tasks/archive": {
         const ids = new Set(body?.taskIds || []);
         state.codexTasks = state.codexTasks.map((item) =>
-          ids.has(item.id) ? { ...item, archived: Boolean(body?.archived) } : item
+          ids.has(item.id)
+            ? {
+                ...item,
+                archived: Boolean(body?.archived),
+                archivePath: body?.archived ? `codex-runs/_archives/${item.id}.tar.gz` : "",
+                archiveSize: body?.archived ? 4096 : 0,
+              }
+            : item
         );
         data = { tasks: state.codexTasks.filter((item) => ids.has(item.id)) };
+        break;
+      }
+      case "/api/codex/tasks/delete": {
+        const ids = new Set(body?.taskIds || []);
+        state.codexTasks = state.codexTasks.filter((item) => !ids.has(item.id));
+        data = { deleted: [...ids], count: ids.size, partial: false };
         break;
       }
       default: {
         const codexTask = url.pathname.match(/^\/api\/codex\/tasks\/([^/]+)$/);
         if (codexTask && request.method() === "GET") data = state.codexTasks.find((item) => item.id === decodeURIComponent(codexTask[1])) || task();
+        else if (codexTask && request.method() === "DELETE") {
+          const taskId = decodeURIComponent(codexTask[1]);
+          state.codexTasks = state.codexTasks.filter((item) => item.id !== taskId);
+          data = { deleted: true };
+        }
         else if (url.pathname.endsWith("/logs.txt")) return route.fulfill({ status: 200, contentType: "text/plain", body: "complete log" });
-        else if (url.pathname.endsWith("/logs.json")) return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ events: task().events }) });
+        else if (url.pathname.endsWith("/logs.json")) {
+          const taskId = decodeURIComponent(url.pathname.split("/").at(-2));
+          const selected = state.codexTasks.find((item) => item.id === taskId) || task();
+          return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(selected.events || []) });
+        }
         else data = {};
       }
     }

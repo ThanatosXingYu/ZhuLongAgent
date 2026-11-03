@@ -13,6 +13,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import threading
 import time
@@ -784,6 +785,9 @@ class Snapshot:
     process_alive: bool = False
     process_started_at: datetime | None = None
     archived_at: datetime | None = None
+    archive_path: str = ""
+    archive_size: int = 0
+    archive_original_size: int = 0
 
     def to_dict(self, include_events: bool = True) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -858,6 +862,12 @@ class Snapshot:
         result["archived"] = self.archived_at is not None
         if self.archived_at:
             result["archivedAt"] = _time_wire(self.archived_at)
+        if self.archive_path:
+            result["archivePath"] = self.archive_path
+        if self.archive_size > 0:
+            result["archiveSize"] = self.archive_size
+        if self.archive_original_size > 0:
+            result["archiveOriginalSize"] = self.archive_original_size
         usage = self.usage
         completed_turns = self.completed_turns
         if completed_turns <= 0 and usage == TokenUsage():
@@ -1576,20 +1586,79 @@ class CodexManager:
                 raise TaskNotFound("codex task not found")
             if task.snapshot.status in {"queued", "running"}:
                 raise CodexError("运行中或排队中的任务不能归档")
-            task.snapshot = _replace_snapshot(
-                task.snapshot,
-                archived_at=datetime.now(timezone.utc) if archived else None,
-            )
-            self._append_event_locked(
-                task,
-                Event(
-                    datetime.now(timezone.utc),
-                    "task.archived" if archived else "task.unarchived",
-                    "任务已归档" if archived else "任务已取消归档",
-                    status="completed",
-                ),
-                round_number=max(1, task.snapshot.current_round),
-            )
+            if archived and task.snapshot.archived_at and task.snapshot.archive_path:
+                return self._snapshot(task)
+            if not archived and not task.snapshot.archived_at:
+                return self._snapshot(task)
+            if archived:
+                archived_at = datetime.now(timezone.utc)
+                previous_archive_path = task.snapshot.archive_path
+                previous_archive_size = task.snapshot.archive_size
+                previous_archive_original_size = task.snapshot.archive_original_size
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    archived_at=archived_at,
+                )
+                self._append_event_locked(
+                    task,
+                    Event(
+                        archived_at,
+                        "task.archived",
+                        "会话已压缩归档",
+                        status="completed",
+                    ),
+                    round_number=max(1, task.snapshot.current_round),
+                )
+                try:
+                    archive_path, archive_size, archive_original_size = (
+                        self._create_task_archive_locked(task)
+                    )
+                except CodexError:
+                    task.snapshot = _replace_snapshot(
+                        task.snapshot,
+                        archived_at=None,
+                        archive_path=previous_archive_path,
+                        archive_size=previous_archive_size,
+                        archive_original_size=previous_archive_original_size,
+                    )
+                    self._append_event_locked(
+                        task,
+                        Event(
+                            datetime.now(timezone.utc),
+                            "task.archive_failed",
+                            "会话压缩归档失败，任务保持活动状态",
+                            status="failed",
+                        ),
+                        round_number=max(1, task.snapshot.current_round),
+                    )
+                    self._persist_tasks_locked()
+                    raise
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    archive_path=archive_path,
+                    archive_size=archive_size,
+                    archive_original_size=archive_original_size,
+                )
+            else:
+                self._extract_task_archive_locked(task)
+                now = datetime.now(timezone.utc)
+                task.snapshot = _replace_snapshot(
+                    task.snapshot,
+                    archived_at=None,
+                    archive_path="",
+                    archive_size=0,
+                    archive_original_size=0,
+                )
+                self._append_event_locked(
+                    task,
+                    Event(
+                        now,
+                        "task.unarchived",
+                        "任务已取消归档",
+                        status="completed",
+                    ),
+                    round_number=max(1, task.snapshot.current_round),
+                )
             self._persist_tasks_locked()
             return self._snapshot(task)
 
@@ -1612,7 +1681,7 @@ class CodexManager:
             task = self._tasks.get(task_id)
             if task is None:
                 raise TaskNotFound("codex task not found")
-            path = self._events_path(task.snapshot.id)
+            path = self._event_source_path(task)
             expected_count = task.snapshot.log_count
         records: deque[Event] = deque(maxlen=limit)
         eligible_count = 0
@@ -1635,7 +1704,7 @@ class CodexManager:
             if task is None:
                 raise TaskNotFound("codex task not found")
             title = task.snapshot.title or f"题目 {task.snapshot.exercise_id}"
-            path = self._events_path(task_id)
+            path = self._event_source_path(task)
         lines = [f"Codex 任务：{title}", f"任务 ID：{task_id}", ""]
         for event in read_events(path):
             prefix = f"[{_time_wire(event.at)}]"
@@ -1659,14 +1728,16 @@ class CodexManager:
         with self._condition:
             if task_id not in self._tasks:
                 raise TaskNotFound("codex task not found")
-            path = self._events_path(task_id)
+            task = self._tasks[task_id]
+            path = self._event_source_path(task)
         return [event.to_dict() for event in read_events(path)]
 
     def raw_log_path(self, task_id: str) -> Path:
         with self._condition:
             if task_id not in self._tasks:
                 raise TaskNotFound("codex task not found")
-            path = self._events_path(task_id).resolve()
+            task = self._tasks[task_id]
+            path = self._event_source_path(task).resolve()
         try:
             path.relative_to(self.workspace_root.resolve())
         except ValueError as exc:
@@ -1769,13 +1840,18 @@ class CodexManager:
             self._order = [item for item in self._order if item != task_id]
             writeup_path = task.snapshot.writeup_path
             output_path = task.config.output_path
+            archive_path = task.snapshot.archive_path
             self._published_task_signatures.pop(task_id, None)
             self._publish("codex.deleted", task_id, {"id": task_id})
             self._persist_tasks_locked()
-        self._remove_artifacts(task_id, writeup_path, output_path)
+        self._remove_artifacts(task_id, writeup_path, output_path, archive_path)
 
     def _remove_artifacts(
-        self, task_id: str, writeup_path: str, output_path: str
+        self,
+        task_id: str,
+        writeup_path: str,
+        output_path: str,
+        archive_path: str = "",
     ) -> None:
         workspace = self.workspace_root.resolve()
         run_root = self._events_path(task_id).parent.resolve()
@@ -1785,7 +1861,7 @@ class CodexManager:
             raise CodexError("任务文件路径必须位于工作区内") from exc
         if run_root != workspace and run_root.exists() and not run_root.is_symlink():
             shutil.rmtree(run_root)
-        for raw_path in (writeup_path, output_path):
+        for raw_path in (writeup_path, output_path, archive_path):
             if not raw_path:
                 continue
             path = Path(raw_path)
@@ -2228,6 +2304,136 @@ class CodexManager:
             root = self.workspace_root / root
         return root / task_id / "events.jsonl"
 
+    def _archive_path(self, task_id: str) -> Path:
+        root = self.runs_root
+        if not root.is_absolute():
+            root = self.workspace_root / root
+        return root / "_archives" / f"{task_id}.tar.gz"
+
+    def _event_source_path(self, task: _Task) -> Path:
+        event_path = self._events_path(task.snapshot.id)
+        if event_path.exists():
+            return event_path
+        archive_path = self._resolve_workspace_path(task.snapshot.archive_path)
+        if archive_path is not None and archive_path.exists():
+            return archive_path
+        return event_path
+
+    def _resolve_workspace_path(self, raw_path: str) -> Path | None:
+        if not raw_path:
+            return None
+        path = Path(raw_path)
+        if not path.is_absolute():
+            path = self.workspace_root / path
+        try:
+            resolved = path.resolve()
+            resolved.relative_to(self.workspace_root.resolve())
+        except (OSError, ValueError):
+            return None
+        return resolved
+
+    def _create_task_archive_locked(self, task: _Task) -> tuple[str, int, int]:
+        events_path = self._events_path(task.snapshot.id)
+        metadata = json.dumps(
+            self._task_to_dict(task),
+            ensure_ascii=False,
+            indent=2,
+        ).encode("utf-8")
+        in_memory_event_payload = (
+            (
+                "\n".join(
+                    json.dumps(
+                        event.to_dict(),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                    )
+                    for event in task.snapshot.events
+                )
+                + "\n"
+            ).encode("utf-8")
+            if task.snapshot.events and not events_path.exists()
+            else b""
+        )
+        original_size = len(metadata) + (
+            events_path.stat().st_size
+            if events_path.exists()
+            else len(in_memory_event_payload)
+        )
+        archive_path = self._archive_path(task.snapshot.id)
+        archive_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{task.snapshot.id}.",
+            suffix=".tar.gz",
+            dir=str(archive_path.parent),
+        )
+        os.close(fd)
+        temporary = Path(temporary_name)
+        try:
+            with tarfile.open(temporary, "w:gz", format=tarfile.PAX_FORMAT) as archive:
+                info = tarfile.TarInfo("metadata.json")
+                info.size = len(metadata)
+                info.mode = 0o600
+                with tempfile.SpooledTemporaryFile() as handle:
+                    handle.write(metadata)
+                    handle.seek(0)
+                    archive.addfile(info, handle)
+                if events_path.exists() and events_path.is_file():
+                    archive.add(
+                        events_path,
+                        arcname="events.jsonl",
+                        recursive=False,
+                    )
+                elif in_memory_event_payload:
+                    event_info = tarfile.TarInfo("events.jsonl")
+                    event_info.size = len(in_memory_event_payload)
+                    event_info.mode = 0o600
+                    with tempfile.SpooledTemporaryFile() as handle:
+                        handle.write(in_memory_event_payload)
+                        handle.seek(0)
+                        archive.addfile(event_info, handle)
+                else:
+                    empty_events = tarfile.TarInfo("events.jsonl")
+                    empty_events.size = 0
+                    empty_events.mode = 0o600
+                    archive.addfile(empty_events)
+            temporary.chmod(0o600)
+            with tarfile.open(temporary, "r:gz") as archive:
+                names = set(archive.getnames())
+                if "metadata.json" not in names:
+                    raise CodexError("归档校验失败")
+            os.replace(temporary, archive_path)
+            archive_path.chmod(0o600)
+        except (OSError, tarfile.TarError) as exc:
+            raise CodexError(f"创建会话压缩归档失败：{exc}") from exc
+        finally:
+            temporary.unlink(missing_ok=True)
+        if events_path.exists() and not events_path.is_symlink():
+            events_path.unlink()
+        try:
+            display_path = archive_path.relative_to(self.workspace_root.resolve()).as_posix()
+        except ValueError:
+            display_path = str(archive_path)
+        return display_path, archive_path.stat().st_size, original_size
+
+    def _extract_task_archive_locked(self, task: _Task) -> None:
+        archive_path = self._resolve_workspace_path(task.snapshot.archive_path)
+        if archive_path is None or not archive_path.exists():
+            return
+        events_path = self._events_path(task.snapshot.id)
+        try:
+            with tarfile.open(archive_path, "r:gz") as archive:
+                member = archive.getmember("events.jsonl")
+                source = archive.extractfile(member)
+                data = source.read() if source is not None else b""
+                write_atomic(str(events_path), self.workspace_root, data)
+        except (KeyError, OSError, tarfile.TarError) as exc:
+            raise CodexError(f"读取压缩归档失败：{exc}") from exc
+        archive_path.unlink(missing_ok=True)
+        try:
+            archive_path.parent.rmdir()
+        except OSError:
+            pass
+
     def _append_event_locked(
         self, task: _Task, event: Event, round_number: int = 0
     ) -> Event:
@@ -2330,13 +2536,14 @@ class CodexManager:
         return normalized
 
     def _hydrate_task_events(self, task: _Task) -> None:
-        path = self._events_path(task.snapshot.id)
+        path = self._event_source_path(task)
+        persisted_path = self._events_path(task.snapshot.id)
         persisted = list(read_events(path))
         if not persisted:
             persisted = list(task.snapshot.events)
         normalized: list[Event] = []
         next_sequence = 1
-        rewrite = not path.exists()
+        rewrite = not persisted_path.exists() and path == persisted_path
         for event in persisted:
             sequence = event.sequence
             if sequence < next_sequence:
@@ -2345,7 +2552,7 @@ class CodexManager:
             normalized.append(replace(event, sequence=sequence))
             next_sequence = sequence + 1
         if normalized and rewrite:
-            write_events(path, normalized)
+            write_events(persisted_path, normalized)
         recent = tuple(normalized[-MAX_TASK_EVENTS:])
         aggregate_usage, completed_turns = _aggregate_event_usage(normalized)
         task.snapshot = _replace_snapshot(
@@ -2384,6 +2591,23 @@ class CodexManager:
             except (TypeError, ValueError, OSError):
                 LOGGER.warning("忽略无法恢复的 Codex 任务元数据", exc_info=True)
                 continue
+            if task.snapshot.archived_at and not task.snapshot.archive_path:
+                try:
+                    archive_path, archive_size, archive_original_size = (
+                        self._create_task_archive_locked(task)
+                    )
+                    task.snapshot = _replace_snapshot(
+                        task.snapshot,
+                        archive_path=archive_path,
+                        archive_size=archive_size,
+                        archive_original_size=archive_original_size,
+                    )
+                except CodexError:
+                    LOGGER.warning(
+                        "无法迁移旧版 Codex 归档：%s",
+                        task.snapshot.id,
+                        exc_info=True,
+                    )
             restored.append(task)
         with self._condition:
             for task in restored:
@@ -2723,6 +2947,9 @@ def _snapshot_from_dict(raw: Mapping[str, Any]) -> Snapshot:
         process_alive=bool(raw.get("processAlive", False)),
         process_started_at=_parse_time(raw.get("processStartedAt")),
         archived_at=_parse_time(raw.get("archivedAt")),
+        archive_path=str(raw.get("archivePath", "") or ""),
+        archive_size=_nonnegative_int(raw.get("archiveSize")),
+        archive_original_size=_nonnegative_int(raw.get("archiveOriginalSize")),
     )
 
 
@@ -2823,6 +3050,21 @@ def _event_from_dict(raw: Mapping[str, Any]) -> Event | None:
 
 
 def read_events(path: Path) -> Iterable[Event]:
+    if path.name.endswith(".tar.gz"):
+        try:
+            archive = tarfile.open(path, "r:gz")
+            member = archive.extractfile("events.jsonl")
+        except (KeyError, OSError, tarfile.TarError):
+            return ()
+        if member is None:
+            archive.close()
+            return ()
+
+        def archive_iterator() -> Iterable[Event]:
+            with archive, member:
+                yield from _read_event_lines(member)
+
+        return archive_iterator()
     try:
         handle = path.open("r", encoding="utf-8")
     except (FileNotFoundError, OSError):
@@ -2830,18 +3072,22 @@ def read_events(path: Path) -> Iterable[Event]:
 
     def iterator() -> Iterable[Event]:
         with handle:
-            for line in handle:
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(raw, Mapping):
-                    continue
-                event = _event_from_dict(raw)
-                if event is not None:
-                    yield event
+            yield from _read_event_lines(handle)
 
     return iterator()
+
+
+def _read_event_lines(handle: Any) -> Iterable[Event]:
+    for line in handle:
+        try:
+            raw = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(raw, Mapping):
+            continue
+        event = _event_from_dict(raw)
+        if event is not None:
+            yield event
 
 
 def _message_summary(message: str, max_length: int = 80) -> str:

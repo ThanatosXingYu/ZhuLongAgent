@@ -5,6 +5,7 @@ import pytest
 from internal.ichunqiu_session import (
     PORTABLE_SESSION_PREFIX,
     SessionImportError,
+    browser_login_payload,
     browser_login_script,
     encode_portable_session,
     parse_session_request,
@@ -206,3 +207,19 @@ def test_browser_login_script_sets_storage_and_redirects() -> None:
     assert "document.cookie" in script
     assert "location.assign(target)" in script
     assert "https://match.ichunqiu.com/demo" in script
+
+
+def test_browser_login_payload_exposes_structured_material_for_extension() -> None:
+    payload = browser_login_payload(
+        match_url="https://match.ichunqiu.com/demo",
+        source_id="source-id",
+        token="secret-token",
+        cookies="PHPSESSID=session-value",
+    )
+
+    assert payload == {
+        "matchUrl": "https://match.ichunqiu.com/demo",
+        "sourceId": "source-id",
+        "token": "secret-token",
+        "cookies": [{"name": "PHPSESSID", "value": "session-value"}],
+    }

@@ -6,6 +6,7 @@ export const SIDEBAR_VIEW_TITLES = Object.freeze({
   "tool-manager-dialog": "CTF 工具",
   "model-routing-page": "模型路由",
   "codex-task-page": "Codex 会话",
+  "codex-archive-page": "归档会话",
 });
 
 export const VIEW_PATHS = Object.freeze({
@@ -14,6 +15,7 @@ export const VIEW_PATHS = Object.freeze({
   "attachment-manager-dialog": "/attachments",
   "tool-manager-dialog": "/tools",
   "codex-task-page": "/codex",
+  "codex-archive-page": "/codex/archive",
   "model-routing-page": "/models",
   "settings-dialog": "/settings",
 });
