@@ -196,9 +196,13 @@ def test_browser_login_script_sets_storage_and_redirects() -> None:
         match_url="https://match.ichunqiu.com/demo",
         source_id="source-id",
         token="secret-token",
+        cookies="PHPSESSID=session-value",
     )
 
     assert 'localStorage.setItem(sourceId, JSON.stringify(user))' in script
     assert '"token":"secret-token"' in script
+    assert '"PHPSESSID"' in script
+    assert '"session-value"' in script
+    assert "document.cookie" in script
     assert "location.assign(target)" in script
     assert "https://match.ichunqiu.com/demo" in script

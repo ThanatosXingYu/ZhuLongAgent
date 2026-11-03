@@ -108,8 +108,19 @@ def encode_portable_session(
 
 
 def browser_login_script(
-    *, match_url: str, source_id: str, token: str
+    *, match_url: str, source_id: str, token: str, cookies: str = ""
 ) -> str:
+    cookie_pairs: list[tuple[str, str]] = []
+    if cookies.strip():
+        try:
+            parsed_cookies = SimpleCookie()
+            parsed_cookies.load(cookies)
+            cookie_pairs = [
+                (name, morsel.value)
+                for name, morsel in parsed_cookies.items()
+            ]
+        except CookieError:
+            cookie_pairs = []
     user = json.dumps(
         {
             "user_id": "ichunqiu-agent-imported",
@@ -128,7 +139,11 @@ def browser_login_script(
         f"  const sourceId = {json.dumps(source_id.strip())};\n"
         f"  const user = {user};\n"
         f"  const target = {json.dumps(match_url.strip())};\n"
+        f"  const cookies = {json.dumps(cookie_pairs, ensure_ascii=False)};\n"
         "  localStorage.setItem(sourceId, JSON.stringify(user));\n"
+        "  for (const [name, value] of cookies) {\n"
+        "    document.cookie = `${name}=${value}; path=/; domain=.ichunqiu.com; max-age=86400; SameSite=Lax; Secure`;\n"
+        "  }\n"
         "  location.assign(target);\n"
         "})();"
     )

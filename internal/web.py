@@ -917,6 +917,7 @@ def create_app(
                 match_url=current.match_url,
                 source_id=current.match_source_id,
                 token=current.platform_token,
+                cookies=current.platform_cookies,
             )
             if current.match_source_id
             else ""
