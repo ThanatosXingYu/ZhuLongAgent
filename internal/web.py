@@ -39,7 +39,7 @@ from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
 from .config import Config, ConfigError, RuntimeConfigStore
 from .ichunqiu_api import AuthStatus, BindResult, CaptchaImage, LoginResult
-from .ichunqiu_session import encode_portable_session
+from .ichunqiu_session import browser_login_script, encode_portable_session
 
 MAX_REQUEST_BYTES = 2048
 MAX_PLATFORM_REQUEST_BYTES = 16 * 1024
@@ -827,16 +827,22 @@ def create_app(
             return _error_response(
                 409, "PLATFORM_NOT_AUTHENTICATED", "当前还没有可导出的登录态"
             )
-        return _success_response(
-            {
-                "session": encode_portable_session(
-                    match_url=current.match_url,
-                    match_key=current.match_key,
-                    token=current.platform_token,
-                    cookies=current.platform_cookies,
-                )
-            }
+        session = encode_portable_session(
+            match_url=current.match_url,
+            match_key=current.match_key,
+            token=current.platform_token,
+            cookies=current.platform_cookies,
         )
+        script = (
+            browser_login_script(
+                match_url=current.match_url,
+                source_id=current.match_source_id,
+                token=current.platform_token,
+            )
+            if current.match_source_id
+            else ""
+        )
+        return _success_response({"session": session, "browserScript": script})
 
     @app.api_route(
         "/api/platform/import-session",

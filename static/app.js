@@ -78,6 +78,7 @@ import {
   let platformAuthController = null;
   let platformAuthEpoch = 0;
   let portablePlatformSession = "";
+  let portableBrowserScript = "";
   let modelRoutingController = null;
   let overviewNoticeController = null;
   let modelRoutingTrigger = null;
@@ -198,7 +199,9 @@ import {
     platformLogout: $("platform-logout"),
     platformTeamInfo: $("platform-team-info"),
     platformAuthenticatedActions: $("platform-authenticated-actions"),
-    copyAuthenticatedSession: $("copy-authenticated-session"),
+    sessionExportMenu: $("session-export-menu"),
+    copyAgentSession: $("copy-agent-session"),
+    copyBrowserSession: $("copy-browser-session"),
     platformTeamName: $("platform-team-name"),
     platformUserName: $("platform-user-name"),
     platformTeamScore: $("platform-team-score"),
@@ -231,7 +234,6 @@ import {
     smsLoginStatus: $("sms-login-status"),
     sessionLoginForm: $("session-login-form"),
     sessionRequestPacket: $("session-request-packet"),
-    copySessionLogin: $("copy-session-login"),
     sessionLogin: $("session-login"),
     sessionLoginStatus: $("session-login-status"),
     settingModelBaseUrl: $("setting-model-base-url"),
@@ -692,7 +694,10 @@ import {
     const contextUnavailable = authenticated && /已登录，.+暂不可用/.test(status.message || "");
     const expired = !authenticated && Boolean(status && /失效|过期|重新登录/.test(status.message || ""));
     state.authenticated = authenticated;
-    if (!authenticated) portablePlatformSession = "";
+    if (!authenticated) {
+      portablePlatformSession = "";
+      portableBrowserScript = "";
+    }
     if (authenticated) state.authExpiryNoticeAt = 0;
     const teamName = status && status.teamName ? ` · ${status.teamName}` : "";
     els.platformAuthStatus.textContent = authenticated ? `已登录${teamName}` : expired ? "登录已过期，请重新登录" : "待登录";
@@ -1235,8 +1240,8 @@ import {
         fillRuntimeConfig(config);
         state.activeEnvironments.clear();
         portablePlatformSession = "";
+        portableBrowserScript = "";
         els.sessionRequestPacket.value = "";
-        updateSessionCopyButton();
         renderActiveEnvironments();
         if (config.configured) {
           applyPlatformAuthentication({
@@ -1490,22 +1495,16 @@ import {
     });
   }
 
-  function updateSessionCopyButton() {
-    els.copySessionLogin.disabled = !els.sessionRequestPacket.value.trim();
-  }
-
   async function hydrateSessionLogin(options = {}) {
     if (!state.authenticated) {
       if (!els.sessionRequestPacket.value.trim()) {
         setInlineStatus(els.sessionLoginStatus, "登录成功后可自动生成登录态，也可粘贴其他 Agent 的登录态");
       }
-      updateSessionCopyButton();
       return "";
     }
     if (portablePlatformSession && !options.force) {
       els.sessionRequestPacket.value = portablePlatformSession;
-      setInlineStatus(els.sessionLoginStatus, "已载入当前账号登录态，可复制到其他电脑使用");
-      updateSessionCopyButton();
+      setInlineStatus(els.sessionLoginStatus, "当前账号登录态已载入");
       return portablePlatformSession;
     }
     try {
@@ -1515,9 +1514,9 @@ import {
       const session = String(result.session || "").trim();
       if (!session) return "";
       portablePlatformSession = session;
+      portableBrowserScript = String(result.browserScript || "").trim();
       els.sessionRequestPacket.value = session;
-      setInlineStatus(els.sessionLoginStatus, "已载入当前账号登录态，可复制到其他电脑使用");
-      updateSessionCopyButton();
+      setInlineStatus(els.sessionLoginStatus, "当前账号登录态已载入");
       return session;
     } catch (error) {
       if (!options.silent && error.code !== "PLATFORM_NOT_AUTHENTICATED") {
@@ -1527,28 +1526,38 @@ import {
     }
   }
 
-  async function copySessionLogin() {
-    const session = els.sessionRequestPacket.value.trim();
-    if (!session) return;
-    await copyPlatformSession(session);
-  }
-
-  async function copyPlatformSession(session) {
+  async function copyPlatformValue(value, fallbackLabel) {
     try {
-      await navigator.clipboard.writeText(session);
-      showToast("登录态已复制", "success");
+      await navigator.clipboard.writeText(value);
+      showToast(`${fallbackLabel}已复制`, "success");
     } catch {
+      els.sessionRequestPacket.value = value;
       els.sessionRequestPacket.focus();
       els.sessionRequestPacket.select();
-      showToast("自动复制失败，已选中登录态文本", "warning");
+      showToast(`自动复制失败，已选中${fallbackLabel}文本`, "warning");
     }
   }
 
-  async function copyAuthenticatedSession() {
-    await withButton(els.copyAuthenticatedSession, async () => {
-      const session = await hydrateSessionLogin({ force: !portablePlatformSession });
+  async function copyAgentSession() {
+    const button = els.copyAgentSession;
+    await withButton(button, async () => {
+      const session = await hydrateSessionLogin({ force: true });
       if (!session) return;
-      await copyPlatformSession(session);
+      await copyPlatformValue(session, "Agent 登录包");
+      els.sessionExportMenu.open = false;
+    });
+  }
+
+  async function copyBrowserSession() {
+    const button = els.copyBrowserSession;
+    await withButton(button, async () => {
+      await hydrateSessionLogin({ force: true });
+      if (!portableBrowserScript) {
+        showToast("当前比赛缺少浏览器注入所需的 source id", "error");
+        return;
+      }
+      await copyPlatformValue(portableBrowserScript, "浏览器注入代码");
+      els.sessionExportMenu.open = false;
     });
   }
 
@@ -4654,7 +4663,7 @@ import {
   }
 
   function bindSettingsEvents() {
-    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "login-mode-session", "password-login-form", "sms-login-form", "session-login-form", "session-request-packet", "copy-session-login", "copy-authenticated-session", "session-login", "session-login-status", "platform-authenticated-actions", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "setting-model-protocol", "model-options", "setting-codex-model", "setting-codex-protocol", "codex-model-options"], () => {
+    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "login-mode-session", "password-login-form", "sms-login-form", "session-login-form", "session-request-packet", "session-export-menu", "copy-agent-session", "copy-browser-session", "session-login", "session-login-status", "platform-authenticated-actions", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "setting-model-protocol", "model-options", "setting-codex-model", "setting-codex-protocol", "codex-model-options"], () => {
       els.openSettings.addEventListener("click", openSettingsDialog);
       document.querySelectorAll("[data-settings-tab]").forEach((button) => {
         button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab || "platform"));
@@ -4667,9 +4676,8 @@ import {
       els.smsLoginForm.addEventListener("submit", smsLogin);
       els.sessionLoginForm.addEventListener("submit", sessionLogin);
       els.sessionLogin.addEventListener("click", sessionLogin);
-      els.copySessionLogin.addEventListener("click", copySessionLogin);
-      els.copyAuthenticatedSession.addEventListener("click", copyAuthenticatedSession);
-      els.sessionRequestPacket.addEventListener("input", updateSessionCopyButton);
+      els.copyAgentSession.addEventListener("click", () => void copyAgentSession());
+      els.copyBrowserSession.addEventListener("click", () => void copyBrowserSession());
       els.platformLogout.addEventListener("click", logoutPlatform);
       els.sendSmsCode.addEventListener("click", sendSmsCode);
       els.refreshPasswordCaptcha.addEventListener("click", () => refreshCaptcha("image"));
@@ -4681,6 +4689,9 @@ import {
       bindModelPicker(els.settingModelName, els.modelOptions);
       bindModelPicker(els.settingCodexModel, els.codexModelOptions);
       document.addEventListener("click", (event) => {
+        if (event.target instanceof Element && !event.target.closest("#session-export-menu")) {
+          els.sessionExportMenu.open = false;
+        }
         if (event.target instanceof Element && event.target.closest(".model-picker")) return;
         els.modelOptions.hidden = true;
         els.codexModelOptions.hidden = true;
@@ -4694,7 +4705,6 @@ import {
         els.passwordImageCode.value = "";
         els.smsCode.value = "";
         els.sessionRequestPacket.value = "";
-        updateSessionCopyButton();
         closeDialog(els.settingsDialog);
       });
       els.settingsDialog.addEventListener("close", () => {
@@ -4704,7 +4714,7 @@ import {
         els.smsCode.value = "";
         els.sessionRequestPacket.value = "";
         portablePlatformSession = "";
-        updateSessionCopyButton();
+        portableBrowserScript = "";
         els.passwordCaptcha.removeAttribute("src");
         els.rotateCaptchaImage.removeAttribute("src");
       });

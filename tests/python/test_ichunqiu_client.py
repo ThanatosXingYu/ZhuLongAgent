@@ -1102,6 +1102,7 @@ def test_platform_exports_portable_session_only_after_login(tmp_path: Path) -> N
         Config(
             match_url="https://match.ichunqiu.com/demo-match",
             match_key="resolved-match-key",
+            match_source_id="source-id",
             platform_token="login:portable-token",
         ),
         tmp_path / ".runtime-config.json",
@@ -1118,7 +1119,10 @@ def test_platform_exports_portable_session_only_after_login(tmp_path: Path) -> N
     assert exported.status_code == 200
     session = exported.json()["data"]["session"]
     assert session.startswith("ichunqiu-login-v1:")
-    assert "login:portable-token" not in exported.text
+    assert "login:portable-token" not in session
+    browser_script = exported.json()["data"]["browserScript"]
+    assert "localStorage.setItem" in browser_script
+    assert '"token":"login:portable-token"' in browser_script
 
     anonymous_store = RuntimeConfigStore(
         Config(

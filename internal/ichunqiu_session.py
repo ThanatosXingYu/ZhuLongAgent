@@ -107,6 +107,33 @@ def encode_portable_session(
     return f"{PORTABLE_SESSION_PREFIX}{encoded}"
 
 
+def browser_login_script(
+    *, match_url: str, source_id: str, token: str
+) -> str:
+    user = json.dumps(
+        {
+            "user_id": "ichunqiu-agent-imported",
+            "token": token.strip(),
+            "user_name": "",
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return (
+        "(() => {\n"
+        "  if (!/(^|\\.)ichunqiu\\.com$/i.test(location.hostname)) {\n"
+        "    alert('请先打开 i春秋比赛页面，再粘贴这段代码');\n"
+        "    return;\n"
+        "  }\n"
+        f"  const sourceId = {json.dumps(source_id.strip())};\n"
+        f"  const user = {user};\n"
+        f"  const target = {json.dumps(match_url.strip())};\n"
+        "  localStorage.setItem(sourceId, JSON.stringify(user));\n"
+        "  location.assign(target);\n"
+        "})();"
+    )
+
+
 def parse_session_request(raw: str) -> ImportedSession:
     """Extract reusable authentication material from copied text."""
 

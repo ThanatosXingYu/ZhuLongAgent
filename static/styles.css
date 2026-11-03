@@ -2520,3 +2520,51 @@ dialog.is-page-dialog .dialog-header,
   .model-provider-heading { grid-template-columns: minmax(0, 1fr) auto; }
   .provider-routing-options { grid-column: 1 / -1; grid-row: 2; justify-content: flex-start; }
 }
+
+/* Session export */
+.session-export-menu { position: relative; flex: 0 0 auto; }
+.session-export-menu > summary { list-style: none; user-select: none; }
+.session-export-menu > summary::-webkit-details-marker { display: none; }
+.session-export-menu[open] > summary {
+  color: var(--brand);
+  background: var(--brand-soft);
+  border-color: #bfe0d1;
+}
+.session-export-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 286px;
+  display: grid;
+  gap: 3px;
+  padding: 5px;
+  background: #ffffff;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  box-shadow: 0 16px 36px rgba(23, 35, 31, 0.16);
+}
+.session-export-popover button {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 25px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  color: var(--text);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  text-align: left;
+}
+.session-export-popover button:hover { background: var(--surface-muted); }
+.session-export-popover button > svg { width: 16px; height: 16px; color: var(--brand); }
+.session-export-popover button > span { min-width: 0; display: grid; gap: 1px; }
+.session-export-popover strong { font-size: 11px; font-weight: 740; }
+.session-export-popover small { color: var(--text-faint); font-size: 9px; line-height: 1.35; }
+
+@media (max-width: 620px) {
+  .session-export-menu { width: 100%; }
+  .session-export-menu > summary { width: 100%; }
+  .session-export-popover { left: 0; right: auto; width: min(286px, calc(100vw - 48px)); }
+}

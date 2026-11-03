@@ -440,11 +440,23 @@
         </dl>
 
         <div id="platform-authenticated-actions" class="platform-authenticated-actions" hidden>
-          <span>当前账号可生成跨电脑复用的登录态，请勿发送给他人。</span>
-          <button id="copy-authenticated-session" class="button button-ghost" type="button">
-            <i data-lucide="copy" aria-hidden="true"></i>
-            <span>复制登录态</span>
-          </button>
+          <span>导出内容包含登录凭据，仅在可信设备使用。</span>
+          <details id="session-export-menu" class="session-export-menu">
+            <summary class="button button-ghost">
+              <i data-lucide="share-2" aria-hidden="true"></i>
+              <span>导出登录态</span>
+            </summary>
+            <div class="session-export-popover">
+              <button id="copy-agent-session" type="button">
+                <i data-lucide="bot" aria-hidden="true"></i>
+                <span><strong>Agent 登录包</strong><small>粘贴到其他 Agent 的登录态输入框</small></span>
+              </button>
+              <button id="copy-browser-session" type="button">
+                <i data-lucide="code-2" aria-hidden="true"></i>
+                <span><strong>浏览器注入 JS</strong><small>打开比赛页面后在控制台执行</small></span>
+              </button>
+            </div>
+          </details>
         </div>
 
         <div id="platform-login" class="platform-login" hidden>
@@ -528,13 +540,9 @@
               <span>登录态</span>
               <textarea id="session-request-packet" name="rawRequest" rows="8" maxlength="65536" spellcheck="false" placeholder="登录成功后会自动显示可跨电脑复用的登录态；也可粘贴其他 Agent 的登录态"></textarea>
             </label>
-            <p class="captcha-help">当前账号登录成功后会自动生成可复制的登录态，也可粘贴其他 Agent 的登录态、cURL 或包含 token 的文本。该字符串包含登录凭据，请勿发送给他人。</p>
+            <p class="captcha-help">这里用于导入其他 Agent 的登录态。当前账号请使用上方“导出登录态”生成 Agent 登录包或浏览器注入代码。</p>
             <div class="login-actions">
               <span id="session-login-status" class="settings-status" role="status"></span>
-              <button id="copy-session-login" class="button button-ghost" type="button" disabled>
-                <i data-lucide="copy" aria-hidden="true"></i>
-                <span>复制登录态</span>
-              </button>
               <button id="session-login" class="button button-primary" type="button">
                 <i data-lucide="clipboard-paste" aria-hidden="true"></i>
                 <span>导入登录态</span>

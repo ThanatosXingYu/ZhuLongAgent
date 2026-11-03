@@ -5,6 +5,7 @@ import pytest
 from internal.ichunqiu_session import (
     PORTABLE_SESSION_PREFIX,
     SessionImportError,
+    browser_login_script,
     encode_portable_session,
     parse_session_request,
 )
@@ -188,3 +189,16 @@ def test_portable_session_round_trip() -> None:
 def test_portable_session_rejects_truncated_payload() -> None:
     with pytest.raises(SessionImportError, match="格式无效"):
         parse_session_request(f"{PORTABLE_SESSION_PREFIX}not-valid-base64")
+
+
+def test_browser_login_script_sets_storage_and_redirects() -> None:
+    script = browser_login_script(
+        match_url="https://match.ichunqiu.com/demo",
+        source_id="source-id",
+        token="secret-token",
+    )
+
+    assert 'localStorage.setItem(sourceId, JSON.stringify(user))' in script
+    assert '"token":"secret-token"' in script
+    assert "location.assign(target)" in script
+    assert "https://match.ichunqiu.com/demo" in script

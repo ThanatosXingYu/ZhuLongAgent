@@ -345,6 +345,7 @@ test("设置页支持默认比赛、三种模型协议与请求包登录", async
           contentType: "application/json",
           body: JSON.stringify(success({
             session: "ichunqiu-login-v1:portable-session-value",
+            browserScript: "localStorage.setItem('source-id','session');location.reload();",
           })),
         });
         return true;
@@ -386,9 +387,10 @@ test("设置页支持默认比赛、三种模型协议与请求包登录", async
   await expect(page.locator("#session-login-status")).toHaveText("登录态导入成功");
   await expect(page.locator("#platform-auth-status")).toContainText("已登录");
   await expect(page.locator("#session-request-packet")).toHaveValue("ichunqiu-login-v1:portable-session-value");
-  await expect(page.locator("#copy-session-login")).toBeEnabled();
   await expect(page.locator("#platform-authenticated-actions")).toBeVisible();
-  await expect(page.locator("#copy-authenticated-session")).toBeEnabled();
+  await page.locator("#session-export-menu summary").click();
+  await expect(page.locator("#copy-agent-session")).toBeVisible();
+  await expect(page.locator("#copy-browser-session")).toBeVisible();
 });
 
 test("模型配置全屏页面支持多提供商、轮询和重试策略", async ({ page }) => {
