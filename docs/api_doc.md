@@ -51,6 +51,12 @@ X-GCSIS-Action: attachment-manager
 X-GCSIS-Action: tools-manager
 ```
 
+容器启动、停止和续期操作必须携带：
+
+```text
+X-GCSIS-Action: environment-manager
+```
+
 ## 接口总览
 
 | 方法 | 路径 | 说明 |
@@ -59,6 +65,7 @@ X-GCSIS-Action: tools-manager
 | `PUT` | `/api/config` | 保存模型和 Codex 配置 |
 | `POST` | `/api/platform/bind` | 绑定 i春秋比赛 |
 | `GET` | `/api/platform/auth` | 查询比赛登录态 |
+| `GET` | `/api/platform/session-export` | 导出 Agent 登录包和浏览器注入代码 |
 | `GET` | `/api/platform/captcha` | 获取人工处理的验证码图片 |
 | `POST` | `/api/platform/login/password` | 密码登录 |
 | `POST` | `/api/platform/login/sms/send` | 发送短信验证码 |
@@ -66,6 +73,7 @@ X-GCSIS-Action: tools-manager
 | `GET` | `/api/platform/schema` | 查询最近观测到的平台接口字段变化（仅字段名） |
 | `GET` | `/api/match-info` | 查询比赛信息 |
 | `GET` | `/api/overview` | 查询队伍得分与排名 |
+| `POST` | `/api/model-test` | 使用实际提供商配置发送模型测试消息 |
 | `GET` | `/api/exercises` | 查询题目列表 |
 | `GET` | `/api/exercises/{id}` | 查询题目详情 |
 | `POST` | `/api/exercises/{id}/answer` | 提交 Flag |
@@ -180,6 +188,21 @@ X-GCSIS-Action: tools-manager
 
 字段可以省略；省略的敏感字段保持原值。传入空字符串会清空对应值。`modelActiveProviderId` 指定唯一默认提供商，`modelPoolEnabled=false` 时只使用默认项；提供商的 `poolExclude=true` 表示仍可配置但不会进入轮询候选链。`codexMaxConcurrency` 允许 `1` 到 `16`，默认值为 `10`；超过并发上限的 Codex 任务会进入队列，正在运行的任务不会被暂停或取消。`codexCtfSkillsEnabled` 默认为 `true`，用于启用或关闭项目内置 CTF 技能包。比赛地址和登录态必须使用平台接口修改，不能通过此接口写入。
 
+### 测试模型连接
+
+`POST /api/model-test`
+
+```json
+{
+  "baseUrl": "https://model.example.test/v1",
+  "providerId": "provider-a",
+  "model": "solver-model",
+  "protocol": "openai-chat"
+}
+```
+
+`apiKey` 可省略；提供 `providerId` 时使用已保存的提供商 Key。接口会实际发送一条最小对话消息，并返回 `model`、`reply` 和 `latencyMs`。
+
 ## 比赛绑定与登录
 
 ### 绑定比赛
@@ -217,6 +240,16 @@ https://match.ichunqiu.com/index?k=example_entry_key
   }
 }
 ```
+
+### 导出登录态
+
+`GET /api/platform/session-export`
+
+Header：`X-GCSIS-Action: platform-auth`
+
+响应中的 `session` 可粘贴到其他 Agent 的登录态输入框。`browserScript` 是可粘贴到 i春秋比赛页面控制台的 JavaScript，会写入平台使用的 `localStorage[s_source_id]`、必要 Cookie 和登录 Token，然后跳转到当前比赛页面。
+
+两项导出内容都包含有效登录凭据，服务端不会写日志或回显到普通页面。
 
 ### 获取验证码
 
