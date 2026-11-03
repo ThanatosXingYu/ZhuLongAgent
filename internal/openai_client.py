@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import socket
+import time
 from dataclasses import dataclass, field
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
@@ -94,6 +95,31 @@ def fetch_models(
     if not result:
         raise ModelListError("模型接口返回的列表为空")
     return sorted(result, key=str.casefold)
+
+
+def test_model_connection(
+    base_url: str,
+    api_key: str,
+    model: str,
+    protocol: str = DEFAULT_PROTOCOL,
+    timeout: float = 20.0,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    client = OpenAIClient(
+        base_url,
+        api_key,
+        timeout=timeout,
+        protocol=protocol,
+    )
+    reply = client.complete(
+        model,
+        [Message("user", "请只回复 OK")],
+    )
+    return {
+        "model": model,
+        "reply": (reply.content or "（模型返回了工具调用）").strip()[:500],
+        "latencyMs": max(0, round((time.monotonic() - started) * 1000)),
+    }
 
 
 @dataclass(frozen=True)

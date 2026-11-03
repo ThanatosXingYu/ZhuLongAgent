@@ -33,7 +33,7 @@ from .download import (
 )
 from .environment import collect_environment_status
 from .events import EventBroker
-from .openai_client import ModelListError, fetch_models
+from .openai_client import ModelListError, fetch_models, test_model_connection
 from .routers.realtime import create_realtime_router
 from .solver import ModelNotConfigured
 from .tool_manager import ToolBusyError
@@ -307,6 +307,19 @@ class ModelListRequest(BaseModel):
     base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
     api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
     kind: Literal["model", "codex"] = "model"
+    provider_id: str | None = Field(default=None, alias="providerId", max_length=64)
+    protocol: Literal[
+        "openai-responses", "openai-chat", "anthropic"
+    ] = "openai-chat"
+
+
+class ModelTestRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
+    api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
+    model: str = Field(min_length=1, max_length=256)
     provider_id: str | None = Field(default=None, alias="providerId", max_length=64)
     protocol: Literal[
         "openai-responses", "openai-chat", "anthropic"
@@ -753,6 +766,72 @@ def create_app(
         except ModelListError as exc:
             return _error_response(502, "MODEL_LIST_FAILED", str(exc))
         return _success_response({"models": models, "kind": parsed.kind})
+
+    @app.api_route(
+        "/api/model-test",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def model_test(request: Request) -> JSONResponse:
+        if not _method(request, "POST"):
+            return _method_error("POST")
+        parsed, error = await _validated_request(request, ModelTestRequest)
+        if error is not None:
+            return error
+        assert parsed is not None
+        api_key = parsed.api_key or ""
+        if not api_key and config_store is not None:
+            current = config_store.get()
+            try:
+                providers = json.loads(current.model_providers_json or "[]")
+            except json.JSONDecodeError:
+                providers = []
+            if parsed.provider_id:
+                provider = next(
+                    (
+                        item
+                        for item in providers
+                        if isinstance(item, Mapping)
+                        and str(item.get("id", "")) == parsed.provider_id
+                    ),
+                    None,
+                )
+                if not isinstance(provider, Mapping):
+                    return _error_response(
+                        404, "MODEL_PROVIDER_NOT_FOUND", "模型提供商不存在"
+                    )
+                if (
+                    parsed.base_url.rstrip("/")
+                    != str(provider.get("baseUrl", "") or "").rstrip("/")
+                    or parsed.protocol != str(provider.get("protocol", "") or "")
+                ):
+                    return _error_response(
+                        400, "MODEL_PROVIDER_MISMATCH", "提供商配置已发生变化"
+                    )
+                api_key = str(provider.get("apiKey", "") or "")
+            elif (
+                current.model_base_url
+                and current.model_api_key
+                and parsed.base_url.rstrip("/")
+                == current.model_base_url.rstrip("/")
+                and parsed.protocol == current.model_protocol
+            ):
+                api_key = current.model_api_key
+        if not api_key:
+            return _error_response(
+                400, "MODEL_API_KEY_REQUIRED", "请填写 API Key 后再测试连接"
+            )
+        try:
+            result = await asyncio.to_thread(
+                test_model_connection,
+                parsed.base_url,
+                api_key,
+                parsed.model,
+                parsed.protocol,
+            )
+        except Exception as exc:
+            LOGGER.warning("Model connection test failed: %s", exc)
+            return _error_response(502, "MODEL_TEST_FAILED", str(exc))
+        return _success_response(result)
 
     @app.api_route(
         "/api/platform/bind",

@@ -689,16 +689,16 @@
           <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
         </label>
       </section>
-      <section class="settings-section">
+      <nav class="model-routing-tabs" aria-label="模型配置分区">
+        <button class="is-active" type="button" data-model-tab="providers" aria-pressed="true">模型配置</button>
+        <button type="button" data-model-tab="routing" aria-pressed="false">重试与退避</button>
+      </nav>
+      <section class="settings-section" data-model-panel="routing" hidden>
         <div class="settings-section-heading">
           <div>
             <h3>路由策略</h3>
             <p class="settings-section-note">默认提供商始终可被选中；参与轮询的其它提供商按策略进入请求链。</p>
           </div>
-          <button id="add-model-provider" class="button button-ghost button-compact" type="button">
-            <i data-lucide="plus" aria-hidden="true"></i>
-            <span>添加提供商</span>
-          </button>
         </div>
         <div class="settings-field">
           <span>策略</span>
@@ -716,7 +716,7 @@
           <input id="model-recovery-interval" type="number" min="10" max="3600" step="1" value="60">
         </label>
       </section>
-      <section class="settings-section">
+      <section class="settings-section" data-model-panel="routing" hidden>
         <div class="settings-section-heading">
           <div>
             <h3>Codex 自动压缩</h3>
@@ -728,8 +728,17 @@
           <input id="codex-auto-compact-limit" type="number" min="16384" max="872000" step="1000" value="500000">
         </label>
       </section>
-      <section class="settings-section">
-        <h3>提供商</h3>
+      <section class="settings-section" data-model-panel="providers">
+        <div class="settings-section-heading">
+          <div>
+            <h3>模型提供商</h3>
+            <p class="settings-section-note">选择默认项，并决定哪些提供商参与轮询。</p>
+          </div>
+          <button id="add-model-provider" class="button button-ghost button-compact" type="button">
+            <i data-lucide="plus" aria-hidden="true"></i>
+            <span>添加提供商</span>
+          </button>
+        </div>
         <div id="model-provider-list" class="model-provider-list"></div>
       </section>
       <footer class="settings-actions">

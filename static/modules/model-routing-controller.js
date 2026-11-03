@@ -19,6 +19,18 @@ export function createModelRoutingController({
     els.modelRoutingStatus.className = `settings-status${kind ? ` ${kind}` : ""}`;
   }
 
+  function setTab(tab) {
+    const selected = tab === "routing" ? "routing" : "providers";
+    els.modelRoutingPage.querySelectorAll("[data-model-tab]").forEach((button) => {
+      const active = button.dataset.modelTab === selected;
+      button.classList.toggle("is-active", active);
+      button.setAttribute("aria-pressed", String(active));
+    });
+    els.modelRoutingPage.querySelectorAll("[data-model-panel]").forEach((panel) => {
+      panel.hidden = panel.dataset.modelPanel !== selected;
+    });
+  }
+
   function setStrategy(value) {
     strategy = value === "failover" ? "failover" : "round-robin";
     els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
@@ -190,6 +202,11 @@ export function createModelRoutingController({
     const keyField = createElement("label", "provider-field");
     keyField.append(createElement("span", "", "API Key"), apiKey);
     modelGrid.append(modelField, keyField);
+    const testRow = createElement("div", "provider-test-row");
+    const testButton = createElement("button", "button button-ghost button-compact provider-test", "测试连接");
+    testButton.type = "button";
+    const testResult = createElement("span", "provider-test-result");
+    testRow.append(testButton, testResult);
     fetchButton.addEventListener("click", async () => {
       const value = baseUrl.value.trim();
       if (!value) {
@@ -228,7 +245,39 @@ export function createModelRoutingController({
         }
       });
     });
-    item.append(heading, grid, modelGrid);
+    testButton.addEventListener("click", async () => {
+      if (!baseUrl.value.trim() || !model.value.trim()) {
+        setStatus("请先填写接口地址和模型", "error");
+        return;
+      }
+      await withButton(testButton, async () => {
+        testResult.className = "provider-test-result is-testing";
+        testResult.textContent = "正在发送测试消息…";
+        try {
+          const result = await request("/api/model-test", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              baseUrl: baseUrl.value.trim(),
+              apiKey: apiKey.value.trim() || undefined,
+              providerId: provider.apiKeyConfigured && !provider.legacy ? id : undefined,
+              model: model.value.trim(),
+              protocol: protocol.value,
+            }),
+          });
+          testResult.className = "provider-test-result is-success";
+          testResult.textContent = `连接成功 · ${formatNumber(result.latencyMs)}ms · ${result.reply || "OK"}`;
+          item.classList.add("is-connection-ok");
+          setStatus(`连接成功：${result.model || model.value.trim()} · ${formatNumber(result.latencyMs)}ms`, "success");
+        } catch (error) {
+          testResult.className = "provider-test-result is-error";
+          testResult.textContent = `连接失败：${error.message}`;
+          item.classList.remove("is-connection-ok");
+          setStatus(`连接失败：${error.message}`, "error");
+        }
+      });
+    });
+    item.append(heading, grid, modelGrid, testRow);
     els.modelProviderList.append(item);
     updateSummary();
   }
@@ -285,6 +334,7 @@ export function createModelRoutingController({
     els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
     updateSummary();
     setStatus("选择默认提供商，并按需开启轮询");
+    setTab("providers");
     refreshIcons();
   }
 
@@ -349,6 +399,9 @@ export function createModelRoutingController({
       refreshIcons();
     });
     els.modelPoolEnabled.addEventListener("change", () => setPoolEnabled(els.modelPoolEnabled.checked));
+    els.modelRoutingPage.querySelectorAll("[data-model-tab]").forEach((button) => {
+      button.addEventListener("click", () => setTab(button.dataset.modelTab || "providers"));
+    });
     els.modelRecoveryInterval.addEventListener("input", updateSummary);
     els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
       button.addEventListener("click", () => setStrategy(button.dataset.routing || "round-robin"));

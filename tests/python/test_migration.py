@@ -432,6 +432,56 @@ def test_model_catalog_never_sends_saved_key_to_changed_endpoint(
     assert calls == []
 
 
+def test_model_test_uses_saved_provider_key_and_returns_latency(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    providers = [
+        {
+            "id": "provider-a",
+            "name": "Provider A",
+            "baseUrl": "https://model.example.test/v1",
+            "apiKey": "saved-secret",
+            "model": "solver",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": False,
+        }
+    ]
+    store = RuntimeConfigStore(
+        Config(model_providers_json=json.dumps(providers)),
+        tmp_path / ".runtime-config.json",
+    )
+    calls: list[tuple[str, str, str, str]] = []
+
+    def fake_test(base_url: str, api_key: str, model: str, protocol: str):
+        calls.append((base_url, api_key, model, protocol))
+        return {"model": model, "reply": "OK", "latencyMs": 42}
+
+    monkeypatch.setattr(web_module, "test_model_connection", fake_test)
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/model-test",
+            json={
+                "baseUrl": "https://model.example.test/v1",
+                "providerId": "provider-a",
+                "model": "solver",
+                "protocol": "openai-chat",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["latencyMs"] == 42
+    assert calls == [
+        (
+            "https://model.example.test/v1",
+            "saved-secret",
+            "solver",
+            "openai-chat",
+        )
+    ]
+
+
 def test_runtime_config_rejects_non_finite_retry_delays(tmp_path: Path) -> None:
     store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
     app = create_app(Source(), config_store=store)

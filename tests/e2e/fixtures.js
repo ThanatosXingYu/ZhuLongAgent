@@ -84,6 +84,7 @@ export async function installApiMock(page, overrides = {}) {
       case "/api/attachments/downloads": data = state.attachmentTask; break;
       case "/api/attachments/sizes": data = { status: "completed", totalFiles: 1, completedFiles: 1 }; break;
       case "/api/tools": data = state.toolCatalog; break;
+      case "/api/model-test": data = { model: body?.model || "model", reply: "OK", latencyMs: 42 }; break;
       case "/api/environment": data = { items: [], summary: "环境可用" }; break;
       case "/api/codex/tasks": {
         const query = (url.searchParams.get("query") || "").toLowerCase();

@@ -407,6 +407,9 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await rows.nth(0).locator(".provider-base-url").fill("https://a.example/v1");
   await rows.nth(0).locator(".provider-model").fill("model-a");
   await rows.nth(0).locator(".provider-protocol").selectOption("anthropic");
+  await rows.nth(0).locator(".provider-test").click();
+  await expect(rows.nth(0).locator(".provider-test-result")).toContainText("连接成功");
+  await expect(rows.nth(0).locator(".provider-test-result")).toContainText("42ms");
   await rows.nth(0).locator(".provider-active").check();
   await expect(rows.nth(0)).toHaveClass(/is-active-provider/);
   await expect(page.locator("#model-active-provider-name")).toHaveText("Provider A");
@@ -425,6 +428,8 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await expect(page.locator("#model-active-provider-count")).toHaveText("1");
   await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
 
+  await page.locator('[data-model-tab="routing"]').click();
+  await expect(page.locator('[data-model-panel="providers"]')).toBeHidden();
   await page.locator('[data-routing="failover"]').click();
   await expect(page.locator("#model-strategy-summary")).toHaveText("故障转移");
   await page.locator("#model-retry-delays").fill("1,5,10,10,15");
