@@ -14,22 +14,22 @@ import {
   isCodexTerminal,
   mergeCodexEventLists,
   normalizeCodexEvents,
-} from "./modules/codex-presenters.js?v=20261103-layout12";
-import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout12";
-import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout12";
-import { createApiClient } from "./modules/api.js?v=20261103-layout12";
-import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout12";
-import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261103-layout12";
-import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261103-layout12";
-import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout12";
-import { createElement, icon, refreshIcons, renderRichText as renderSafeRichText } from "./modules/rich-text.js?v=20261103-layout12";
-import { createAppState } from "./modules/state.js?v=20261103-layout12";
-import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout12";
+} from "./modules/codex-presenters.js?v=20261103-layout13";
+import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261103-layout13";
+import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261103-layout13";
+import { createApiClient } from "./modules/api.js?v=20261103-layout13";
+import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261103-layout13";
+import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261103-layout13";
+import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261103-layout13";
+import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout13";
+import { createElement, icon, refreshIcons, renderRichText as renderSafeRichText } from "./modules/rich-text.js?v=20261103-layout13";
+import { createAppState } from "./modules/state.js?v=20261103-layout13";
+import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout13";
 import {
   SIDEBAR_VIEW_TITLES,
   pathForView,
   viewForPath,
-} from "./modules/workspace-routes.js?v=20261103-layout12";
+} from "./modules/workspace-routes.js?v=20261103-layout13";
 
 "use strict";
 
