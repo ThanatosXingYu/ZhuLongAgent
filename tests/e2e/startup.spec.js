@@ -598,6 +598,22 @@ test("侧栏工作区在桌面和移动端保持稳定布局", async ({ page }) 
   expect(settingsBox.x).toBeGreaterThanOrEqual(desktop.sidebarRight - 1);
   await page.locator("#show-exercise-view").click();
 
+  await page.setViewportSize({ width: 1100, height: 900 });
+  const mediumDesktop = await page.evaluate(() => {
+    const overview = document.querySelector(".topbar-overview");
+    const copy = document.querySelector(".topbar-team-copy");
+    return {
+      topbarHeight: Math.round(document.querySelector(".topbar").getBoundingClientRect().height),
+      copyWidth: Math.round(copy.getBoundingClientRect().width),
+      scrollHeight: overview.scrollHeight,
+      clientHeight: overview.clientHeight,
+    };
+  });
+  expect(mediumDesktop.topbarHeight).toBeLessThan(90);
+  expect(mediumDesktop.copyWidth).toBeGreaterThan(140);
+  expect(mediumDesktop.scrollHeight).toBeLessThanOrEqual(mediumDesktop.clientHeight + 1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.locator("#open-sidebar")).toBeVisible();
   await page.locator("#open-sidebar").click();
