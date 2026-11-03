@@ -22,6 +22,7 @@ import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "
 import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261103-layout12";
 import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261103-layout12";
 import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261103-layout12";
+import { createElement, icon, refreshIcons, renderRichText as renderSafeRichText } from "./modules/rich-text.js?v=20261103-layout12";
 import { createAppState } from "./modules/state.js?v=20261103-layout12";
 import { groupToolsByCategory } from "./modules/tool-categories.js?v=20261103-layout12";
 import {
@@ -66,9 +67,6 @@ import {
 4.正文的中文和英文以及特殊符号之间不要加空格，除非是markdown语法等特殊要求
 5.wp不要太过臃肿，能够完整的写出该题的完整过程即可，也不要太过精简导致关键信息缺失
 6.最重要的是，该版wp为脱敏wp，因为该题目是动态环境题目。脱敏的要求为不得写出该题目的靶机和端口信息；不得写出该题解出的flag；不得写入任何与本机信息、本地路径相关的信息。这些可以追溯到个人的信息全部使用占位符或完全脱敏，然后再写入到wp中。`;
-  const RICH_TEXT_TAGS = new Set(["A", "B", "BLOCKQUOTE", "BR", "CODE", "DIV", "EM", "H1", "H2", "H3", "H4", "HR", "I", "IMG", "LI", "OL", "P", "PRE", "S", "SPAN", "STRONG", "TABLE", "TBODY", "TD", "TH", "THEAD", "TR", "U", "UL"]);
-  const DROPPED_RICH_TEXT_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "MATH", "OBJECT", "SCRIPT", "STYLE", "SVG", "TEXTAREA"]);
-
   const state = createAppState({ realtimeStopped: REALTIME_STATUS.STOPPED });
   for (const key of ["environmentRenewBusy", "environmentStopBusy", "trackedEnvironmentIds", "activeEnvironments"]) {
     if (key === "activeEnvironments" && !(state[key] instanceof Map)) state[key] = new Map();
@@ -462,76 +460,8 @@ import {
     if (restoreSidebar) setActiveSidebarView(activePrimaryView);
   }
 
-  function createElement(tag, className, text) {
-    const node = document.createElement(tag);
-    if (className) node.className = className;
-    if (text !== undefined) node.textContent = text;
-    return node;
-  }
-
   function renderRichText(raw, className) {
-    const container = createElement("div", className);
-    const documentNode = new DOMParser().parseFromString(String(raw || ""), "text/html");
-    if (![...documentNode.body.childNodes].some((node) => node.nodeType === Node.ELEMENT_NODE)) {
-      container.classList.add("is-plain");
-    }
-    documentNode.body.childNodes.forEach((node) => appendRichTextNode(container, node));
-    return container;
-  }
-
-  function appendRichTextNode(parent, source) {
-    if (source.nodeType === Node.TEXT_NODE) {
-      parent.append(document.createTextNode(source.textContent || ""));
-      return;
-    }
-    if (source.nodeType !== Node.ELEMENT_NODE) return;
-    const tag = source.tagName.toUpperCase();
-    if (DROPPED_RICH_TEXT_TAGS.has(tag)) return;
-    if (!RICH_TEXT_TAGS.has(tag)) {
-      source.childNodes.forEach((child) => appendRichTextNode(parent, child));
-      return;
-    }
-    if (tag === "A") {
-      const href = safeURL(source.getAttribute("href"));
-      if (!href) {
-        source.childNodes.forEach((child) => appendRichTextNode(parent, child));
-        return;
-      }
-      const link = document.createElement("a");
-      link.href = href;
-      link.target = "_blank";
-      link.rel = "noopener noreferrer";
-      if (source.getAttribute("title")) link.title = source.getAttribute("title");
-      source.childNodes.forEach((child) => appendRichTextNode(link, child));
-      parent.append(link);
-      return;
-    }
-    if (tag === "IMG") {
-      const src = safeURL(source.getAttribute("src"));
-      if (!src) return;
-      const image = document.createElement("img");
-      image.src = src;
-      image.alt = source.getAttribute("alt") || "题目图片";
-      image.loading = "lazy";
-      parent.append(image);
-      return;
-    }
-    const element = document.createElement(tag.toLowerCase());
-    source.childNodes.forEach((child) => appendRichTextNode(element, child));
-    parent.append(element);
-  }
-
-  function icon(name) {
-    const node = document.createElement("i");
-    node.dataset.lucide = name;
-    node.setAttribute("aria-hidden", "true");
-    return node;
-  }
-
-  function refreshIcons() {
-    if (window.lucide && typeof window.lucide.createIcons === "function") {
-      window.lucide.createIcons({ attrs: { "stroke-width": 1.8 } });
-    }
+    return renderSafeRichText(raw, className, safeURL);
   }
 
   function syncToastRegionHost(excludedDialog = null) {
