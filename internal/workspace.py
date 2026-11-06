@@ -44,6 +44,7 @@ def prepare_workspace_layout(workspace: str | Path) -> WorkspaceLayout:
     _migrate_directory(root / "tools" / "cache", layout.cache / "tools")
     _migrate_directory(root / "tools" / "tmp", layout.cache / "tools-tmp")
     _migrate_directory(root / "tools" / "go", layout.cache / "go")
+    _migrate_directory(root / "tools", data_root / "tools")
     for path in (
         layout.runtime,
         layout.download,

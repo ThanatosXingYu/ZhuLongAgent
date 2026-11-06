@@ -248,7 +248,7 @@ https://match.ichunqiu.com/index?k=example_entry_key
 
 Header：`X-GCSIS-Action: platform-auth`
 
-响应中的 `session` 可粘贴到其他 Agent 的登录态输入框。`browserLogin` 是浏览器助手使用的结构化登录数据，包含比赛地址、`sourceId`、Token 和 Cookie 列表；安装 `static/browser-helper` 扩展后，页面中的“浏览器一键登录”会直接写入比赛域并打开对应页面，不再需要在控制台粘贴脚本。`browserScript` 仅保留为旧客户端兼容字段。
+响应中的 `session` 可粘贴到其他 Agent 的登录态输入框。`browserScript` 是浏览器控制台可执行的登录脚本，页面会自动复制并显示完整代码，不会自动跳转比赛页面；用户可从只读代码框中手动复制，也可通过“打开平台”按钮打开当前比赛地址。`browserLogin` 提供比赛地址、`sourceId`、Token 和 Cookie 列表等结构化信息，供后续浏览器助手或受控浏览器方案复用。
 
 两项导出内容都包含有效登录凭据，服务端不会写日志或回显到普通页面。
 
@@ -430,7 +430,7 @@ Header：`X-GCSIS-Action: platform-auth`
 命令行辅助脚本同样调用此本地接口：
 
 ```bash
-.venv/bin/python scripts/submit_answer.py 17 'flag{answer}'
+.venv/bin/python temp/scripts/submit_answer.py 17 'flag{answer}'
 ```
 
 ### 环境操作
@@ -542,13 +542,13 @@ Content-Type: application/json
 {"toolIds":["sqlmap","z3"],"all":false}
 ```
 
-一键安装全部工具时使用 `{"toolIds":[],"all":true}`。安装状态优先由 `GET /api/events` 的 `tool.install` 事件实时推送，`GET /api/tools` 保留为首次快照和轮询降级接口；所有文件保存在当前目录的 `tools/`。
+一键安装全部工具时使用 `{"toolIds":[],"all":true}`。安装状态优先由 `GET /api/events` 的 `tool.install` 事件实时推送，`GET /api/tools` 保留为首次快照和轮询降级接口；所有文件保存在当前目录的 `work/tools/`。
 
 `GET /api/tools` 返回的每个工具包含 `category` 和 `categoryLabel`：
 
-- `python-library` / `Python 库`：安装到 `tools/venv`。
-- `go-project` / `Go 开源项目`：使用重定向到 `tools/go` 的 Go 缓存编译，入口位于 `tools/bin`。
-- `binary-package` / `独立工具 / 发行包`：下载并解压到 `tools/`。
+- `python-library` / `Python 库`：安装到 `work/tools/venv`。
+- `go-project` / `Go 开源项目`：使用重定向到 `work/cache/go` 的 Go 缓存编译，入口位于 `work/tools/bin`。
+- `binary-package` / `独立工具 / 发行包`：下载并解压到 `work/tools/`。
 
 响应中的 `progress` 包含 `currentBytes`、`currentTotal`、`speed`、`eta`、`phase` 和 `message`。上游没有提供总大小时，`indeterminate` 为 `true`，此时 `eta` 为 0，但速度仍会根据实际下载或本地缓存增长计算。
 
@@ -559,7 +559,7 @@ DELETE /api/tools/sqlmap
 X-GCSIS-Action: tools-manager
 ```
 
-卸载只处理当前工作目录的 `tools/` 内容。Python 工具通过 `tools/venv/bin/pip` 移除，Go 工具、发行包和启动器只删除对应的本地文件；不会调用系统包管理器，也不会删除工作台 `.venv`、`tools/skills/ctf-skills` 或系统级运行时。安装任务进行时，卸载请求会返回 `409`。
+卸载只处理当前工作目录的 `work/tools/` 内容。Python 工具通过 `work/tools/venv/bin/pip` 移除，Go 工具、发行包和启动器只删除对应的本地文件；不会调用系统包管理器，也不会删除工作台 `.venv`、`resources/skills/ctf-skills` 或系统级运行时。安装任务进行时，卸载请求会返回 `409`。
 
 本地环境检测使用 `GET /api/environment`，页面只在工具管理页展示。每项包含 `label`、`available`、`version` 和可选的 `path`，检测过程不会安装或修改系统运行时。
 

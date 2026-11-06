@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [tool.pytest.ini_options]
-testpaths = ["tests/python"]
+testpaths = ["temp/tests/python"]
 pythonpath = ["."]
 cache_dir = "work/cache/pytest"
 

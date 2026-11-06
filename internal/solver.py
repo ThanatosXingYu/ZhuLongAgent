@@ -410,14 +410,14 @@ def render_pure_prompt(
 
 
 def render_tool_block(workspace_root: Path) -> str:
-    tools_root = workspace_root / "tools"
+    tools_root = workspace_root / "work" / "tools"
     manifest = tools_root / "installed-tools.txt"
     return (
         "\n## CTF 工具目录\n\n"
         f"本项目的可选工具安装根目录是 `{tools_root}`。\n"
         f"Python 工具虚拟环境是 `{tools_root / 'venv'}`，命令行工具目录是 `{tools_root / 'bin'}`。\n"
         f"工具清单文件是 `{manifest}`；如果文件存在，请先阅读它获取当前已安装工具、入口路径和基本用法。\n"
-        f"内置字典目录是 `{tools_root / 'dictionaries'}`；需要授权的口令审计或候选值分析时可按需读取其中的文本文件，不要复制到系统目录，也不要把字典内容写入 WP。\n"
+        f"内置字典目录是 `{workspace_root / 'resources' / 'dictionaries'}`；需要授权的口令审计或候选值分析时可按需读取其中的文本文件，不要复制到系统目录，也不要把字典内容写入 WP。\n"
         "本题工作目录必须以“题目信息 > 文件路径”中列出的绝对路径为准；不要自行假设旧版相对下载目录。\n"
         "附件、解压文件、脚本和临时文件统一放在该题目工作目录中。\n"
         "使用工具前先检查对应路径和命令是否存在；不要把工具安装到系统目录，也不要修改与本题无关的文件。\n"

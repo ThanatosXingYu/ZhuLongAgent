@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261104-archive1">
+  <link rel="stylesheet" href="/styles.css?v=20261104-console3">
 </head>
 <body>
   <aside id="app-sidebar" class="app-sidebar" aria-label="工作台导航">
@@ -456,8 +456,8 @@
                 <span><strong>Agent 登录包</strong><small>粘贴到其他 Agent 的登录态输入框</small></span>
               </button>
               <button id="copy-browser-session" type="button">
-                <i data-lucide="mouse-pointer-click" aria-hidden="true"></i>
-                <span><strong>浏览器一键登录</strong><small>自动写入比赛登录态；首次需安装浏览器助手</small></span>
+                <i data-lucide="code-2" aria-hidden="true"></i>
+                <span><strong>浏览器登录脚本</strong><small>自动复制并显示 JS，然后打开比赛页面</small></span>
               </button>
             </div>
           </details>
@@ -605,7 +605,7 @@
             <input id="setting-codex-ctf-skills" name="codexCtfSkillsEnabled" type="checkbox" checked>
             <span>启用 CTF 技能包（默认开启）</span>
           </label>
-          <p class="settings-section-note">技能源位于当前项目的 tools/skills，启动任务时会复制到本项目专用的 runtime/codex；关闭后新任务不会加载。</p>
+          <p class="settings-section-note">技能源位于当前项目的 resources/skills，启动任务时会复制到本项目专用的 work/runtime/codex；关闭后新任务不会加载。</p>
           <label class="settings-checkbox" for="setting-codex-auto-resume">
             <input id="setting-codex-auto-resume" name="codexAutoResumeInterrupted" type="checkbox">
             <span>程序启动后自动恢复被中断的 Codex 任务</span>
@@ -1099,9 +1099,30 @@
     </footer>
   </dialog>
 
+  <dialog id="browser-script-dialog" class="browser-script-dialog" aria-labelledby="browser-script-title">
+    <header class="dialog-header">
+      <div>
+        <p class="eyebrow">Browser Console</p>
+        <h2 id="browser-script-title">浏览器登录脚本</h2>
+      </div>
+      <button id="close-browser-script" class="icon-button" type="button" title="关闭" aria-label="关闭浏览器登录脚本">
+        <i data-lucide="x" aria-hidden="true"></i>
+      </button>
+    </header>
+    <div class="browser-script-body">
+      <p id="browser-script-status" class="settings-status">正在读取登录态并复制脚本</p>
+      <textarea id="browser-script-code" readonly spellcheck="false" aria-label="浏览器控制台登录脚本"></textarea>
+      <p class="browser-script-hint">脚本已设置为只读。若自动复制被浏览器拦截，请点击“复制代码”，再到比赛页面控制台粘贴执行。</p>
+    </div>
+    <footer class="settings-actions">
+      <button id="open-browser-platform" class="button button-ghost" type="button">打开平台</button>
+      <button id="copy-browser-script" class="button button-primary" type="button">复制代码</button>
+    </footer>
+  </dialog>
+
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="/vendor/lucide.min.js?v=0.468.0" defer></script>
-  <script type="module" src="/app.js?v=20261104-archive1"></script>
+  <script type="module" src="/app.js?v=20261104-console3"></script>
 </body>
 </html>

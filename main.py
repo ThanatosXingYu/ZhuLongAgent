@@ -35,7 +35,7 @@ def build_application(config: Config | None = None) -> FastAPI:
     """Build the ASGI app and all services using only paths below the workspace."""
 
     workspace = Path.cwd().absolute()
-    cfg = config or load(workspace / ".env")
+    cfg = config or load(workspace / "temp" / ".env")
     layout = prepare_workspace_layout(workspace)
     runtime_root = layout.runtime
     config_path = runtime_root / "config.json"
@@ -199,7 +199,7 @@ def _listen_parts(value: str) -> tuple[str, int]:
 def run() -> None:
     import uvicorn
 
-    cfg = load(Path.cwd() / ".env")
+    cfg = load(Path.cwd() / "temp" / ".env")
     app = build_application(cfg)
     host, port = _listen_parts(cfg.listen_addr)
     LOGGER.info("CTF web console listening at http://%s:%d", host, port)

@@ -115,10 +115,10 @@ TOOL_SPECS: tuple[ToolSpec, ...] = (
     ToolSpec("exiftool", "ExifTool", "exiftool", "图片和文件元数据读取", "exiftool", "exiftool", "https://exiftool.org/", "https://github.com/exiftool/exiftool"),
     ToolSpec("checksec", "checksec", "checksec", "检查 ELF、Mach-O 和 PE 文件的安全保护属性", kind="github-script", command="checksec", homepage="https://github.com/slimm609/checksec.sh", install_url="https://raw.githubusercontent.com/slimm609/checksec.sh/master/checksec", platforms=("linux", "macos"), support_note="Shell 工具，不支持原生 Windows"),
     ToolSpec("apktool", "Apktool", "apktool", "Android APK 反编译、资源解析和重打包", kind="github-release", command="apktool", homepage="https://github.com/iBotPeaches/Apktool", install_url="https://github.com/iBotPeaches/Apktool/releases"),
-    ToolSpec("7z", "7-Zip", "7z", "常用压缩包解压和归档工具（当前安装为源码副本）", kind="github-source", command="7z", homepage="https://github.com/ip7z/7zip", install_url="https://github.com/ip7z/7zip/releases", support_note="当前仅获取源码，不自动编译；Windows 可在 tools/src/7z 中使用 Visual Studio 构建"),
+    ToolSpec("7z", "7-Zip", "7z", "常用压缩包解压和归档工具（当前安装为源码副本）", kind="github-source", command="7z", homepage="https://github.com/ip7z/7zip", install_url="https://github.com/ip7z/7zip/releases", support_note="当前仅获取源码，不自动编译；Windows 可在 work/tools/src/7z 中使用 Visual Studio 构建"),
     ToolSpec("foremost", "foremost", "foremost", "基于文件头和尾部特征的数据雕刻恢复工具（当前安装为源码副本）", kind="github-source", command="foremost", homepage="https://github.com/korczis/foremost", install_url="https://github.com/korczis/foremost", platforms=("linux", "macos"), support_note="当前仅获取源码，不自动编译；原生 Windows 不受上游支持"),
-    ToolSpec("john", "John the Ripper", "john", "密码哈希审计和口令恢复工具（当前安装为源码副本）", kind="github-source", command="john", homepage="https://github.com/openwall/john", install_url="https://github.com/openwall/john", support_note="当前仅获取源码，不自动编译；Windows 可在 tools/src/john 中按上游说明构建"),
-    ToolSpec("hashcat", "Hashcat", "hashcat", "GPU/CPU 密码哈希恢复工具（当前安装为源码副本）", kind="github-source", command="hashcat", homepage="https://github.com/hashcat/hashcat", install_url="https://github.com/hashcat/hashcat", support_note="当前仅获取源码，不自动编译；Windows 可在 tools/src/hashcat 中按上游说明构建"),
+    ToolSpec("john", "John the Ripper", "john", "密码哈希审计和口令恢复工具（当前安装为源码副本）", kind="github-source", command="john", homepage="https://github.com/openwall/john", install_url="https://github.com/openwall/john", support_note="当前仅获取源码，不自动编译；Windows 可在 work/tools/src/john 中按上游说明构建"),
+    ToolSpec("hashcat", "Hashcat", "hashcat", "GPU/CPU 密码哈希恢复工具（当前安装为源码副本）", kind="github-source", command="hashcat", homepage="https://github.com/hashcat/hashcat", install_url="https://github.com/hashcat/hashcat", support_note="当前仅获取源码，不自动编译；Windows 可在 work/tools/src/hashcat 中按上游说明构建"),
     ToolSpec("gdb", "GDB", "gdb", "GNU 调试器源码副本，安装后需自行构建", kind="github-source", command="gdb", homepage="https://github.com/bminor/binutils-gdb", install_url="https://github.com/bminor/binutils-gdb", platforms=("linux", "windows"), support_note="当前仅获取源码，不自动编译；macOS 需要额外代码签名，本工作台暂不自动安装"),
     ToolSpec("pwndbg", "pwndbg", "pwndbg", "GDB 的二进制漏洞利用调试增强插件源码副本", kind="github-source", command="pwndbg", homepage="https://github.com/pwndbg/pwndbg", install_url="https://github.com/pwndbg/pwndbg", platforms=("linux",), support_note="当前仅获取源码，不自动安装；Windows 请在 WSL 中使用，并先准备 GDB"),
 )
@@ -213,8 +213,8 @@ class ToolManager:
         data_root: str | Path | None = None,
     ) -> None:
         self.workspace = workspace.resolve()
-        self.root = self.workspace / "tools"
         self.data_root = Path(data_root or self.workspace / "work")
+        self.root = self.data_root / "tools"
         self.cache_root = self.data_root / "cache" / "tools"
         self.tmp_root = self.data_root / "cache" / "tools-tmp"
         self.manifest_path = self.root / "installed-tools.txt"
@@ -307,22 +307,17 @@ class ToolManager:
         }
 
     def _migrate_legacy_root(self) -> None:
-        """Move the former hidden directory to the visible workspace path."""
-        legacy = self.workspace / ".tools"
-        if self.root.exists() or not legacy.exists():
-            return
-        try:
-            legacy.rename(self.root)
-        except OSError:
-            # A cross-device or partially populated move should not prevent
-            # startup; copy the tree while preserving the legacy directory.
+        """Move legacy tool roots into the workspace data directory."""
+        for legacy in (self.workspace / ".tools", self.workspace / "tools"):
+            if legacy == self.root or not legacy.exists():
+                continue
             try:
                 shutil.copytree(legacy, self.root, dirs_exist_ok=True)
             except OSError:
-                return
+                continue
 
     def _sync_venv_launchers(self) -> None:
-        """Expose installed Python console scripts under ``tools/bin``."""
+        """Expose installed Python console scripts under ``work/tools/bin``."""
         for spec in TOOL_SPECS:
             if spec.kind == "python" and spec.command and self._venv_command(spec.command).is_file():
                 self._write_venv_launcher(spec.command)
@@ -339,28 +334,34 @@ class ToolManager:
         return self.root / "bin" / f"{name}{suffix}"
 
     def _repair_legacy_paths(self) -> None:
-        """Repair venv script shebangs after moving ``.tools`` to ``tools``."""
-        old_root = (self.workspace / ".tools").as_posix()
+        """Repair venv script shebangs after moving the tool root."""
         new_root = self.root.as_posix()
-        if not self.root.is_dir() or old_root == new_root:
+        if not self.root.is_dir():
             return
-        for path in self.root.rglob("*"):
-            try:
-                is_candidate = path.is_file() and path.stat().st_size <= 2 * 1024 * 1024
-            except OSError:
-                is_candidate = False
-            if not is_candidate:
+        old_roots = (
+            (self.workspace / ".tools").as_posix(),
+            (self.workspace / "tools").as_posix(),
+        )
+        for old_root in old_roots:
+            if old_root == new_root:
                 continue
-            try:
-                content = path.read_text(encoding="utf-8")
-            except (OSError, UnicodeDecodeError):
-                continue
-            if old_root not in content:
-                continue
-            try:
-                path.write_text(content.replace(old_root, new_root), encoding="utf-8")
-            except OSError:
-                continue
+            for path in self.root.rglob("*"):
+                try:
+                    is_candidate = path.is_file() and path.stat().st_size <= 2 * 1024 * 1024
+                except OSError:
+                    is_candidate = False
+                if not is_candidate:
+                    continue
+                try:
+                    content = path.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+                if old_root not in content:
+                    continue
+                try:
+                    path.write_text(content.replace(old_root, new_root), encoding="utf-8")
+                except OSError:
+                    continue
 
     def install(self, names: list[str] | None = None, all_tools: bool = False) -> dict[str, Any]:
         with self._lock:
@@ -459,7 +460,7 @@ class ToolManager:
             root = self.root.resolve()
             resolved_pip = pip.resolve(strict=False)
             if resolved_pip == root or root not in resolved_pip.parents:
-                raise OSError("拒绝执行 tools 目录之外的 pip")
+                raise OSError("拒绝执行 work/tools 目录之外的 pip")
             packages = spec.packages or ((spec.package,) if spec.package else ())
             if packages:
                 self._run_command([str(pip), "uninstall", "-y", *packages], timeout=300)
@@ -474,7 +475,7 @@ class ToolManager:
         """Remove every artifact this tool installer can create.
 
         The launcher is deliberately kept separate from the virtualenv.  In
-        particular, pwntools may provide ``tools/venv/bin/checksec``; that
+        particular, pwntools may provide ``work/tools/venv/bin/checksec``; that
         command is not owned by the standalone checksec card and is never
         removed here.
         """
@@ -506,7 +507,7 @@ class ToolManager:
             )
         elif spec.kind == "github-script":
             # Older versions briefly wrote the script beside the launcher;
-            # clean that legacy path too, but never descend outside tools/.
+            # clean that legacy path too, but never descend outside work/tools/.
             owned_paths = (
                 self.root / spec.command,
                 self.root / f"{spec.command}.sh",
@@ -522,9 +523,9 @@ class ToolManager:
         try:
             lexical.relative_to(root)
         except ValueError:
-            raise OSError("拒绝删除 tools 目录之外的路径")
+            raise OSError("拒绝删除 work/tools 目录之外的路径")
         # A symlink itself is an owned directory entry even when its target is
-        # outside tools/.  Unlinking the link is safe and avoids treating a
+        # outside work/tools/.  Unlinking the link is safe and avoids treating a
         # manually-created launcher link as an attempt to delete external
         # data.
         if path.is_symlink():
@@ -532,7 +533,7 @@ class ToolManager:
             return
         candidate = path.resolve(strict=False)
         if candidate == root or root not in candidate.parents:
-            raise OSError("拒绝删除 tools 目录之外的路径")
+            raise OSError("拒绝删除 work/tools 目录之外的路径")
         if path.is_file():
             path.unlink(missing_ok=True)
         elif path.is_dir():
@@ -957,7 +958,7 @@ class ToolManager:
                 shutil.rmtree(staging)
         # Source projects are intentionally kept as source-only entries. A
         # platform-specific build is not attempted automatically, but the
-        # checkout is ready for a user to build inside tools/src. The marker
+        # checkout is ready for a user to build inside work/tools/src. The marker
         # is written only after clone completion so a partially created Git
         # directory is never reported as installed.
         (source_root / ".gcsis-installed").write_text("source checkout complete\n", encoding="utf-8")
@@ -1148,7 +1149,7 @@ class ToolManager:
             f"工具根目录：{self.root}",
             f"Python 虚拟环境：{self.venv}",
             f"命令入口目录：{self.root / 'bin'}",
-            f"内置字典目录：{self.root / 'dictionaries'}",
+            f"内置字典目录：{self.workspace / 'resources' / 'dictionaries'}",
             "",
         ]
         if self._python_index_url:

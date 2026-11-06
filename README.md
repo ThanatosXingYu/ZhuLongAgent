@@ -34,13 +34,13 @@ PIP_CACHE_DIR="$PWD/work/cache/tools/pip" .venv/bin/python -m pip install -r req
 .venv/bin/python main.py
 ```
 
-启动后访问 <http://127.0.0.1:8080>。如果需要监听其他地址，可在项目根目录创建 `.env`：
+启动后访问 <http://127.0.0.1:8080>。如果需要监听其他地址，可在 `temp/.env` 中配置：
 
 ```dotenv
 listenaddr=127.0.0.1:8080
 ```
 
-`.env` 只用于监听地址。比赛地址、登录态、模型和 Codex 配置在 Web 页面中填写，不从 `.env` 读取。
+`temp/.env` 只用于监听地址。比赛地址、登录态、模型和 Codex 配置在 Web 页面中填写，不从 `.env` 读取。
 
 ## 平台绑定与登录
 
@@ -56,9 +56,9 @@ listenaddr=127.0.0.1:8080
 
 点击首页顶部的“工具管理”打开管理页。页面分为三类：
 
-- **Python 库**：安装到 `tools/venv`，入口同步暴露到 `tools/bin`，例如 `pwntools`、`z3-solver`、`angr`、`scapy`。
-- **Go 开源项目**：使用本机 Go 编译，`GOPATH`、`GOMODCACHE`、`GOCACHE` 和 `GOBIN` 全部重定向到 `tools/go` 或 `tools/bin`，例如 `ffuf`、`gobuster`。
-- **独立工具 / 发行包**：下载并解压到 `tools/`，例如 `jadx` 和 ExifTool。ExifTool 使用官方 GitHub 镜像的版本标签下载，避免 exiftool.org 站点对归档路径返回 404。
+- **Python 库**：安装到 `work/tools/venv`，入口同步暴露到 `work/tools/bin`，例如 `pwntools`、`z3-solver`、`angr`、`scapy`。
+- **Go 开源项目**：使用本机 Go 编译，`GOPATH`、`GOMODCACHE`、`GOCACHE` 和 `GOBIN` 全部重定向到 `work/cache/go` 或 `work/tools/bin`，例如 `ffuf`、`gobuster`。
+- **独立工具 / 发行包**：下载并解压到 `work/tools/`，例如 `jadx` 和 ExifTool。ExifTool 使用官方 GitHub 镜像的版本标签下载，避免 exiftool.org 站点对归档路径返回 404。
 
 Python 库列表中的“基础库”是一个独立工具卡片，会一次安装 `requests`、`gmpy2` 和 `pycryptodome`；`json`、`base64`、`hashlib`、`re`、`struct`、`urllib` 等属于 Python 标准库，不需要 pip 安装。独立工具还包括 checksec、Apktool、7-Zip、foremost、John the Ripper、Hashcat、GDB 和 pwndbg。部分工具以源码目录保存，是否能在当前操作系统编译取决于本机编译器和上游项目支持，程序不会调用 Homebrew、apt 或 Docker。
 
@@ -77,9 +77,9 @@ Python 库列表中的“基础库”是一个独立工具卡片，会一次安�
 
 Ropper 在 Python 3.14 上游依赖尚未兼容，页面会提前标记为不可安装；使用 Python 3.12 或 3.13 的工作区时再安装。工具页中的“源码已获取”只表示源码归档完整落盘，不代表已经生成了可执行命令。
 
-源码类项目的“安装”表示源码归档已下载并完整保存在 `tools/src/`，不会把未验证的系统命令误标为可用；安装完成后才会写入完成标记，卸载会删除对应源码目录和项目内入口。
+源码类项目的“安装”表示源码归档已下载并完整保存在 `work/tools/src/`，不会把未验证的系统命令误标为可用；安装完成后才会写入完成标记，卸载会删除对应源码目录和项目内入口。
 
-GitHub 项目下载会在官方地址与公开加速地址之间做短连接测速（例如 `ghfast.top`、`gh-proxy.com`、`ghproxy.net`），每次实际下载仍保留官方地址作为回退。加速服务不可用或返回错误时不会阻塞安装；下载的源码、归档、Git 缓存和构建产物都放在 `tools/`。
+GitHub 项目下载会在官方地址与公开加速地址之间做短连接测速（例如 `ghfast.top`、`gh-proxy.com`、`ghproxy.net`），每次实际下载仍保留官方地址作为回退。加速服务不可用或返回错误时不会阻塞安装；下载的源码、归档、Git 缓存和构建产物都放在 `work/tools/`。
 
 工具安装不会写入系统 Python、系统 Go 缓存或用户级缓存。安装过程会显示当前工具、已完成数量、当前文件大小、已传输量、速度和预计剩余时间；当上游安装器无法提供总大小时，进度条会明确显示“总大小未知”，速度仍按本地缓存增长量测量。安装任务可以随时取消，已经完成的工具会保留。
 
@@ -95,7 +95,7 @@ Codex 默认最多同时运行 10 个任务；这里的 `10` 是同时运行的�
 
 任务元数据会原子保存到 `work/runtime/codex/tasks.json`。程序重启后，已完成、已停止、排队中的任务及其运行日志、会话 ID 和 WP 路径都会恢复；重启时无法继续存在的运行中任务会标记为“程序重启时任务中断”，可使用“继续”恢复。该文件只保存任务元数据，不保存 Codex API Key。
 
-项目内置 [`ljagiello/ctf-skills`](https://github.com/ljagiello/ctf-skills) 技能源，位于 `tools/skills/ctf-skills`，默认启用。设置页可以关闭技能包；关闭只影响本项目创建的 Codex 进程，不会修改系统级 Codex 配置。Codex 任务会获得本项目的工作区路径、`tools/bin`、`tools/venv` 和已启用技能目录信息。
+项目内置 [`ljagiello/ctf-skills`](https://github.com/ljagiello/ctf-skills) 技能源，位于 `resources/skills/ctf-skills`，默认启用。设置页可以关闭技能包；关闭只影响本项目创建的 Codex 进程，不会修改系统级 Codex 配置。Codex 任务会获得本项目的工作区路径、`work/tools/bin`、`work/tools/venv` 和已启用技能目录信息。
 
 `work/runtime/codex/` 是 Codex CLI 的项目专用 HOME。它不是空模板：首次运行后会包含线程历史、任务状态、日志数据库、配置和 shell 快照；数据库中的表可能为空（例如没有排队任务时 queue 表为 0 行）是正常现象。该目录已加入 `.gitignore`，不会提交到 GitHub。
 
@@ -120,12 +120,20 @@ Codex 默认最多同时运行 10 个任务；这里的 `10` 是同时运行的�
 | `work/writeups/` | Codex 或手动生成的解题报告 |
 | `work/codex-runs/` | Codex 任务运行记录 |
 | `work/cache/` | PyPI、Go、mypy、Ruff、pytest 和运行环境的缓存 |
-| `tools/` | 工具、Python 虚拟环境、Go 缓存、pip 缓存和下载临时文件 |
-| `tools/dictionaries/` | Agent 自带的授权 CTF 字典；仅用于题目分析，不会写入系统目录 |
+| `work/tools/` | 工具安装、Python 虚拟环境、命令入口和工具清单 |
+| `resources/skills/` | 随项目分发的 CTF 技能源 |
+| `resources/dictionaries/` | Agent 自带的授权 CTF 字典；仅用于题目分析，不会写入系统目录 |
 | `.venv/` | 工作台自身的 Python 虚拟环境 |
-| `tests/python/` | Python 测试代码；Playwright 测试位于 `tests/e2e/` |
+| `temp/scripts/` | 开发过程脚本和可复现压测工具 |
+| `temp/tests/` | Python 与 Playwright 测试代码及配置 |
 
-`work/`、工具安装目录、虚拟环境和系统噪声均已加入 `.gitignore`。旧版顶层 `runtime/`、`download/`、`writeups/`、`codex-runs/` 和 `tools/cache/` 会在下次启动时自动迁移到统一目录。随项目提供的 `tools/skills/ctf-skills` 技能源和 `tools/dictionaries/` 字典资源会保留在 Git 中；实际安装的工具、缓存和运行数据不会提交。
+`work/`、工具安装目录、虚拟环境和系统噪声均已加入 `.gitignore`。旧版顶层 `runtime/`、`download/`、`writeups/`、`codex-runs/`、`tools/` 和 `tools/cache/` 会在下次启动时自动迁移到统一目录。随项目提供的 `resources/skills/ctf-skills` 技能源和 `resources/dictionaries/` 字典资源会保留在 Git 中；实际安装的工具、缓存和运行数据不会提交。
+
+### 清理生成物
+
+`work/download/`、`work/runtime/`、`work/codex-runs/` 和 `work/writeups/` 包含题目附件、登录配置、会话记录与解题结果，不要作为普通缓存删除。可以安全清理的是 Python/测试缓存、`work/cache/`、`work/platform-shadow/{cache,raw,logs,data,.venv}`，以及压测运行目录中每轮复制出来的 `attachments/`、`extracted/`、`analysis/`、`tools/`、`work/` 和 `.codex-home/`。清理压测临时目录时保留顶层的 `results*.json`、`results*.csv`、`report.md`、`session-index.csv`，以及各轮 `result.json`、`events.jsonl`、`final.md` 和 WP，才能继续复核耗时、Token 与解题过程。
+
+源码、测试和可复现的压测脚本仍放在 Git 跟踪的 `static/`、`temp/tests/` 和 `temp/scripts/` 中，不放进被忽略的 `work/`。一次性 QWB 压测工具集中在 `temp/scripts/benchmarks/`，日常提交 Flag 等辅助脚本保留在 `temp/scripts/` 根目录。
 
 ## 本地 API
 
@@ -138,7 +146,7 @@ API 端点和请求示例见 [`docs/api_doc.md`](docs/api_doc.md)。完成平台
 题目、题目详情、公告和比赛统计使用线程安全的内存缓存，默认 TTL 为 30 秒。缓存过期后自动重新读取平台数据；显式刷新、登录态变化、提交 Flag 和环境状态变化仍会立即失效相关缓存。
 
 ```bash
-.venv/bin/python scripts/submit_answer.py 17 'flag{example}'
+.venv/bin/python temp/scripts/submit_answer.py 17 'flag{example}'
 ```
 
 脚本只访问本地服务，不读取平台 Token。非默认监听地址请使用脚本的 `--server` 参数。
@@ -147,9 +155,9 @@ API 端点和请求示例见 [`docs/api_doc.md`](docs/api_doc.md)。完成平台
 
 ```bash
 PIP_CACHE_DIR="$PWD/work/cache/tools/pip" .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/ruff check internal main.py scripts tests/python
+.venv/bin/ruff check internal main.py temp/scripts temp/tests/python
 .venv/bin/mypy --strict internal main.py scripts
-.venv/bin/pytest -q tests/python
+.venv/bin/pytest -q temp/tests/python
 npm ci
 npm run check:js
 npm run test:e2e

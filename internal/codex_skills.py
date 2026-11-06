@@ -30,13 +30,15 @@ def prepare_codex_skills(
 
     target_root = codex_home / "skills"
     target_root.mkdir(parents=True, exist_ok=True)
-    source_root = workspace / "tools" / "skills" / "ctf-skills"
-    # Keep a one-time compatibility path for workspaces created before the
-    # skills bundle was moved under ``tools/``.  New installations always use
-    # the visible, workspace-local tools directory.
-    legacy_source_root = workspace / "skills" / "ctf-skills"
-    if not source_root.is_dir() and legacy_source_root.is_dir():
-        source_root = legacy_source_root
+    source_root = workspace / "resources" / "skills" / "ctf-skills"
+    for legacy_source_root in (
+        workspace / "tools" / "skills" / "ctf-skills",
+        workspace / "skills" / "ctf-skills",
+    ):
+        if source_root.is_dir():
+            break
+        if legacy_source_root.is_dir():
+            source_root = legacy_source_root
     if not enabled:
         _remove_managed_skills(target_root)
         return ()

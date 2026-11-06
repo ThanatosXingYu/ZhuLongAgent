@@ -70,7 +70,7 @@ import {
   let platformAuthEpoch = 0;
   let portablePlatformSession = "";
   let portableBrowserScript = "";
-  let portableBrowserLogin = null;
+  let portableBrowserMatchUrl = "";
   let modelRoutingController = null;
   let overviewNoticeController = null;
   let modelRoutingTrigger = null;
@@ -193,6 +193,11 @@ import {
     sessionExportMenu: $("session-export-menu"),
     copyAgentSession: $("copy-agent-session"),
     copyBrowserSession: $("copy-browser-session"),
+    browserScriptDialog: $("browser-script-dialog"),
+    browserScriptStatus: $("browser-script-status"),
+    browserScriptCode: $("browser-script-code"),
+    copyBrowserScript: $("copy-browser-script"),
+    openBrowserPlatform: $("open-browser-platform"),
     platformTeamName: $("platform-team-name"),
     platformUserName: $("platform-user-name"),
     platformTeamScore: $("platform-team-score"),
@@ -652,6 +657,7 @@ import {
     if (!authenticated) {
       portablePlatformSession = "";
       portableBrowserScript = "";
+      portableBrowserMatchUrl = "";
     }
     if (authenticated) state.authExpiryNoticeAt = 0;
     const teamName = status && status.teamName ? ` · ${status.teamName}` : "";
@@ -1083,7 +1089,7 @@ import {
     const toolName = String(tool?.name || "");
     if (!toolName) return;
     const label = tool.label || toolName;
-    if (!window.confirm(`确认卸载 ${label}？仅删除项目 tools/ 目录中的文件。`)) return;
+    if (!window.confirm(`确认卸载 ${label}？仅删除项目 work/tools/ 目录中的文件。`)) return;
     const button = trigger && typeof trigger === "object" ? trigger : null;
     await withButton(button, async () => {
       try {
@@ -1196,6 +1202,7 @@ import {
         state.activeEnvironments.clear();
         portablePlatformSession = "";
         portableBrowserScript = "";
+        portableBrowserMatchUrl = "";
         els.sessionRequestPacket.value = "";
         renderActiveEnvironments();
         if (config.configured) {
@@ -1470,9 +1477,7 @@ import {
       if (!session) return "";
       portablePlatformSession = session;
       portableBrowserScript = String(result.browserScript || "").trim();
-      portableBrowserLogin = result.browserLogin && typeof result.browserLogin === "object"
-        ? result.browserLogin
-        : null;
+      portableBrowserMatchUrl = String(result.browserLogin?.matchUrl || "").trim();
       els.sessionRequestPacket.value = session;
       setInlineStatus(els.sessionLoginStatus, "当前账号登录态已载入");
       return session;
@@ -1508,63 +1513,57 @@ import {
 
   async function copyBrowserSession() {
     const button = els.copyBrowserSession;
+    els.sessionExportMenu.open = false;
+    els.browserScriptCode.value = "";
+    setInlineStatus(els.browserScriptStatus, "正在读取登录态并复制脚本");
+    openDialog(els.browserScriptDialog);
     await withButton(button, async () => {
-      await hydrateSessionLogin({ force: true });
-      if (!portableBrowserLogin && !portableBrowserScript) {
-        showToast("当前比赛缺少浏览器注入所需的登录信息", "error");
-        return;
-      }
-      const extensionId = document.documentElement.dataset.gcsisBrowserHelper || "";
-      if (!extensionId) {
-        showToast("未检测到浏览器助手，已打开一次性安装说明", "warning");
-        window.open("/browser-helper/README.md", "_blank", "noopener,noreferrer");
-        return;
-      }
       try {
-        const result = await sendBrowserHelperMessage(extensionId, {
-          type: "GCSIS_INJECT_ICHUNQIU_SESSION",
-          apiBase: window.location.origin,
-        });
-        if (!result?.ok) throw new Error(result?.message || "浏览器助手注入失败");
-        els.sessionExportMenu.open = false;
-        showToast(result.message || "已注入登录态并打开比赛页面", "success");
+        await hydrateSessionLogin({ force: true });
+        const script = portableBrowserScript.trim();
+        if (!script) {
+          throw new Error("当前比赛缺少浏览器注入所需的 source id");
+        }
+        els.browserScriptCode.value = script;
+        els.browserScriptCode.scrollTop = 0;
+        const copied = await copyBrowserScriptCode();
+        showToast(
+          copied ? "登录脚本已复制，请到比赛页面控制台粘贴执行" : "自动复制失败，可在弹窗中手动复制",
+          copied ? "success" : "warning",
+        );
       } catch (error) {
-        showToast(`浏览器一键登录失败：${error.message}`, "error");
+        setInlineStatus(els.browserScriptStatus, `读取登录脚本失败：${error.message}`, "error");
+        showToast(`读取浏览器登录脚本失败：${error.message}`, "error");
       }
     });
   }
 
-  function sendBrowserHelperMessage(extensionId, message) {
-    return new Promise((resolve, reject) => {
-      const runtime = globalThis.chrome?.runtime;
-      if (!runtime?.sendMessage) {
-        reject(new Error("当前浏览器不支持扩展消息通道"));
-        return;
-      }
-      let settled = false;
-      const timeout = window.setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        reject(new Error("浏览器助手响应超时，请确认扩展已启用"));
-      }, 20000);
-      try {
-        runtime.sendMessage(extensionId, message, (response) => {
-          if (settled) return;
-          settled = true;
-          window.clearTimeout(timeout);
-          const runtimeError = runtime.lastError;
-          if (runtimeError) {
-            reject(new Error(runtimeError.message || "浏览器助手连接失败"));
-            return;
-          }
-          resolve(response || { ok: false, message: "浏览器助手没有返回结果" });
-        });
-      } catch (error) {
-        settled = true;
-        window.clearTimeout(timeout);
-        reject(error);
-      }
-    });
+  async function copyBrowserScriptCode() {
+    const script = els.browserScriptCode.value.trim();
+    if (!script) return false;
+    try {
+      await navigator.clipboard.writeText(script);
+      setInlineStatus(els.browserScriptStatus, "代码已自动复制，请在比赛页面控制台粘贴执行", "success");
+      return true;
+    } catch {
+      els.browserScriptCode.focus();
+      els.browserScriptCode.select();
+      setInlineStatus(els.browserScriptStatus, "自动复制失败，代码已选中，可手动复制", "warning");
+      return false;
+    }
+  }
+
+  function openBrowserPlatform() {
+    const target = String(
+      portableBrowserMatchUrl
+      || state.runtimeConfig?.matchUrl
+      || "",
+    ).trim();
+    if (!target) {
+      setInlineStatus(els.browserScriptStatus, "缺少比赛平台地址，请先在设置中绑定比赛", "error");
+      return;
+    }
+    window.open(target, "_blank", "noopener,noreferrer");
   }
 
   function setSettingsTab(tab) {
@@ -4125,7 +4124,7 @@ import {
   }
 
   function bindSettingsEvents() {
-    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "login-mode-session", "password-login-form", "sms-login-form", "session-login-form", "session-request-packet", "session-export-menu", "copy-agent-session", "copy-browser-session", "session-login", "session-login-status", "platform-authenticated-actions", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "setting-model-protocol", "model-options", "setting-codex-model", "setting-codex-protocol", "codex-model-options"], () => {
+    bindModuleOnce("设置与认证", ["open-settings", "close-settings", "settings-dialog", "settings-form", "match-bind-form", "login-mode-password", "login-mode-sms", "login-mode-session", "password-login-form", "sms-login-form", "session-login-form", "session-request-packet", "session-export-menu", "copy-agent-session", "copy-browser-session", "browser-script-dialog", "browser-script-status", "browser-script-code", "copy-browser-script", "open-browser-platform", "close-browser-script", "session-login", "session-login-status", "platform-authenticated-actions", "platform-logout", "send-sms-code", "refresh-password-captcha", "refresh-rotate-captcha", "rotate-captcha-angle", "fetch-models", "fetch-codex-models", "setting-model-name", "setting-model-protocol", "model-options", "setting-codex-model", "setting-codex-protocol", "codex-model-options"], () => {
       els.openSettings.addEventListener("click", openSettingsDialog);
       document.querySelectorAll("[data-settings-tab]").forEach((button) => {
         button.addEventListener("click", () => setSettingsTab(button.dataset.settingsTab || "platform"));
@@ -4140,6 +4139,9 @@ import {
       els.sessionLogin.addEventListener("click", sessionLogin);
       els.copyAgentSession.addEventListener("click", () => void copyAgentSession());
       els.copyBrowserSession.addEventListener("click", () => void copyBrowserSession());
+      els.copyBrowserScript.addEventListener("click", () => void withButton(els.copyBrowserScript, copyBrowserScriptCode));
+      els.openBrowserPlatform.addEventListener("click", openBrowserPlatform);
+      $("close-browser-script").addEventListener("click", () => closeDialog(els.browserScriptDialog));
       els.platformLogout.addEventListener("click", logoutPlatform);
       els.sendSmsCode.addEventListener("click", sendSmsCode);
       els.refreshPasswordCaptcha.addEventListener("click", () => refreshCaptcha("image"));
@@ -4177,6 +4179,7 @@ import {
         els.sessionRequestPacket.value = "";
         portablePlatformSession = "";
         portableBrowserScript = "";
+        portableBrowserMatchUrl = "";
         els.passwordCaptcha.removeAttribute("src");
         els.rotateCaptchaImage.removeAttribute("src");
       });

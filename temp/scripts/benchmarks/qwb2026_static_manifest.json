@@ -1,0 +1,193 @@
+{
+  "sourceRepository": "git@github.com:ThanatosXingYu/qwb2026s10_writeups.git",
+  "sourceCommit": "aa15e7b0e0e12388f7587f170b352fec92884d12",
+  "platformInventory": {
+    "source": "cached GET /api/exercises response from the i春秋 workbench",
+    "totalChallenges": 41,
+    "staticRule": "hasEnvironment=false",
+    "staticChallengeCount": 13,
+    "staticChallenges": [
+      "宇宙微波背景辐射",
+      "NeuronShuffle",
+      "问卷调查",
+      "vmshare",
+      "hoRRibleRing",
+      "ELFStudy",
+      "firmware",
+      "license",
+      "easytl",
+      "oldsvr",
+      "shadowledger",
+      "Ironclad",
+      "fault_web_and_fault_hash"
+    ]
+  },
+  "excludedChallenges": [
+    {
+      "name": "crp-11741",
+      "reason": "用户确认该题为动态题；虽提供 FPGA bitstream，但不属于纯静态离线题。"
+    },
+    {
+      "name": "宇宙微波背景辐射",
+      "reason": "用户明确要求排除；本题附件不在仓库内，需要外部网盘获取，不纳入当前静态题基准。"
+    },
+    {
+      "name": "谍影重重7",
+      "reason": "平台题目列表标记 hasEnvironment=true，属于动态容器题，不属于当前静态题基准。"
+    }
+  ],
+  "challenges": [
+    {
+      "id": "crypto-vmshare",
+      "category": "Crypto",
+      "name": "vmshare",
+      "descriptionFile": "Crypto/Crypto2_vmshare/题目.md",
+      "files": [
+        {
+          "source": "reference:Crypto/Crypto2_vmshare/附件/vmshare_6d3416fb746f85cad8020e41571f8b7b.zip",
+          "target": "vmshare_6d3416fb746f85cad8020e41571f8b7b.zip"
+        }
+      ],
+      "expectedFlag": "flag{3174812_31af718}"
+    },
+    {
+      "id": "crypto-horriblering",
+      "category": "Crypto",
+      "name": "hoRRibleRing",
+      "descriptionFile": "Crypto/Crypto3_hoRRibleRing/题目.md",
+      "files": [
+        {
+          "source": "reference:Crypto/Crypto3_hoRRibleRing/附件/hoRRibleRing_387f520883f218a707f3a963fc9aa014.zip",
+          "target": "hoRRibleRing_387f520883f218a707f3a963fc9aa014.zip"
+        }
+      ],
+      "expectedFlag": "flag{a5c0e489-a8e6-4532-b03a-f875461165cd}"
+    },
+    {
+      "id": "misc-neuronshuffle",
+      "category": "Misc",
+      "name": "NeuronShuffle",
+      "descriptionFile": "Misc/Misc3_NeuronShuffle/题目.md",
+      "files": [
+        {
+          "source": "reference:Misc/Misc3_NeuronShuffle/附件/neuron_shuffle_8a803e935e33df360a9e1e1976d567c5.zip",
+          "target": "neuron_shuffle_8a803e935e33df360a9e1e1976d567c5.zip"
+        }
+      ],
+      "expectedFlag": "flag{5c2aabdc937513bde1ba502f14cc51b6}"
+    },
+    {
+      "id": "misc-survey",
+      "category": "Misc",
+      "name": "问卷调查",
+      "descriptionFile": "Misc/Misc6_问卷调查/题目.md",
+      "files": [],
+      "expectedFlag": "",
+      "networkAccess": "target-only"
+    },
+    {
+      "id": "reverse-elfstudy",
+      "category": "Reverse",
+      "name": "ELFStudy",
+      "descriptionFile": "Reverse/Reverse1_ELFStudy/题目.md",
+      "files": [
+        {
+          "source": "reference:Reverse/Reverse1_ELFStudy/附件/elfstudy_401568f195e6e6e12923a6b9687d14b5.zip",
+          "target": "elfstudy_401568f195e6e6e12923a6b9687d14b5.zip"
+        }
+      ],
+      "expectedFlag": "flag{4865f2079724968a95c217e0ff4db6c6}"
+    },
+    {
+      "id": "reverse-firmware",
+      "category": "Reverse",
+      "name": "firmware",
+      "descriptionFile": "Reverse/Reverse2_firmware/题目.md",
+      "files": [
+        {
+          "source": "reference:Reverse/Reverse2_firmware/附件/qwb2026_firmware.tar.gz",
+          "target": "qwb2026_firmware.tar.gz"
+        }
+      ],
+      "expectedFlag": "flag{d230_5a75cf4_d8fb3e5_bae}"
+    },
+    {
+      "id": "reverse-license",
+      "category": "Reverse",
+      "name": "license",
+      "descriptionFile": "Reverse/Reverse3_license/题目.md",
+      "files": [
+        {
+          "source": "reference:Reverse/Reverse3_license/附件/license_e3a7f65b5447aa4b05235b1b7f8eae20.zip",
+          "target": "license_e3a7f65b5447aa4b05235b1b7f8eae20.zip"
+        }
+      ],
+      "expectedFlag": "flag{9530b81c-61d0-2b62-3e96-f9a5e937f893}"
+    },
+    {
+      "id": "pwn-easytl",
+      "category": "PWN",
+      "name": "easytl",
+      "descriptionFile": "PWN/PWN9_easytl/题目.md",
+      "files": [
+        {
+          "source": "cache:work/download/PWN/14-easytl/easytl_536a482cd0b0b2446ec6be3ac06e9487.zip",
+          "target": "easytl_536a482cd0b0b2446ec6be3ac06e9487.zip"
+        }
+      ],
+      "expectedFlag": "",
+      "networkAccess": "target-only"
+    },
+    {
+      "id": "pwn-oldsvr",
+      "category": "PWN",
+      "name": "oldsvr",
+      "descriptionFile": "PWN/PWN11_oldsvr/题目.md",
+      "files": [
+        {
+          "source": "cache:work/download/PWN/16-oldsvr/oldsvr_4b45328a7f5ecd66b635346d68ee1975.zip",
+          "target": "oldsvr_4b45328a7f5ecd66b635346d68ee1975.zip"
+        }
+      ],
+      "expectedFlag": "flag{1ec6896ee054f9cab370a5a8473c30ee}",
+      "networkAccess": "target-only"
+    },
+    {
+      "id": "pwn-shadowledger",
+      "category": "PWN",
+      "name": "shadowledger",
+      "descriptionFile": "PWN/PWN16_shadowledger/题目.md",
+      "files": [
+        {
+          "source": "cache:work/download/PWN/30-shadowledger/shadowledger_dcb3b5ee9fc0a77b3dfcc6934a738a99.zip",
+          "target": "shadowledger_dcb3b5ee9fc0a77b3dfcc6934a738a99.zip"
+        }
+      ],
+      "expectedFlag": "",
+      "networkAccess": "target-only"
+    },
+    {
+      "id": "pwn-ironclad",
+      "category": "PWN",
+      "name": "Ironclad",
+      "descriptionFile": "PWN/PWN17_Ironclad/题目.md",
+      "files": [
+        {
+          "source": "cache:work/download/PWN/31-Ironclad/Ironclad_1ba435af88a82c423fd6293bdd2c9c37.zip",
+          "target": "Ironclad_1ba435af88a82c423fd6293bdd2c9c37.zip"
+        }
+      ],
+      "expectedFlag": "",
+      "networkAccess": "target-only"
+    },
+    {
+      "id": "web-fault",
+      "category": "Web",
+      "name": "fault_web_and_fault_hash",
+      "descriptionFile": "Web/Web7_fault_web_and_fault_hash/题目.md",
+      "files": [],
+      "expectedFlag": "",
+      "networkAccess": "target-only"
+    }
+  ]
+}
