@@ -157,11 +157,14 @@ class Message:
     content: str = ""
     tool_call_id: str = ""
     tool_calls: tuple[ToolCall, ...] = ()
+    reasoning_content: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"role": self.role}
         if self.content:
             result["content"] = self.content
+        if self.reasoning_content:
+            result["reasoning_content"] = self.reasoning_content
         if self.tool_call_id:
             result["tool_call_id"] = self.tool_call_id
         if self.tool_calls:
@@ -174,7 +177,14 @@ class Message:
         raw_calls = data.get("tool_calls")
         calls = tuple(ToolCall.from_dict(item) for item in raw_calls if isinstance(item, Mapping)) if isinstance(raw_calls, list) else ()
         content = data.get("content", "")
-        return cls(str(data.get("role", "") or ""), str(content or ""), str(data.get("tool_call_id", "") or ""), calls)
+        reasoning = data.get("reasoning_content", "")
+        return cls(
+            str(data.get("role", "") or ""),
+            str(content or ""),
+            str(data.get("tool_call_id", "") or ""),
+            calls,
+            str(reasoning or ""),
+        )
 
 
 @dataclass(frozen=True)

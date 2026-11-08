@@ -64,6 +64,7 @@ from internal.download import (
     TooLarge,
 )
 from internal.openai_client import FunctionCall, Message, ToolCall
+from internal.model_router import ModelRouter
 from internal.solver import ModelNotConfigured, SolverService, normalize_flag
 from internal.tool_manager import TOOL_SPECS, ToolBusyError, ToolManager
 from internal.web import create_app
@@ -693,7 +694,10 @@ def test_codex_proxy_streams_initial_heartbeat_and_response_events(
         tmp_path / ".runtime-config.json",
     )
 
-    def fake_stream(*_args: Any, **_kwargs: Any) -> Any:
+    captured: dict[str, Any] = {}
+
+    def fake_stream(*_args: Any, **kwargs: Any) -> Any:
+        captured.update(kwargs)
         return iter((b": codex-proxy-connected\n\n", b'data: {"type":"response.completed"}\n\n'))
 
     monkeypatch.setattr(web_module, "stream_chat_response", fake_stream)
@@ -717,6 +721,24 @@ def test_codex_proxy_streams_initial_heartbeat_and_response_events(
     assert response.status_code == 200
     assert response.text.startswith(": codex-proxy-connected")
     assert "response.completed" in response.text
+    assert captured["timeout"] == 300
+
+
+def test_model_routing_status_reaches_router_through_solver(tmp_path: Path) -> None:
+    router = ModelRouter(Config(
+        model_base_url="https://provider.example/v1",
+        model_name="test-model",
+        model_api_key="fake-key-for-unit-test",
+    ))
+    solver = SolverService(Source(), AttachmentsStub(), router, "auto", tmp_path)
+    client = TestClient(create_app(Source(), ai=solver))
+    response = client.get("/api/model-routing/status")
+    assert response.status_code == 200
+    status = response.json()["data"]
+    assert status == router.status()
+    assert status["providers"][0]["available"] is True
+    assert "fake-key-for-unit-test" not in response.text
+    assert client.post("/api/model-routing/status").status_code == 405
 
 
 def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:

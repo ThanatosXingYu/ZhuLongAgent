@@ -74,6 +74,7 @@ X-GCSIS-Action: environment-manager
 | `GET` | `/api/match-info` | 查询比赛信息 |
 | `GET` | `/api/overview` | 查询队伍得分与排名 |
 | `POST` | `/api/model-test` | 使用实际提供商配置发送模型测试消息 |
+| `GET` | `/api/model-routing/status` | 查询模型提供商激活、可用性与冷却状态 |
 | `GET` | `/api/exercises` | 查询题目列表 |
 | `GET` | `/api/exercises/{id}` | 查询题目详情 |
 | `POST` | `/api/exercises/{id}/answer` | 提交 Flag |
@@ -203,6 +204,35 @@ X-GCSIS-Action: environment-manager
 ```
 
 `apiKey` 可省略；提供 `providerId` 时使用已保存的提供商 Key。接口会实际发送一条最小对话消息，并返回 `model`、`reply` 和 `latencyMs`。
+
+### 查询模型路由状态
+
+`GET /api/model-routing/status`
+
+```json
+{
+  "ok": true,
+  "data": {
+    "activeProviderId": "provider-a",
+    "poolEnabled": true,
+    "strategy": "round-robin",
+    "providers": [
+      {
+        "id": "provider-a",
+        "name": "Primary",
+        "enabled": true,
+        "poolExclude": false,
+        "isActive": true,
+        "available": true,
+        "cooldownSeconds": 0,
+        "lastError": ""
+      }
+    ]
+  }
+}
+```
+
+`available` 表示提供商当前已启用、未处于失败冷却期且属于路由候选链；`cooldownSeconds` 是当前失败恢复窗口的剩余秒数；`lastError` 是最近一次可回显的调用错误摘要。该接口不返回 API Key 或请求凭据。
 
 ## 比赛绑定与登录
 

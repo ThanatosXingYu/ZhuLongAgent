@@ -158,6 +158,19 @@ class SolverService:
         enabled = getattr(self.model, "enabled", None)
         return bool(enabled()) if callable(enabled) else True
 
+    def status(self) -> dict[str, Any]:
+        status = getattr(self.model, "status", None)
+        if callable(status):
+            result = status()
+            if isinstance(result, dict):
+                return result
+        return {
+            "activeProviderId": "",
+            "poolEnabled": False,
+            "strategy": "round-robin",
+            "providers": [],
+        }
+
     def prompt(self, exercise_id: int) -> PromptResult:
         data = self._load_exercise(exercise_id)
         return PromptResult(

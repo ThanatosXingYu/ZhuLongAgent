@@ -153,6 +153,94 @@ def test_codex_bridge_streams_chat_deltas(
     assert events[-1]["type"] == "response.completed"
 
 
+def test_codex_bridge_replays_reasoning_for_followup_tool_calls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class Response:
+        def __enter__(self) -> "Response":
+            return self
+
+        def __exit__(self, *_args: Any) -> None:
+            return None
+
+        def __iter__(self):
+            chunks = [
+                {
+                    "choices": [
+                        {"delta": {"reasoning_content": "think before tool"}}
+                    ]
+                },
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    {
+                                        "index": 0,
+                                        "id": "call-reasoning-test",
+                                        "function": {
+                                            "name": "functions__exec",
+                                            "arguments": '{"input":"pwd"}',
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                },
+            ]
+            for chunk in chunks:
+                yield (
+                    "data: "
+                    + json.dumps(chunk, separators=(",", ":"))
+                    + "\n\n"
+                ).encode()
+            yield b"data: [DONE]\n\n"
+
+    monkeypatch.setattr(compat_module, "urlopen", lambda *_args, **_kwargs: Response())
+    initial = build_chat_bridge(
+        {"model": "deepseek-v4.1-flash", "input": []},
+        "fallback",
+    )
+    list(
+        stream_chat_response(
+            initial,
+            base_url="https://provider.example/v1",
+            api_key="secret",
+        )
+    )
+    followup = build_chat_bridge(
+        {
+            "model": "deepseek-v4.1-flash",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": "I will inspect the workspace first.",
+                },
+                {
+                    "type": "custom_tool_call",
+                    "namespace": "functions",
+                    "name": "exec",
+                    "call_id": "call-reasoning-test",
+                    "input": "pwd",
+                },
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-reasoning-test",
+                    "output": "ok",
+                },
+            ],
+        },
+        "fallback",
+    )
+    assistant = next(message for message in followup.messages if message.role == "assistant")
+    assert assistant.content == "I will inspect the workspace first."
+    assert assistant.reasoning_content == "think before tool"
+    assert assistant.to_dict()["reasoning_content"] == "think before tool"
+    assert assistant.to_dict()["tool_calls"][0]["id"] == "call-reasoning-test"
+
+
 def test_codex_stream_falls_back_to_next_upstream(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

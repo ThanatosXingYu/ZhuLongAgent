@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import socket
+import threading
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -52,6 +53,9 @@ TOOL_USE_INSTRUCTION = (
     "actually complete. If work remains, call the appropriate work tool "
     "immediately. Never return a future-action plan as ordinary assistant text."
 )
+_REASONING_BY_CALL_ID: dict[str, str] = {}
+_REASONING_LOCK = threading.Lock()
+_MAX_REASONING_ENTRIES = 256
 
 
 @dataclass(frozen=True)
@@ -127,17 +131,14 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
                 name = _namespace_name(namespace, name)
             call_id = str(item.get("call_id", item.get("id", "")) or "")
             arguments = _serialize(item.get("arguments"))
-            messages.append(
-                Message(
-                    "assistant",
-                    tool_calls=(
-                        ToolCall(
-                            call_id,
-                            "function",
-                            FunctionCall(name, arguments),
-                        ),
-                    ),
-                )
+            _append_assistant_tool_call(
+                messages,
+                ToolCall(
+                    call_id,
+                    "function",
+                    FunctionCall(name, arguments),
+                ),
+                _reasoning_for_call(call_id),
             )
             continue
         if item_type == "custom_tool_call":
@@ -151,17 +152,14 @@ def build_chat_bridge(body: Mapping[str, Any], default_model: str) -> ChatBridge
                 ensure_ascii=False,
                 separators=(",", ":"),
             )
-            messages.append(
-                Message(
-                    "assistant",
-                    tool_calls=(
-                        ToolCall(
-                            call_id,
-                            "function",
-                            FunctionCall(name, arguments),
-                        ),
-                    ),
-                )
+            _append_assistant_tool_call(
+                messages,
+                ToolCall(
+                    call_id,
+                    "function",
+                    FunctionCall(name, arguments),
+                ),
+                _reasoning_for_call(call_id),
             )
             continue
         if item_type == "function_call_output":
@@ -276,6 +274,10 @@ def stream_chat_response(
             response = urlopen(request, timeout=timeout)  # noqa: S310
             break
         except HTTPError as exc:
+            LOGGER.warning(
+                "Codex stream upstream rejected request status=%s",
+                exc.code,
+            )
             last_error = ModelCallError(
                 f"model returned status {exc.code}",
                 status=exc.code,
@@ -314,6 +316,8 @@ def stream_chat_response(
     text_item_id = f"msg_{uuid.uuid4().hex}"
     text_started = False
     text_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    fallback_reasoning = ""
     output_items: list[dict[str, Any]] = []
     output_index = 0
     tool_calls: dict[int, dict[str, str]] = {}
@@ -341,9 +345,17 @@ def stream_chat_response(
                     continue
                 delta = first.get("delta")
                 if not isinstance(delta, Mapping):
-                    continue
-                if delta.get("reasoning_content"):
+                    delta = {}
+                reasoning_content = _reasoning_value(delta)
+                if isinstance(reasoning_content, str) and reasoning_content:
+                    reasoning_parts.append(reasoning_content)
                     yield b": ping\n\n"
+                elif not reasoning_parts:
+                    fallback_reasoning = (
+                        _reasoning_value(first.get("message"))
+                        or _reasoning_value(chunk)
+                        or fallback_reasoning
+                    )
                 content = delta.get("content")
                 if isinstance(content, str) and content:
                     if not text_started:
@@ -510,6 +522,10 @@ def stream_chat_response(
         }
 
     for _, call in sorted(tool_calls.items()):
+        call_id = call["id"] or f"call_{uuid.uuid4().hex}"
+        reasoning_content = "".join(reasoning_parts) or fallback_reasoning
+        if reasoning_content:
+            _remember_reasoning(call_id, reasoning_content)
         resolved_name = _resolve_tool_name(
             call["name"],
             bridge.tool_names,
@@ -524,7 +540,7 @@ def stream_chat_response(
                 "id": f"ctc_{uuid.uuid4().hex}",
                 "type": "custom_tool_call",
                 "status": "completed",
-                "call_id": call["id"] or f"call_{uuid.uuid4().hex}",
+                "call_id": call_id,
                 "name": name,
                 "input": input_value,
             }
@@ -571,7 +587,7 @@ def stream_chat_response(
             "id": f"fc_{uuid.uuid4().hex}",
             "type": "function_call",
             "status": "completed",
-            "call_id": call["id"] or f"call_{uuid.uuid4().hex}",
+            "call_id": call_id,
             "name": name,
             "arguments": call["arguments"],
         }
@@ -989,6 +1005,55 @@ def _message_text(value: Any) -> str:
             and str(part.get("type", "") or "") in {"input_text", "output_text", "text"}
         )
     return ""
+
+
+def _reasoning_value(value: Any) -> str:
+    if not isinstance(value, Mapping):
+        return ""
+    for key in ("reasoning_content", "reasoning"):
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate:
+            return candidate
+    return ""
+
+
+def _append_assistant_tool_call(
+    messages: list[Message],
+    tool_call: ToolCall,
+    reasoning_content: str,
+) -> None:
+    if messages and messages[-1].role == "assistant":
+        previous = messages[-1]
+        messages[-1] = Message(
+            "assistant",
+            previous.content,
+            tool_calls=(*previous.tool_calls, tool_call),
+            reasoning_content=previous.reasoning_content or reasoning_content,
+        )
+        return
+    messages.append(
+        Message(
+            "assistant",
+            tool_calls=(tool_call,),
+            reasoning_content=reasoning_content,
+        )
+    )
+
+
+def _remember_reasoning(call_id: str, content: str) -> None:
+    if not call_id or not content:
+        return
+    with _REASONING_LOCK:
+        _REASONING_BY_CALL_ID[call_id] = content
+        while len(_REASONING_BY_CALL_ID) > _MAX_REASONING_ENTRIES:
+            _REASONING_BY_CALL_ID.pop(next(iter(_REASONING_BY_CALL_ID)))
+
+
+def _reasoning_for_call(call_id: str) -> str:
+    if not call_id:
+        return ""
+    with _REASONING_LOCK:
+        return _REASONING_BY_CALL_ID.get(call_id, "")
 
 
 def _serialize(value: Any) -> str:

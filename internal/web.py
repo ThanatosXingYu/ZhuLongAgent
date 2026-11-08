@@ -642,7 +642,7 @@ def create_app(
                 bridge,
                 base_url=upstream_base_url,
                 api_key=upstream_api_key,
-                timeout=45,
+                timeout=300,
                 fallback_upstreams=tuple(upstreams[1:]),
             ),
             media_type="text/event-stream",
@@ -853,6 +853,31 @@ def create_app(
             LOGGER.warning("Model connection test failed: %s", exc)
             return _error_response(502, "MODEL_TEST_FAILED", str(exc))
         return _success_response(result)
+
+    @app.api_route(
+        "/api/model-routing/status",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def model_routing_status(request: Request) -> JSONResponse:
+        if not _method(request, "GET"):
+            return _method_error("GET")
+        status = getattr(services.ai, "status", None)
+        if not callable(status):
+            return _success_response(
+                {
+                    "activeProviderId": "",
+                    "poolEnabled": False,
+                    "strategy": "round-robin",
+                    "providers": [],
+                }
+            )
+        try:
+            return _success_response(await asyncio.to_thread(status))
+        except Exception:
+            LOGGER.exception("model routing status failed")
+            return _error_response(
+                500, "MODEL_ROUTING_STATUS_FAILED", "模型路由状态读取失败"
+            )
 
     @app.api_route(
         "/api/platform/bind",
