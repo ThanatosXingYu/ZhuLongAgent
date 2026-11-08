@@ -205,6 +205,7 @@ export function createCodexSessionView({
     });
     fragment.append(transcript);
     els.codexTaskEvents.replaceChildren(fragment);
+    refreshIcons();
   }
 
   function appendDetailSection(container, heading, rows) {

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { openWorkbench, task, emitSse } from "./fixtures.js";
+import { openWorkbench, installApiMock, task, emitSse } from "./fixtures.js";
 
 const command = "printf '%s\\n' " + "long-argument-".repeat(80);
 const event = (sequence, kind, extra = {}) => ({
@@ -22,6 +22,9 @@ for (const width of [1440, 390]) {
     await expect(rows).toHaveCount(3);
     await expect(page.locator(".transcript-detail:visible")).toHaveCount(0);
     await expect(rows.first().locator(".transcript-icon svg")).toHaveAttribute("data-lucide", "message-square");
+    await expect(rows.first().locator(".transcript-chevron svg")).toBeVisible();
+    const logHeight = await page.locator("#codex-task-events").evaluate((node) => node.clientHeight);
+    expect(logHeight).toBeGreaterThan(width > 820 ? 480 : 350);
     const tool = rows.nth(2);
     await expect(tool.locator(".transcript-tool-name")).toHaveText("Bash");
     await expect(tool.locator(".transcript-status")).toHaveText("执行中…");
@@ -50,6 +53,8 @@ for (const width of [1440, 390]) {
     await expect(tool.locator("pre")).toContainText("<script>not executable</script>");
     await expect(tool.locator("script")).toHaveCount(0);
     await expect(tool.locator(".transcript-status")).toHaveText("✓");
+    await expect(tool.locator(".transcript-chevron svg")).toBeVisible();
+    await expect(tool.locator("i[data-lucide]")).toHaveCount(0);
     await tool.locator("button").click();
     await expect(tool.locator("pre")).toBeHidden();
   });
@@ -67,4 +72,37 @@ test("不同轮次与 Worker 的工具 ID 不互相覆盖", async ({ page }) => 
   await expect(page.locator(".transcript-agent")).toHaveText(["主 Agent", "Worker #1", "主 Agent"]);
   await page.locator(".transcript-row").nth(1).locator("button").click();
   await expect(page.locator(".transcript-detail:visible")).toContainText("worker");
+});
+
+test("刷新 Codex 页面不等待配置也不闪现题目工作区", async ({ page }) => {
+  let releaseConfig;
+  const configGate = new Promise((resolve) => { releaseConfig = resolve; });
+  await installApiMock(page, {
+    handler: async ({ url }) => {
+      if (url.pathname === "/api/config") await configGate;
+    },
+  });
+  await page.addInitScript(() => {
+    window.workspaceFlashes = [];
+    const sample = () => {
+      const workspace = document.querySelector("#exercise-view");
+      if (workspace && !workspace.hidden && getComputedStyle(workspace).visibility === "visible"
+          && workspace.getBoundingClientRect().height > 0) {
+        window.workspaceFlashes.push(location.pathname);
+      }
+      requestAnimationFrame(sample);
+    };
+    requestAnimationFrame(sample);
+  });
+  try {
+    await page.goto("/codex");
+    await expect(page.locator("#codex-task-page")).toBeVisible();
+    await expect(page.locator("#current-section-title")).toHaveText("Codex 会话");
+    await page.reload();
+    await expect(page.locator("#codex-task-page")).toBeVisible();
+    expect(await page.evaluate(() => window.workspaceFlashes)).toEqual([]);
+  } finally {
+    releaseConfig();
+  }
+  await expect(page.locator(".transcript-chevron svg").first()).toBeVisible();
 });

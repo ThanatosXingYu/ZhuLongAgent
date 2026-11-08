@@ -6,7 +6,7 @@ import {
   isCodexTerminal,
   mergeCodexEventLists,
 } from "./modules/codex-presenters.js?v=20261109-brtex1";
-import { createCodexSessionView } from "./modules/codex-session-view.js?v=20261109-brtex1";
+import { createCodexSessionView } from "./modules/codex-session-view.js?v=20261109-brtex2";
 import { createCodexSessionController } from "./modules/codex-session-controller.js?v=20261104-archive1";
 import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261104-archive1";
 import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261104-archive1";
@@ -4076,7 +4076,7 @@ import {
       } catch {
         setSidebarCollapsed(false, false);
       }
-      setActiveSidebarView(activePrimaryView);
+      setActiveSidebarView(resolveRouteView());
       setSidebarOpen(false);
       if (els.exerciseEnvironmentRail && els.activeEnvironmentPanel) {
         els.exerciseEnvironmentRail.append(els.activeEnvironmentPanel);
@@ -4352,6 +4352,13 @@ import {
     await runInitModule("工具管理", async () => bindToolEvents());
     await runInitModule("附件", async () => bindAttachmentEvents());
     await runInitModule("Codex", async () => bindCodexEvents());
+    await runInitModule("当前页面", async () => {
+      try {
+        await applyRouteFromLocation();
+      } finally {
+        document.documentElement.removeAttribute("data-route-pending");
+      }
+    });
     await runInitModule("实时推送", async () => startRealtime());
 
     await runInitModule("运行配置", async () => {
@@ -4359,7 +4366,6 @@ import {
       if (!config) throw new Error("无法读取或应用运行配置");
       state.runtimeConfig = config;
     });
-    await runInitModule("当前页面", async () => applyRouteFromLocation());
     const config = state.runtimeConfig;
     await runInitModule("首屏比赛数据", async () => {
       if (config && config.configured && state.authenticated) await refreshWorkspaceAfterLogin();

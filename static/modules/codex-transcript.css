@@ -1,16 +1,112 @@
 /* BRTEX Transcript / ToolBlock / MessageBlock dimensions and colors.
    Scoped independently of the workbench's older event-card styles. */
+/* Do not paint the fallback workspace before the URL's view is mounted. */
+html[data-route-pending] .workspace,
+html[data-route-pending] #current-section-title {
+  visibility: hidden;
+}
+
+html[data-route-pending] .sidebar-link.is-active {
+  background: transparent;
+  box-shadow: none;
+}
+
+.codex-task-layout { grid-template-columns: 280px minmax(0, 1fr); }
+
+.codex-task-detail {
+  grid-template-rows: max-content minmax(320px, 1fr) max-content max-content;
+  gap: 0;
+  padding: 0;
+  background: #fff;
+}
+
+.codex-task-detail-header {
+  height: max-content;
+  min-height: 0;
+  padding: 10px 16px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+}
+
+.codex-task-heading-copy { gap: 3px; }
+.codex-panel-label { display: none; }
+.codex-task-detail .codex-task-status { font-size: 13px; background: transparent; }
+.codex-task-detail .codex-task-resume { font-size: 10px; margin: 0; }
+
+.codex-task-detail .codex-log-group {
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.codex-task-detail .codex-log-heading { padding: 6px 16px; min-height: 36px; }
+
+.codex-task-detail .codex-final-output {
+  margin: 0;
+  min-height: 0;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.codex-task-detail .codex-final-output > summary {
+  min-height: 26px;
+  padding: 4px 16px;
+  border: 0;
+  border-radius: 0;
+  background: #fff;
+}
+
+.codex-task-detail .codex-task-message-box {
+  margin: 0;
+  padding: 8px 16px;
+  gap: 6px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  border-radius: 0;
+  background: #fff;
+}
+
+.codex-task-message-box > label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+
+.codex-task-detail .codex-task-message-box textarea {
+  height: 48px;
+  min-height: 48px;
+  max-height: 160px;
+  font-size: 12px;
+}
+
+.codex-task-detail .codex-task-message-actions { margin: 0; }
+
 #codex-task-events {
   padding: 16px;
   background: #fff;
   color: #0a0a0a;
   font-family: "Geist", system-ui, sans-serif;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
-.codex-task-detail-header { height: max-content; }
-
 @media (max-width: 820px) {
-  .codex-task-detail { grid-template-rows: max-content minmax(240px, 1fr) auto auto; }
+  .codex-task-layout {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 200px minmax(0, 1fr);
+  }
+  .codex-task-detail {
+    grid-template-rows: max-content minmax(50dvh, 1fr) max-content max-content;
+  }
+  .codex-task-detail-header { gap: 8px; padding: 8px 12px; align-items: stretch; }
+  .codex-task-detail-actions { gap: 4px; }
+  .codex-task-detail .codex-task-message-box { padding: 8px 12px; }
 }
 
 .brtex-transcript {
