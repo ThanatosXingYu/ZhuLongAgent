@@ -24,6 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SOURCE = ROOT / "work" / "download" / "Reverse" / "13-ELFStudy"
 BENCHMARK_ROOT = ROOT / "work" / "benchmarks" / "ELFStudy"
 TERMINAL = {"completed", "failed", "canceled"}
+RUN_TIMEOUT_SECONDS = 3900
+CANCEL_GRACE_SECONDS = 180
 
 
 class OfflinePrompt:
@@ -76,6 +78,27 @@ def prepare_run_dir(run_name: str) -> Path:
     return run_dir
 
 
+def wait_for_task(
+    manager: CodexManager,
+    task_id: str,
+    *,
+    deadline: float,
+) -> tuple[Any, str]:
+    """Poll until terminal, cancelling once at the deadline and awaiting shutdown."""
+    canceled_at: float | None = None
+    while True:
+        snapshot = manager.get(task_id)
+        if snapshot.status in TERMINAL:
+            return snapshot, ""
+        now = time.monotonic()
+        if canceled_at is None and now >= deadline:
+            manager.cancel(task_id)
+            canceled_at = now
+        if canceled_at is not None and now - canceled_at >= CANCEL_GRACE_SECONDS:
+            return snapshot, f"取消后 {CANCEL_GRACE_SECONDS} 秒内未进入终态"
+        time.sleep(2)
+
+
 def run_one(
     runtime: Config,
     binary: str,
@@ -85,7 +108,7 @@ def run_one(
 ) -> dict[str, Any]:
     run_dir = prepare_run_dir(run_name)
     codex_home = run_dir / ".codex-home"
-    prepare_codex_skills(run_dir, codex_home, skills_enabled)
+    prepare_codex_skills(ROOT, codex_home, skills_enabled)
     catalog = prepare_model_catalog(
         binary,
         codex_home / "model-catalog.json",
@@ -121,15 +144,11 @@ def run_one(
     start_barrier.wait(timeout=60)
     started = time.monotonic()
     snapshot = manager.start(13)
-    while True:
-        snapshot = manager.get(snapshot.id)
-        if snapshot.status in TERMINAL:
-            break
-        if time.monotonic() - started > 3900:
-            manager.cancel(snapshot.id)
-            snapshot = manager.get(snapshot.id)
-            break
-        time.sleep(2)
+    snapshot, wait_error = wait_for_task(
+        manager,
+        snapshot.id,
+        deadline=started + RUN_TIMEOUT_SECONDS,
+    )
     duration = time.monotonic() - started
     flag_match = re.search(r"flag\{[^{}\r\n]{1,512}\}", snapshot.output, re.IGNORECASE)
     result = {
@@ -144,7 +163,7 @@ def run_one(
         "usage": snapshot.usage.to_dict(),
         "flag": flag_match.group(0) if flag_match else "",
         "writeupPath": snapshot.writeup_path,
-        "error": snapshot.error,
+        "error": wait_error or snapshot.error,
     }
     manager.close()
     return result
