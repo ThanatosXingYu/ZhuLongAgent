@@ -43,6 +43,15 @@ export async function installApiMock(page, overrides = {}) {
   const state = {
     codexTasks: [task()],
     attachmentTask: null,
+    config: {
+      configured: true, matchUrl: "https://match.example/competition", matchTitle: "Regression CTF",
+      modelBaseUrl: "", modelName: "", codexBaseUrl: "http://model", codexModel: "deepseek-v4-flash",
+      modelActiveProviderId: "", modelPoolEnabled: true,
+      modelProtocol: "openai-chat", codexProtocol: "openai-responses",
+      codexMaxConcurrency: 10, codexAutoCompactTokenLimit: 500000, codexSystemPrompt: "", codexCtfSkillsEnabled: true,
+      codexAutoResumeInterrupted: false, modelApiKeyConfigured: false, codexApiKeyConfigured: true,
+      modelProviders: [],
+    },
     toolCatalog: {
       status: "idle", root: "work/tools", tools: [
         { name: "nmap", label: "Nmap", category: "web", categoryLabel: "Web", installed: false, supported: true, kind: "binary" },
@@ -63,14 +72,25 @@ export async function installApiMock(page, overrides = {}) {
     }
     let data;
     switch (url.pathname) {
-      case "/api/config": data = {
-        configured: true, matchUrl: "https://match.example/competition", matchTitle: "Regression CTF",
-        modelBaseUrl: "", modelName: "", codexBaseUrl: "http://model", codexModel: "deepseek-v4-flash",
-        modelActiveProviderId: "", modelPoolEnabled: true,
-        modelProtocol: "openai-chat", codexProtocol: "openai-responses",
-        codexMaxConcurrency: 10, codexAutoCompactTokenLimit: 500000, codexSystemPrompt: "", codexCtfSkillsEnabled: true,
-        codexAutoResumeInterrupted: false, modelApiKeyConfigured: false, codexApiKeyConfigured: true,
-      }; break;
+      case "/api/config": {
+        if (request.method() === "PUT" && body && typeof body === "object") {
+          const providers = Array.isArray(body.modelProviders)
+            ? body.modelProviders.map((provider) => ({
+                ...provider,
+                apiKey: "",
+                apiKeyConfigured: Boolean(provider.apiKey) || Boolean(
+                  state.config.modelProviders?.find((item) => item.id === provider.id)?.apiKeyConfigured,
+                ),
+                apiKeyMasked: provider.apiKey ? "sk-…test" : (
+                  state.config.modelProviders?.find((item) => item.id === provider.id)?.apiKeyMasked || ""
+                ),
+              }))
+            : state.config.modelProviders;
+          state.config = { ...state.config, ...body, modelProviders: providers };
+        }
+        data = state.config;
+        break;
+      }
       case "/api/platform/auth": data = { authenticated: true, teamName: "QA Team", userName: "Tester", score: 100, rank: 1, memberCount: 2, organization: "Lab" }; break;
       case "/api/overview": data = { stagePoint: 100, stageRank: 1, solvedCount: 2, teamName: "QA Team", organization: "QA Lab" }; break;
       case "/api/exercises": data = exerciseGroups; break;
@@ -85,6 +105,13 @@ export async function installApiMock(page, overrides = {}) {
       case "/api/attachments/sizes": data = { status: "completed", totalFiles: 1, completedFiles: 1 }; break;
       case "/api/tools": data = state.toolCatalog; break;
       case "/api/model-test": data = { model: body?.model || "model", reply: "OK", latencyMs: 42 }; break;
+      case "/api/models": data = { models: ["model-a", "model-b"], kind: body?.kind || "model" }; break;
+      case "/api/model-routing/status": data = {
+        activeProviderId: "",
+        poolEnabled: true,
+        strategy: "round-robin",
+        providers: [],
+      }; break;
       case "/api/environment": data = { items: [], summary: "环境可用" }; break;
       case "/api/codex/tasks": {
         const query = (url.searchParams.get("query") || "").toLowerCase();

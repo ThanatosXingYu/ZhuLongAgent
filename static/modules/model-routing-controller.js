@@ -9,14 +9,23 @@ export function createModelRoutingController({
   showToast,
   onConfigLoaded,
 }) {
-  let strategy = "round-robin";
+  let providers = [];
   let activeProviderId = "";
   let poolEnabled = true;
+  let strategy = "round-robin";
+  let editingProviderId = "";
   let providerSequence = 0;
+  let providerStatus = new Map();
+  let statusPollTimer = null;
 
   function setStatus(message, kind = "") {
     els.modelRoutingStatus.textContent = message;
-    els.modelRoutingStatus.className = `settings-status${kind ? ` ${kind}` : ""}`;
+    els.modelRoutingStatus.className = `model-routing-status${kind ? ` ${kind}` : ""}`;
+  }
+
+  function setSheetStatus(message, kind = "") {
+    els.modelPoolSheetStatus.textContent = message;
+    els.modelPoolSheetStatus.className = `settings-status${kind ? ` ${kind}` : ""}`;
   }
 
   function setTab(tab) {
@@ -41,364 +50,552 @@ export function createModelRoutingController({
     updateSummary();
   }
 
+  function providerById(id) {
+    return providers.find((provider) => provider.id === id) || null;
+  }
+
+  function providerProtocolLabel(protocol) {
+    return {
+      "openai-chat": "OpenAI Chat",
+      "openai-responses": "Responses",
+      anthropic: "Anthropic",
+    }[protocol] || protocol || "未知协议";
+  }
+
+  function providerHealth(provider) {
+    const runtime = providerStatus.get(provider.id) || {};
+    if (!provider.enabled) return { label: "已停用", tone: "muted", hint: "该配置不会发出请求" };
+    if (!provider.apiKeyConfigured) {
+      return { label: "未配置 Key", tone: "warning", hint: "需要填写 API Key 后才能调用" };
+    }
+    if (runtime.available === false) {
+      const seconds = Number(runtime.cooldownSeconds || 0);
+      return {
+        label: seconds > 0 ? `冷却 ${seconds}s` : "不可用",
+        tone: "error",
+        hint: runtime.lastError || "提供商暂不可用",
+      };
+    }
+    return { label: "可用", tone: "success", hint: "当前配置可以接收请求" };
+  }
+
   function updateSummary() {
-    if (!els.modelProviderList) return;
-    const providers = [...els.modelProviderList.querySelectorAll(".model-provider-item")];
-    const enabledCount = providers.filter((item) => item.querySelector(".provider-enabled")?.checked).length;
-    const activeItem = providers.find((item) => item.dataset.providerId === activeProviderId);
-    const participants = providers.filter((item) => {
-      if (!item.querySelector(".provider-enabled")?.checked) return false;
-      return item.dataset.providerId === activeProviderId || item.querySelector(".provider-pool")?.checked;
-    }).length;
-    els.modelActiveProviderCount.textContent = formatNumber(enabledCount);
+    const enabled = providers.filter((provider) => provider.enabled).length;
+    const participantIds = routingOrder();
+    const active = providerById(activeProviderId);
+    els.modelActiveProviderCount.textContent = formatNumber(enabled);
     els.modelTotalProviderCount.textContent = `共 ${formatNumber(providers.length)} 个`;
-    els.modelActiveProviderName.textContent = activeItem?.querySelector(".provider-name")?.value.trim() || "未选择";
+    els.modelActiveProviderName.textContent = active?.name || "未选择";
     els.modelPoolEnabled.checked = poolEnabled;
+    els.modelPoolEnabledSheet.checked = poolEnabled;
     els.modelPoolState.textContent = poolEnabled ? "已开启" : "已关闭";
+    els.modelPoolHeaderBadge.hidden = !poolEnabled;
     els.modelPoolParticipantCount.textContent = poolEnabled
-      ? `${formatNumber(participants)} 个参与项`
-      : "仅使用默认提供商";
+      ? `${formatNumber(participantIds.length)} 个参与项`
+      : "仅使用激活配置";
+    els.modelPoolParticipantCountSheet.textContent = poolEnabled
+      ? `${formatNumber(participantIds.length)} 个参与项`
+      : "轮询已关闭，仅使用激活配置";
     els.modelStrategySummary.textContent = strategy === "failover" ? "故障转移" : "每次轮询";
     els.modelRecoverySummary.textContent = `${formatNumber(Number(els.modelRecoveryInterval?.value || 60))} 秒`;
-    providers.forEach((item, index) => {
-      item.style.setProperty("--provider-index", String(index + 1));
-      const order = item.querySelector(".provider-order");
-      if (order) order.textContent = `#${index + 1}`;
-      const enabled = item.querySelector(".provider-enabled")?.checked;
-      const isActive = item.dataset.providerId === activeProviderId;
-      item.classList.toggle("is-disabled", !enabled);
-      item.classList.toggle("is-active-provider", isActive);
-      const activeRadio = item.querySelector(".provider-active");
-      if (activeRadio) activeRadio.checked = isActive;
-      const participant = item.querySelector(".provider-pool");
-      if (participant) {
-        if (isActive) participant.checked = true;
-        participant.disabled = !poolEnabled || !enabled || isActive;
-        participant.title = isActive ? "默认提供商始终用于首选请求" : "决定是否进入轮询候选链";
-      }
-    });
+    renderPoolChain();
   }
 
-  function setActiveProvider(id) {
-    if (!id) return;
-    activeProviderId = String(id);
+  function routingOrder() {
+    const active = providerById(activeProviderId);
+    const others = providers.filter((provider) =>
+      provider.id !== activeProviderId
+      && provider.enabled
+      && !provider.poolExclude);
+    return [active, ...others].filter(Boolean);
+  }
+
+  function renderPoolChain() {
+    if (!els.modelPoolChain) return;
+    const order = poolEnabled
+      ? routingOrder()
+      : [providerById(activeProviderId)].filter(Boolean);
+    const fragment = document.createDocumentFragment();
+    if (!order.length) {
+      fragment.append(createElement("div", "model-pool-empty", "还没有可用模型配置"));
+    }
+    order.forEach((provider, index) => {
+      const runtime = providerStatus.get(provider.id) || {};
+      const health = providerHealth(provider);
+      const row = createElement("div", "model-pool-chain-row");
+      row.dataset.providerId = provider.id;
+      const orderBadge = createElement("span", "model-pool-order", String(index + 1));
+      const copy = createElement("span", "model-pool-chain-copy");
+      const title = createElement("span", "model-pool-chain-title");
+      title.append(
+        createElement("strong", "", provider.name || provider.id),
+        provider.id === activeProviderId
+          ? createElement("span", "model-pool-active-badge", "激活")
+          : createElement("span", "", ""),
+      );
+      copy.append(
+        title,
+        createElement("code", "", provider.model || "未填写模型"),
+        createElement("small", "", provider.baseUrl || "未填写 Base URL"),
+      );
+      const state = createElement("span", `model-health ${health.tone}`, health.label);
+      state.title = [health.hint, runtime.lastError].filter(Boolean).join(" · ");
+      row.append(orderBadge, copy, state);
+      fragment.append(row);
+    });
+    els.modelPoolChain.replaceChildren(fragment);
+  }
+
+  function renderProviders() {
+    const fragment = document.createDocumentFragment();
+    providers.forEach((provider, index) => {
+      const active = provider.id === activeProviderId;
+      const health = providerHealth(provider);
+      const card = createElement(
+        "article",
+        `model-provider-card${active ? " is-active-provider" : ""}${provider.enabled ? "" : " is-disabled"}`,
+      );
+      card.dataset.providerId = provider.id;
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+      card.setAttribute("aria-label", `编辑模型配置 ${provider.name || provider.id}`);
+      card.style.setProperty("--provider-index", String(index + 1));
+      const top = createElement("div", "model-provider-card-top");
+      const star = createElement("span", "model-provider-star");
+      star.append(icon(active ? "star" : "circle"));
+      const identity = createElement("span", "model-provider-identity");
+      identity.append(
+        createElement("strong", "", provider.name || provider.id),
+        createElement("code", "", provider.model || "未填写模型"),
+      );
+      const badge = createElement("span", `model-health ${health.tone}`, health.label);
+      badge.title = health.hint;
+      top.append(star, identity, badge);
+      const details = createElement("div", "model-provider-card-details");
+      details.append(
+        createElement("span", "model-provider-protocol", providerProtocolLabel(provider.protocol)),
+        createElement("span", "", provider.id === activeProviderId ? "请求首选" : provider.poolExclude ? "不参与轮询" : "轮询成员"),
+        createElement("span", "", provider.apiKeyConfigured ? "Key 已配置" : "Key 未配置"),
+      );
+      const url = createElement("code", "model-provider-card-url", provider.baseUrl || "未填写 Base URL");
+      const actions = createElement("div", "model-provider-card-actions");
+      const activate = createElement(
+        "button",
+        `button button-compact ${active ? "button-ghost" : "button-primary"}`,
+        active ? "已激活" : "设为激活",
+      );
+      activate.type = "button";
+      activate.disabled = active || !provider.enabled;
+      activate.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void activateProvider(provider.id);
+      });
+      const edit = createElement("button", "button button-ghost button-compact", "编辑");
+      edit.type = "button";
+      edit.addEventListener("click", (event) => {
+        event.stopPropagation();
+        openProviderSheet(provider.id);
+      });
+      actions.append(activate, edit);
+      card.append(top, details, url, actions);
+      card.addEventListener("click", () => openProviderSheet(provider.id));
+      card.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          openProviderSheet(provider.id);
+        }
+      });
+      fragment.append(card);
+    });
+    if (!providers.length) {
+      const empty = createElement("div", "model-provider-empty");
+      empty.append(
+        icon("server"),
+        createElement("strong", "", "还没有模型配置"),
+        createElement("span", "", "点击右上角「新建」添加第一个提供商。"),
+      );
+      fragment.append(empty);
+    }
+    els.modelProviderList.replaceChildren(fragment);
+    refreshIcons();
     updateSummary();
   }
 
-  function setPoolEnabled(enabled) {
-    poolEnabled = Boolean(enabled);
-    updateSummary();
+  function generateProviderId() {
+    let id = "";
+    do {
+      id = `provider-${Date.now().toString(36)}-${++providerSequence}`;
+    } while (providerById(id));
+    return id;
   }
 
-  function addProviderRow(provider = {}) {
-    const id = String(provider.id || `provider-${Date.now()}-${++providerSequence}`);
-    const item = createElement("article", "model-provider-item");
-    item.dataset.providerId = id;
-    item.dataset.legacy = provider.legacy ? "true" : "false";
-    const heading = createElement("div", "model-provider-heading");
-    const providerOrder = createElement("span", "provider-order", "#");
-    const providerStatus = createElement("span", "provider-status-dot");
-
-    const enabledLabel = createElement("label", "settings-checkbox");
-    const enabled = document.createElement("input");
-    enabled.type = "checkbox";
-    enabled.checked = provider.enabled !== false;
-    enabled.className = "provider-enabled";
-    enabled.addEventListener("change", updateSummary);
-    enabledLabel.append(enabled, createElement("span", "", "启用"));
-
-    const activeLabel = createElement("label", "provider-choice provider-default-choice");
-    const activeRadio = document.createElement("input");
-    activeRadio.type = "radio";
-    activeRadio.name = "model-default-provider";
-    activeRadio.className = "provider-active";
-    activeRadio.value = id;
-    activeRadio.checked = activeProviderId === id;
-    activeRadio.addEventListener("change", () => setActiveProvider(id));
-    activeLabel.append(activeRadio, createElement("span", "", "设为默认"));
-
-    const poolLabel = createElement("label", "provider-choice provider-pool-choice");
-    const participant = document.createElement("input");
-    participant.type = "checkbox";
-    participant.className = "provider-pool";
-    participant.checked = provider.poolExclude !== true;
-    participant.addEventListener("change", updateSummary);
-    poolLabel.append(participant, createElement("span", "", "参与轮询"));
-
-    const routingOptions = createElement("div", "provider-routing-options");
-    routingOptions.append(enabledLabel, activeLabel, poolLabel);
-    const name = document.createElement("input");
-    name.type = "text";
-    name.className = "provider-name";
-    name.maxLength = 128;
-    name.placeholder = "提供商名称";
-    name.value = String(provider.name || "");
-    name.addEventListener("input", updateSummary);
-    const remove = createElement("button", "model-provider-remove", "删除");
-    remove.type = "button";
-    remove.addEventListener("click", () => {
-      item.remove();
-      if (activeProviderId === id) {
-        activeProviderId = els.modelProviderList.querySelector(".model-provider-item")?.dataset.providerId || "";
-      }
-      updateSummary();
-    });
-    const identity = createElement("div", "provider-identity");
-    identity.append(providerOrder, providerStatus, name);
-    heading.append(identity, routingOptions, remove);
-    if (!activeProviderId) activeProviderId = id;
-
-    const grid = createElement("div", "model-provider-grid");
-    const baseUrl = document.createElement("input");
-    baseUrl.type = "url";
-    baseUrl.className = "provider-base-url";
-    baseUrl.placeholder = "https://api.example.com/v1";
-    baseUrl.value = String(provider.baseUrl || "");
-    const protocol = document.createElement("select");
-    protocol.className = "provider-protocol";
-    [
-      ["openai-responses", "OpenAI Responses"],
-      ["openai-chat", "OpenAI Chat"],
-      ["anthropic", "Anthropic Messages"],
-    ].forEach(([value, label]) => {
-      const option = document.createElement("option");
-      option.value = value;
-      option.textContent = label;
-      protocol.append(option);
-    });
-    protocol.value = String(provider.protocol || "openai-chat");
-    const protocolWrap = createElement("span", "select-wrap");
-    protocolWrap.append(protocol, icon("chevron-down"));
-    const baseField = createElement("label", "provider-field");
-    baseField.append(createElement("span", "", "接口地址"), baseUrl);
-    const protocolField = createElement("label", "provider-field");
-    protocolField.append(createElement("span", "", "协议"), protocolWrap);
-    grid.append(baseField, protocolField);
-
-    const modelGrid = createElement("div", "model-provider-grid");
-    const picker = createElement("span", "model-picker");
-    const model = document.createElement("input");
-    model.type = "text";
-    model.className = "provider-model";
-    model.placeholder = "模型名称";
-    model.value = String(provider.model || "");
-    const menu = createElement("div", "model-options-menu model-provider-menu");
-    menu.hidden = true;
-    model.addEventListener("input", () => {
-      menu.hidden = true;
-    });
-    const fetchButton = createElement("button", "button button-ghost button-compact", "获取模型");
-    fetchButton.type = "button";
-    picker.append(model, fetchButton, menu);
-    const apiKey = document.createElement("input");
-    apiKey.type = "password";
-    apiKey.className = "provider-api-key";
-    apiKey.autocomplete = "new-password";
-    apiKey.placeholder = provider.apiKeyConfigured
+  function resetSheet(provider = null) {
+    editingProviderId = provider?.id || "";
+    els.modelProviderSheetTitle.textContent = provider ? `编辑：${provider.name || provider.id}` : "新建模型配置";
+    els.modelProviderSheetDescription.textContent = provider
+      ? "修改后保存；留空 API Key 会保留当前 Key。"
+      : "新建后不会自动激活，请在卡片上「设为激活」。";
+    els.modelSheetName.value = provider?.name || "";
+    els.modelSheetProtocol.value = provider?.protocol || "openai-chat";
+    els.modelSheetBaseUrl.value = provider?.baseUrl || "";
+    els.modelSheetModel.value = provider?.model || "";
+    els.modelSheetApiKey.value = "";
+    els.modelSheetApiKey.placeholder = provider?.apiKeyConfigured
       ? `当前 Key：${provider.apiKeyMasked || "已配置"}（留空保持）`
-      : "API Key";
-    const modelField = createElement("label", "provider-field");
-    modelField.append(createElement("span", "", "模型"), picker);
-    const keyField = createElement("label", "provider-field");
-    keyField.append(createElement("span", "", "API Key"), apiKey);
-    modelGrid.append(modelField, keyField);
-    const testRow = createElement("div", "provider-test-row");
-    const testButton = createElement("button", "button button-ghost button-compact provider-test", "测试连接");
-    testButton.type = "button";
-    const testResult = createElement("span", "provider-test-result");
-    testRow.append(testButton, testResult);
-    fetchButton.addEventListener("click", async () => {
-      const value = baseUrl.value.trim();
-      if (!value) {
-        setStatus("请先填写模型地址", "error");
-        return;
-      }
-      await withButton(fetchButton, async () => {
-        try {
-          const result = await request("/api/models", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              baseUrl: value,
-              apiKey: apiKey.value.trim() || undefined,
-              providerId: provider.apiKeyConfigured && !provider.legacy ? id : undefined,
-              protocol: protocol.value,
-              kind: "model",
-            }),
-          });
-          const models = Array.isArray(result.models) ? result.models : [];
-          if (!model.value.trim() && models.length === 1) model.value = models[0];
-          menu.replaceChildren();
-          models.forEach((modelName) => {
-            const option = createElement("button", "model-option", String(modelName));
-            option.type = "button";
-            option.addEventListener("click", () => {
-              model.value = String(modelName);
-              menu.hidden = true;
-            });
-            menu.append(option);
-          });
-          menu.hidden = models.length === 0;
-          setStatus(models.length ? `获取到 ${models.length} 个模型` : "没有可用模型", models.length ? "success" : "error");
-        } catch (error) {
-          setStatus(`获取模型失败：${error.message}`, "error");
-        }
-      });
-    });
-    testButton.addEventListener("click", async () => {
-      if (!baseUrl.value.trim() || !model.value.trim()) {
-        setStatus("请先填写接口地址和模型", "error");
-        return;
-      }
-      await withButton(testButton, async () => {
-        testResult.className = "provider-test-result is-testing";
-        testResult.textContent = "正在发送测试消息…";
-        try {
-          const result = await request("/api/model-test", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              baseUrl: baseUrl.value.trim(),
-              apiKey: apiKey.value.trim() || undefined,
-              providerId: provider.apiKeyConfigured && !provider.legacy ? id : undefined,
-              model: model.value.trim(),
-              protocol: protocol.value,
-            }),
-          });
-          testResult.className = "provider-test-result is-success";
-          testResult.textContent = `连接成功 · ${formatNumber(result.latencyMs)}ms · ${result.reply || "OK"}`;
-          item.classList.add("is-connection-ok");
-          setStatus(`连接成功：${result.model || model.value.trim()} · ${formatNumber(result.latencyMs)}ms`, "success");
-        } catch (error) {
-          testResult.className = "provider-test-result is-error";
-          testResult.textContent = `连接失败：${error.message}`;
-          item.classList.remove("is-connection-ok");
-          setStatus(`连接失败：${error.message}`, "error");
-        }
-      });
-    });
-    item.append(heading, grid, modelGrid, testRow);
-    els.modelProviderList.append(item);
-    updateSummary();
+      : "sk-…";
+    els.modelSheetEnabled.checked = provider?.enabled !== false;
+    els.modelSheetPool.checked = provider ? !provider.poolExclude : true;
+    els.modelSheetPool.disabled = provider?.id === activeProviderId;
+    els.modelSheetDelete.hidden = !provider;
+    els.modelSheetTestResult.className = "model-sheet-test-result";
+    els.modelSheetTestResult.textContent = "";
+    els.modelSheetModels.hidden = true;
+    els.modelSheetModels.replaceChildren();
+    refreshIcons();
   }
 
-  function collectProviders() {
-    return [...els.modelProviderList.querySelectorAll(".model-provider-item")].map((item) => {
-      const key = item.querySelector(".provider-api-key").value.trim();
-      const provider = {
-        id: item.dataset.providerId,
-        name: item.querySelector(".provider-name").value.trim(),
-        baseUrl: item.querySelector(".provider-base-url").value.trim(),
-        model: item.querySelector(".provider-model").value.trim(),
-        protocol: item.querySelector(".provider-protocol").value,
-        enabled: item.querySelector(".provider-enabled").checked,
-        poolExclude: item.dataset.providerId === activeProviderId
-          ? false
-          : !item.querySelector(".provider-pool").checked,
-      };
-      if (key) provider.apiKey = key;
-      return provider;
+  function openProviderSheet(id = "") {
+    const provider = id ? providerById(id) : null;
+    resetSheet(provider);
+    if (els.modelProviderSheet.open) return;
+    els.modelProviderSheet.showModal();
+    window.requestAnimationFrame(() => els.modelSheetName.focus());
+  }
+
+  function closeProviderSheet() {
+    if (els.modelProviderSheet.open) els.modelProviderSheet.close();
+    editingProviderId = "";
+  }
+
+  function sheetValues() {
+    return {
+      name: els.modelSheetName.value.trim(),
+      protocol: els.modelSheetProtocol.value,
+      baseUrl: els.modelSheetBaseUrl.value.trim(),
+      model: els.modelSheetModel.value.trim(),
+      apiKey: els.modelSheetApiKey.value.trim(),
+      enabled: els.modelSheetEnabled.checked,
+      poolExclude: editingProviderId === activeProviderId ? false : !els.modelSheetPool.checked,
+    };
+  }
+
+  function validateSheet(values) {
+    if (!values.name) return "请填写配置名称";
+    if (!values.baseUrl) return "请填写 Base URL";
+    if (!/^https?:\/\//i.test(values.baseUrl)) return "Base URL 必须以 http:// 或 https:// 开头";
+    if (!values.model) return "请填写模型名称";
+    return "";
+  }
+
+  function mergeProvider(provider) {
+    const index = providers.findIndex((item) => item.id === provider.id);
+    if (index >= 0) providers.splice(index, 1, provider);
+    else providers.push(provider);
+  }
+
+  async function saveProvider() {
+    const values = sheetValues();
+    const validation = validateSheet(values);
+    if (validation) {
+      els.modelSheetTestResult.className = "model-sheet-test-result is-error";
+      els.modelSheetTestResult.textContent = validation;
+      return;
+    }
+    const id = editingProviderId || generateProviderId();
+    const old = providerById(id);
+    const provider = {
+      id,
+      name: values.name,
+      baseUrl: values.baseUrl.replace(/\/+$/, ""),
+      model: values.model,
+      protocol: values.protocol,
+      enabled: values.enabled,
+      poolExclude: values.poolExclude,
+      apiKeyConfigured: Boolean(values.apiKey || old?.apiKeyConfigured),
+      apiKeyMasked: old?.apiKeyMasked || "",
+    };
+    if (values.apiKey) provider.apiKey = values.apiKey;
+    if (!activeProviderId) activeProviderId = id;
+    mergeProvider(provider);
+    try {
+      await persistProviders("模型配置已保存");
+      closeProviderSheet();
+    } catch (error) {
+      setStatus(`保存模型配置失败：${error.message}`, "error");
+    }
+  }
+
+  async function deleteProvider() {
+    const provider = providerById(editingProviderId);
+    if (!provider) return;
+    if (provider.id === activeProviderId) {
+      setStatus("当前激活配置不能直接删除，请先把其它配置设为激活", "error");
+      return;
+    }
+    if (!window.confirm(`删除模型配置「${provider.name || provider.id}」？`)) return;
+    providers = providers.filter((item) => item.id !== provider.id);
+    providerStatus.delete(provider.id);
+    try {
+      await persistProviders("模型配置已删除");
+      closeProviderSheet();
+    } catch (error) {
+      setStatus(`删除模型配置失败：${error.message}`, "error");
+    }
+  }
+
+  async function fetchModels() {
+    const values = sheetValues();
+    if (!values.baseUrl) {
+      els.modelSheetTestResult.className = "model-sheet-test-result is-error";
+      els.modelSheetTestResult.textContent = "请先填写 Base URL";
+      return;
+    }
+    await withButton(els.modelSheetFetchModels, async () => {
+      try {
+        const result = await request("/api/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseUrl: values.baseUrl,
+            apiKey: values.apiKey || undefined,
+            providerId: editingProviderId && providerById(editingProviderId)?.apiKeyConfigured
+              ? editingProviderId
+              : undefined,
+            protocol: values.protocol,
+            kind: "model",
+          }),
+        });
+        const models = Array.isArray(result.models) ? result.models : [];
+        const fragment = document.createDocumentFragment();
+        models.forEach((modelName) => {
+          const option = createElement("button", "model-sheet-model-option", String(modelName));
+          option.type = "button";
+          option.addEventListener("click", () => {
+            els.modelSheetModel.value = String(modelName);
+            els.modelSheetModels.hidden = true;
+          });
+          fragment.append(option);
+        });
+        els.modelSheetModels.replaceChildren(fragment);
+        els.modelSheetModels.hidden = models.length === 0;
+        if (!models.length) {
+          els.modelSheetTestResult.className = "model-sheet-test-result is-error";
+          els.modelSheetTestResult.textContent = "接口没有返回可用模型";
+        } else if (!els.modelSheetModel.value.trim() && models.length === 1) {
+          els.modelSheetModel.value = String(models[0]);
+        }
+        setStatus(models.length ? `获取到 ${models.length} 个模型` : "没有可用模型", models.length ? "success" : "error");
+      } catch (error) {
+        els.modelSheetTestResult.className = "model-sheet-test-result is-error";
+        els.modelSheetTestResult.textContent = `获取模型失败：${error.message}`;
+      }
     });
+  }
+
+  async function testProvider() {
+    const values = sheetValues();
+    const validation = validateSheet(values);
+    if (validation) {
+      els.modelSheetTestResult.className = "model-sheet-test-result is-error";
+      els.modelSheetTestResult.textContent = validation;
+      return;
+    }
+    await withButton(els.modelSheetTest, async () => {
+      els.modelSheetTestResult.className = "model-sheet-test-result is-testing";
+      els.modelSheetTestResult.textContent = "正在发送测试消息…";
+      try {
+        const result = await request("/api/model-test", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            baseUrl: values.baseUrl,
+            apiKey: values.apiKey || undefined,
+            providerId: editingProviderId && providerById(editingProviderId)?.apiKeyConfigured
+              ? editingProviderId
+              : undefined,
+            model: values.model,
+            protocol: values.protocol,
+          }),
+        });
+        els.modelSheetTestResult.className = "model-sheet-test-result is-success";
+        els.modelSheetTestResult.textContent = `连接成功 · ${formatNumber(result.latencyMs)}ms · ${result.reply || "OK"}`;
+        setStatus(`连接成功：${result.model || values.model} · ${formatNumber(result.latencyMs)}ms`, "success");
+      } catch (error) {
+        els.modelSheetTestResult.className = "model-sheet-test-result is-error";
+        els.modelSheetTestResult.textContent = `连接失败：${error.message}`;
+        setStatus(`连接失败：${error.message}`, "error");
+      }
+    });
+  }
+
+  async function activateProvider(id) {
+    if (!providerById(id)) return;
+    activeProviderId = id;
+    const provider = providerById(id);
+    if (provider) provider.poolExclude = false;
+    try {
+      await persistProviders(`已激活：${provider?.name || id}`);
+      await refreshProviderStatus();
+    } catch (error) {
+      setStatus(`激活失败：${error.message}`, "error");
+    }
+  }
+
+  function payloadProviders() {
+    return providers.map((provider) => {
+      const item = {
+        id: provider.id,
+        name: provider.name,
+        baseUrl: provider.baseUrl,
+        model: provider.model,
+        protocol: provider.protocol,
+        enabled: provider.enabled,
+        poolExclude: provider.id === activeProviderId ? false : provider.poolExclude,
+      };
+      if (provider.apiKey) item.apiKey = provider.apiKey;
+      return item;
+    });
+  }
+
+  function configPayload() {
+    const delays = els.modelRetryDelays.value
+      .split(",")
+      .map((item) => Number(item.trim()))
+      .filter((item) => Number.isFinite(item) && item >= 0);
+    if (!delays.length) throw new Error("重试间隔不能为空");
+    return {
+      modelProviders: payloadProviders(),
+      modelActiveProviderId: activeProviderId,
+      modelPoolEnabled: poolEnabled,
+      modelRoutingStrategy: strategy,
+      modelRetryDelays: delays,
+      modelRecoveryInterval: Number(els.modelRecoveryInterval.value || 60),
+      codexAutoCompactTokenLimit: Number(els.codexAutoCompactTokenLimit.value || 500000),
+    };
+  }
+
+  function replaceFromConfig(config) {
+    providers = (Array.isArray(config.modelProviders) ? config.modelProviders : []).map((provider) => ({ ...provider }));
+    activeProviderId = String(config.modelActiveProviderId || "");
+    poolEnabled = config.modelPoolEnabled !== false;
+    els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
+    els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
+    els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
+    if (!activeProviderId) activeProviderId = providers.find((provider) => provider.enabled)?.id || providers[0]?.id || "";
+    setStrategy(config.modelRoutingStrategy || "round-robin");
+    renderProviders();
+  }
+
+  async function persistProviders(message) {
+    els.saveModelRouting.disabled = true;
+    setStatus("正在保存…");
+    try {
+      const config = await request("/api/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(configPayload()),
+      });
+      onConfigLoaded(config);
+      replaceFromConfig(config);
+      setStatus(`${message}，已生效`, "success");
+      showToast(message, "success");
+      await refreshProviderStatus();
+      return config;
+    } finally {
+      els.saveModelRouting.disabled = false;
+    }
+  }
+
+  async function saveRouting() {
+    try {
+      await persistProviders("轮询配置已保存");
+      if (els.modelPoolSheet.open) els.modelPoolSheet.close();
+    } catch (error) {
+      const message = `保存失败：${error.message}`;
+      setStatus(message, "error");
+      setSheetStatus(message, "error");
+    }
+  }
+
+  async function refreshProviderStatus() {
+    try {
+      const result = await request("/api/model-routing/status");
+      providerStatus = new Map(
+        (Array.isArray(result.providers) ? result.providers : [])
+          .map((provider) => [String(provider.id || ""), provider]),
+      );
+      renderProviders();
+    } catch {
+      providerStatus = new Map();
+    }
+  }
+
+  function startStatusPolling() {
+    stopStatusPolling();
+    statusPollTimer = window.setInterval(() => {
+      if (!els.modelRoutingPage.hidden) void refreshProviderStatus();
+    }, 10000);
+  }
+
+  function stopStatusPolling() {
+    if (statusPollTimer) window.clearInterval(statusPollTimer);
+    statusPollTimer = null;
   }
 
   function load(config) {
     onConfigLoaded(config);
-    const providers = Array.isArray(config.modelProviders) ? config.modelProviders : [];
-    poolEnabled = config.modelPoolEnabled !== false;
-    activeProviderId = String(config.modelActiveProviderId || "");
-    els.modelProviderList.replaceChildren();
-    if (providers.length) {
-      providers.forEach(addProviderRow);
-    } else if (config.modelBaseUrl && config.modelName) {
-      addProviderRow({
+    const configured = Array.isArray(config.modelProviders) ? config.modelProviders : [];
+    if (!configured.length && config.modelBaseUrl && config.modelName) {
+      providers = [{
+        id: "legacy",
         name: "默认提供商",
         baseUrl: config.modelBaseUrl,
         model: config.modelName,
         protocol: config.modelProtocol || "openai-chat",
         enabled: true,
-        legacy: true,
-        apiKeyConfigured: config.modelApiKeyConfigured,
-        apiKeyMasked: config.modelApiKeyMasked,
-      });
+        poolExclude: false,
+        apiKeyConfigured: Boolean(config.modelApiKeyConfigured),
+        apiKeyMasked: config.modelApiKeyMasked || "",
+      }];
+      activeProviderId = "legacy";
+      poolEnabled = config.modelPoolEnabled !== false;
+      els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
+      els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
+      els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
+      setStrategy(config.modelRoutingStrategy || "round-robin");
+      renderProviders();
     } else {
-      addProviderRow();
+      replaceFromConfig(config);
     }
-    if (!activeProviderId) {
-      activeProviderId = [...els.modelProviderList.querySelectorAll(".model-provider-item")]
-        .find((item) => item.querySelector(".provider-enabled")?.checked)
-        ?.dataset.providerId || els.modelProviderList.querySelector(".model-provider-item")?.dataset.providerId || "";
-    }
-    setStrategy(config.modelRoutingStrategy || "round-robin");
-    els.modelRetryDelays.value = (config.modelRetryDelays || [1, 5, 10, 10, 15]).join(",");
-    els.modelRecoveryInterval.value = String(config.modelRecoveryInterval || 60);
-    els.codexAutoCompactTokenLimit.value = String(config.codexAutoCompactTokenLimit || 500000);
-    updateSummary();
-    setStatus("选择默认提供商，并按需开启轮询");
+    setStatus(providers.length ? "点击配置卡片编辑，星标为当前激活项" : "还没有模型配置");
     setTab("providers");
-    refreshIcons();
-  }
-
-  async function save() {
-    const providers = collectProviders();
-    if (!providers.length) {
-      setStatus("至少添加一个模型提供商", "error");
-      return null;
-    }
-    if (!activeProviderId || !providers.some((provider) => provider.id === activeProviderId)) {
-      setStatus("请选择一个默认提供商", "error");
-      return null;
-    }
-    const delays = els.modelRetryDelays.value
-      .split(",")
-      .map((item) => Number(item.trim()))
-      .filter((item) => Number.isFinite(item) && item >= 0);
-    if (!delays.length) {
-      setStatus("重试间隔格式无效", "error");
-      return null;
-    }
-    let saved = null;
-    await withButton(els.saveModelRouting, async () => {
-      setStatus("正在保存…");
-      try {
-        const config = await request("/api/config", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            modelProviders: providers,
-            modelActiveProviderId: activeProviderId,
-            modelPoolEnabled: poolEnabled,
-            modelRoutingStrategy: strategy,
-            modelRetryDelays: delays,
-            modelRecoveryInterval: Number(els.modelRecoveryInterval.value || 60),
-            codexAutoCompactTokenLimit: Number(els.codexAutoCompactTokenLimit.value || 500000),
-          }),
-        });
-        onConfigLoaded(config);
-        activeProviderId = String(config.modelActiveProviderId || activeProviderId);
-        poolEnabled = config.modelPoolEnabled !== false;
-        const savedProviders = Array.isArray(config.modelProviders) ? config.modelProviders : [];
-        if (savedProviders.length) {
-          els.modelProviderList.replaceChildren();
-          savedProviders.forEach(addProviderRow);
-          refreshIcons();
-        }
-        setStatus("模型路由已保存并生效", "success");
-        updateSummary();
-        showToast("模型提供商与轮询策略已保存", "success");
-        saved = config;
-      } catch (error) {
-        setStatus(`保存失败：${error.message}`, "error");
-      }
-    });
-    return saved;
+    startStatusPolling();
+    void refreshProviderStatus();
   }
 
   function bind() {
-    els.addModelProvider.addEventListener("click", () => {
-      addProviderRow();
-      refreshIcons();
+    els.addModelProvider.addEventListener("click", () => openProviderSheet());
+    els.closeModelProviderSheet.addEventListener("click", closeProviderSheet);
+    els.modelSheetSave.addEventListener("click", () => void saveProvider());
+    els.modelSheetDelete.addEventListener("click", () => void deleteProvider());
+    els.modelSheetTest.addEventListener("click", () => void testProvider());
+    els.modelSheetFetchModels.addEventListener("click", () => void fetchModels());
+    els.modelProviderSheet.addEventListener("close", () => {
+      editingProviderId = "";
     });
-    els.modelPoolEnabled.addEventListener("change", () => setPoolEnabled(els.modelPoolEnabled.checked));
+    els.openModelPool.addEventListener("click", () => {
+      els.modelPoolEnabledSheet.checked = poolEnabled;
+      renderPoolChain();
+      setSheetStatus("");
+      els.modelPoolSheet.showModal();
+    });
+    els.closeModelPoolSheet.addEventListener("click", () => els.modelPoolSheet.close());
+    els.modelPoolEnabledSheet.addEventListener("change", () => {
+      poolEnabled = els.modelPoolEnabledSheet.checked;
+      updateSummary();
+    });
+    els.saveModelPool.addEventListener("click", () => void saveRouting());
+    els.saveModelRouting.addEventListener("click", () => void saveRouting());
     els.modelRoutingPage.querySelectorAll("[data-model-tab]").forEach((button) => {
       button.addEventListener("click", () => setTab(button.dataset.modelTab || "providers"));
     });
@@ -406,13 +603,13 @@ export function createModelRoutingController({
     els.modelRoutingPage.querySelectorAll("[data-routing]").forEach((button) => {
       button.addEventListener("click", () => setStrategy(button.dataset.routing || "round-robin"));
     });
-    els.saveModelRouting.addEventListener("click", () => void save());
   }
 
   return {
     bind,
     load,
-    save,
+    save: saveRouting,
     setStatus,
+    stopPolling: stopStatusPolling,
   };
 }

@@ -92,52 +92,71 @@ export function codexCommandSummary(event) {
 }
 
 export function codexEventPresentation(event) {
-  const kind = event?.kind || "event";
+  // Older task logs used dotted names (agent.message); normalize them so the
+  // same row styling and default-collapse rules apply to legacy data.
+  const rawKind = event?.kind || "event";
+  const kind = rawKind === "agent.message" ? "agent_message" : rawKind;
   const presentations = {
-    "thread.started": ["会话", "session", "Codex 会话已建立"],
-    "turn.started": ["Codex 开始", "progress", "开始处理请求"],
-    "round.started": ["轮次开始", "progress", "开始处理本轮输入"],
-    "round.completed": ["轮次完成", "success", "本轮处理完成"],
-    "round.failed": ["轮次失败", "error", "本轮处理失败"],
-    "round.canceled": ["轮次停止", "muted", "本轮已停止"],
-    "round.interrupted": ["轮次切换", "interrupted", "本轮提前结束"],
-    "task.interrupted": ["任务中断", "interrupted", "程序退出导致运行中断"],
-    "task.resumed": ["恢复执行", "progress", "使用原会话恢复执行"],
-    "task.finished": ["标记结束", "muted", "中断任务已标记结束"],
-    "user.message": ["用户输入", "user", ""],
-    "user.followup_queued": ["用户追加消息", "user", ""],
-    "user.followup_updated": ["待处理消息已编辑", "user", ""],
-    "user.followup_canceled": ["待处理消息已取消", "muted", ""],
-    reasoning: ["思考", "reasoning", ""],
-    agent_message: ["Codex 回复", "message", ""],
-    command_execution: ["执行命令", "command", ""],
-    "process.started": ["进程", "progress", "Codex 子进程已启动"],
-    "process.waiting": ["等待上游", "progress", "长时间没有新输出，正在等待模型响应"],
-    "process.completed": ["进程", "success", "Codex 子进程已结束"],
-    "turn.completed": ["Token 统计", "success", "本轮 Codex 处理完成"],
-    warning: ["警告", "warning", ""],
-    stderr: ["错误输出", "error", ""],
-    error: ["错误", "error", ""],
-    stream_error: ["日志读取错误", "error", ""],
-    stdout: ["输出", "output", ""],
+    "thread.started": ["会话", "session", "Codex 会话已建立", "message-square"],
+    "turn.started": ["开始", "progress", "开始处理请求", "play"],
+    "round.started": ["轮次", "progress", "开始处理本轮输入", "rotate-cw"],
+    "round.completed": ["轮次", "success", "本轮处理完成", "circle-check"],
+    "round.failed": ["轮次", "error", "本轮处理失败", "circle-x"],
+    "round.canceled": ["轮次", "muted", "本轮已停止", "circle-slash"],
+    "round.interrupted": ["轮次", "interrupted", "本轮提前结束", "circle-slash"],
+    "task.interrupted": ["中断", "interrupted", "程序退出导致运行中断", "triangle-alert"],
+    "task.resumed": ["恢复", "progress", "使用原会话恢复执行", "rotate-ccw"],
+    "task.finished": ["结束", "muted", "中断任务已标记结束", "circle-stop"],
+    "user.message": ["用户输入", "user", "", "user"],
+    "user.followup_queued": ["用户输入", "user", "", "user"],
+    "user.followup_updated": ["用户输入", "user", "", "user"],
+    "user.followup_canceled": ["用户输入", "muted", "", "user"],
+    reasoning: ["推理", "reasoning", "", "brain"],
+    agent_message: ["对话", "message", "", "message-square"],
+    command_execution: ["工具调用", "command", "", "terminal"],
+    "process.started": ["进程", "progress", "Codex 子进程已启动", "cpu"],
+    "process.waiting": ["等待", "progress", "长时间没有新输出，正在等待模型响应", "clock"],
+    "process.completed": ["进程", "success", "Codex 子进程已结束", "cpu"],
+    "turn.completed": ["用量", "success", "本轮 Codex 处理完成", "gauge"],
+    warning: ["警告", "warning", "", "triangle-alert"],
+    stderr: ["错误输出", "error", "", "circle-x"],
+    error: ["错误", "error", "", "circle-x"],
+    stream_error: ["日志错误", "error", "", "circle-x"],
+    stdout: ["工具结果", "output", "", "file-output"],
   };
-  let [label, tone, fallback] = presentations[kind] || [kind, "output", ""];
+  let [label, tone, fallback, iconName] = presentations[kind] || [kind, "output", "", "dot"];
   if (kind === "stderr") {
     const diagnostic = String(event?.summary || "").toLowerCase();
     const warning = ["warning", "warn:", "defaulting to fallback metadata", "degrade performance", "deprecated"].some((marker) => diagnostic.includes(marker));
     const hardError = ["error", "failed", "fatal", "panic", "exception", "退出码"].some((marker) => diagnostic.includes(marker));
     [label, tone, fallback] = warning
-      ? ["警告", "warning", ""]
+      ? ["警告", "warning", "", "triangle-alert"]
       : hardError
-        ? ["错误输出", "error", ""]
-        : ["诊断输出", "muted", ""];
+        ? ["错误输出", "error", "", "circle-x"]
+        : ["诊断输出", "muted", "", "info"];
+    iconName = warning ? "triangle-alert" : hardError ? "circle-x" : "info";
   }
   const summary = kind === "command_execution"
     ? codexCommandSummary(event)
     : kind === "turn.completed" && event.usage
       ? codexUsageSummary(event.usage)
       : codexSummary(event?.summary || fallback, 220);
-  return { label, tone, summary };
+  return { label, tone, summary, icon: iconName };
+}
+
+export function codexEventAgent(event) {
+  const metadata = event?.metadata && typeof event.metadata === "object" ? event.metadata : {};
+  const raw = String(metadata.agent || metadata.worker || "").trim();
+  return raw || "mainagent";
+}
+
+export function codexAgentLabel(agent) {
+  const normalized = String(agent || "mainagent").toLowerCase();
+  if (normalized === "mainagent" || normalized === "main") return "主 Agent";
+  if (normalized === "planner") return "Planner";
+  if (normalized === "system") return "系统";
+  if (normalized.startsWith("worker")) return "Worker " + String(agent).replace(/^worker\s*/i, "");
+  return String(agent || "主 Agent");
 }
 
 export function mergeCodexEventLists(current, incoming) {
@@ -161,13 +180,18 @@ export function normalizeCodexEvents(events) {
   const normalized = [];
   const commands = new Map();
   (Array.isArray(events) ? events : []).forEach((source) => {
-    const event = { ...source, repeatCount: Number(source.repeatCount || 1), sourceSequences: [source.sequence || 0] };
+    const event = {
+      ...source,
+      kind: source.kind === "agent.message" ? "agent_message" : source.kind,
+      repeatCount: Number(source.repeatCount || 1),
+      sourceSequences: [source.sequence || 0],
+    };
     if (event.kind === "command_execution") {
       const commandText = String(event.command || event.summary || "").trim();
-      let key = event.itemId ? `item:${event.itemId}` : "";
+      let key = event.itemId ? `item:${event.roundNumber || 0}:${codexEventAgent(event)}:${event.itemId}` : "";
       if (!key) {
         const previous = normalized.at(-1);
-        if (previous?.kind === "command_execution" && previous.roundNumber === event.roundNumber && String(previous.command || previous.summary || "").trim() === commandText) {
+        if (previous?.kind === "command_execution" && previous.roundNumber === event.roundNumber && codexEventAgent(previous) === codexEventAgent(event) && String(previous.command || previous.summary || "").trim() === commandText) {
           key = previous._commandKey;
         } else {
           key = `legacy:${event.roundNumber || 0}:${event.sequence || event.at || normalized.length}:${commandText}`;
@@ -206,6 +230,7 @@ export function normalizeCodexEvents(events) {
     const same = previous
       && previous.kind !== "command_execution"
       && previous.roundNumber === event.roundNumber
+      && codexEventAgent(previous) === codexEventAgent(event)
       && previous.kind === event.kind
       && previous.status === event.status
       && String(previous.summary || "") === String(event.summary || "")
@@ -226,9 +251,6 @@ export function codexEventStateKey(taskId, event, index) {
   return `${taskId}:${sequence}`;
 }
 
-export function codexEventDefaultExpanded(event) {
-  if (["agent_message", "error", "stream_error", "round.failed"].includes(event.kind)) return true;
-  if (event.kind === "warning") return true;
-  if (event.kind === "stdout" && String(event.summary || "").length < 360) return true;
+export function codexEventDefaultExpanded() {
   return false;
 }

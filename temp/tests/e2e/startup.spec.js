@@ -164,6 +164,12 @@ test("Codex 会话树选择标记、弹窗关闭与 Toast 顶层均可交互", a
   await expect(taskPage).toBeVisible();
   await expect(page.locator(".codex-task-page-header")).toBeHidden();
   await expect(page.locator("body")).toHaveClass(/codex-task-open/);
+  await expect(page.locator(".codex-event").first()).toHaveClass(/is-collapsed/);
+  await expect(page.locator(".codex-event").first().locator(".transcript-agent")).toHaveCount(0);
+  await expect(page.locator(".codex-event").first().locator(".codex-event-toggle")).toHaveAttribute("aria-label", /^用户输入：/);
+  await page.locator(".codex-event").first().locator(".codex-event-toggle").click();
+  await expect(page.locator(".codex-event").first()).toHaveClass(/is-expanded/);
+  await expect(page.locator(".codex-event").first().locator(".codex-event-full")).toBeVisible();
   await expect(page.locator("#app-sidebar")).toBeVisible();
   await expect(page.locator("#exercise-view")).toHaveCSS("visibility", "hidden");
   const sessionControls = await page.locator(".codex-session-controls").evaluate((node) => {
@@ -248,7 +254,8 @@ test("Codex 警告分级、Side 请求正文与 SSE 增量更新保持正确", a
 
   const warning = page.locator(".codex-event.warning", { hasText: warningText });
   await expect(warning).toHaveCount(1);
-  await expect(warning.locator(".codex-event-label")).toHaveText("警告");
+  await expect(warning.locator(".codex-event-toggle")).toHaveAttribute("aria-label", /^警告：/);
+  await expect(warning.locator(".transcript-agent")).toHaveCount(0);
   await expect(page.locator(".codex-event.error", { hasText: warningText })).toHaveCount(0);
 
   await page.locator("#codex-task-message").fill("仅输出 123");
@@ -440,35 +447,43 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator("#open-model-routing").click();
   const routingPage = page.locator("#model-routing-page");
   await expect(routingPage).toBeVisible();
-  await expect(page.locator(".model-routing-page-header")).toBeHidden();
+  await expect(page.locator(".model-routing-page-header")).toBeVisible();
   await expect(page.locator("dialog#model-routing-dialog")).toHaveCount(0);
-  await expect(page.locator(".model-provider-item")).toHaveCount(1);
-
-  const rows = page.locator(".model-provider-item");
-  await rows.nth(0).locator(".provider-name").fill("Provider A");
-  await rows.nth(0).locator(".provider-base-url").fill("https://a.example/v1");
-  await rows.nth(0).locator(".provider-model").fill("model-a");
-  await rows.nth(0).locator(".provider-protocol").selectOption("anthropic");
-  await rows.nth(0).locator(".provider-test").click();
-  await expect(rows.nth(0).locator(".provider-test-result")).toContainText("连接成功");
-  await expect(rows.nth(0).locator(".provider-test-result")).toContainText("42ms");
-  await rows.nth(0).locator(".provider-active").check();
-  await expect(rows.nth(0)).toHaveClass(/is-active-provider/);
+  await expect(page.locator(".model-provider-card")).toHaveCount(0);
+  await page.locator("#add-model-provider").click();
+  const sheet = page.locator("#model-provider-sheet");
+  await expect(sheet).toBeVisible();
+  await page.locator("#model-sheet-name").fill("Provider A");
+  await page.locator("#model-sheet-base-url").fill("https://a.example/v1");
+  await page.locator("#model-sheet-model").fill("model-a");
+  await page.locator("#model-sheet-protocol").selectOption("anthropic");
+  await page.locator("#model-sheet-test").click();
+  await expect(page.locator("#model-sheet-test-result")).toContainText("连接成功");
+  await expect(page.locator("#model-sheet-test-result")).toContainText("42ms");
+  await page.locator("#model-sheet-save").click();
+  await expect(sheet).toBeHidden();
+  await expect(page.locator(".model-provider-card")).toHaveCount(1);
+  await expect(page.locator(".model-provider-card").first()).toHaveClass(/is-active-provider/);
   await expect(page.locator("#model-active-provider-name")).toHaveText("Provider A");
-  await page.locator(".model-pool-switch").click();
-  await expect(page.locator("#model-pool-state")).toHaveText("已关闭");
-  await page.locator(".model-pool-switch").click();
 
   await page.locator("#add-model-provider").click();
-  await expect(rows).toHaveCount(2);
-  await rows.nth(1).locator(".provider-name").fill("Provider B");
-  await rows.nth(1).locator(".provider-base-url").fill("https://b.example/v1");
-  await rows.nth(1).locator(".provider-model").fill("model-b");
-  await rows.nth(1).locator(".provider-protocol").selectOption("openai-responses");
-  await rows.nth(1).locator(".provider-pool").uncheck();
-  await rows.nth(1).locator(".provider-enabled").uncheck();
+  await page.locator("#model-sheet-name").fill("Provider B");
+  await page.locator("#model-sheet-base-url").fill("https://b.example/v1");
+  await page.locator("#model-sheet-model").fill("model-b");
+  await page.locator("#model-sheet-protocol").selectOption("openai-responses");
+  await page.locator("#model-sheet-pool").uncheck();
+  await page.locator("#model-sheet-enabled").uncheck();
+  await page.locator("#model-sheet-save").click();
+  await expect(page.locator(".model-provider-card")).toHaveCount(2);
   await expect(page.locator("#model-active-provider-count")).toHaveText("1");
   await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
+
+  await page.locator("#open-model-pool").click();
+  await expect(page.locator("#model-pool-sheet")).toBeVisible();
+  await page.locator("#model-pool-enabled-sheet").uncheck();
+  await expect(page.locator("#model-pool-state")).toHaveText("已关闭");
+  await page.locator("#model-pool-enabled-sheet").check();
+  await page.locator("#close-model-pool-sheet").click();
 
   await page.locator('[data-model-tab="routing"]').click();
   await expect(page.locator('[data-model-panel="providers"]')).toBeHidden();
@@ -477,10 +492,12 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator("#model-retry-delays").fill("1,5,10,10,15");
   await page.locator("#model-recovery-interval").fill("60");
   await expect(page.locator("#codex-auto-compact-limit")).toHaveValue("500000");
-  await page.locator("#save-model-routing").click();
-  const activeProviderId = await rows.nth(0).getAttribute("data-provider-id");
+  await page.locator("#open-model-pool").click();
+  await page.locator("#save-model-pool").click();
+  const activeProviderId = await page.locator(".model-provider-card").first().getAttribute("data-provider-id");
 
-  await expect.poll(() => requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body).toMatchObject({
+  const configPuts = () => requests.filter((request) => request.method === "PUT" && request.path === "/api/config");
+  await expect.poll(() => configPuts().at(-1)?.body).toMatchObject({
     modelActiveProviderId: activeProviderId,
     modelPoolEnabled: true,
     modelRoutingStrategy: "failover",
@@ -488,11 +505,36 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
     modelRecoveryInterval: 60,
     codexAutoCompactTokenLimit: 500000,
   });
-  const saved = requests.find((request) => request.method === "PUT" && request.path === "/api/config")?.body;
+  const saved = configPuts().at(-1)?.body;
   expect(saved.modelProviders).toHaveLength(2);
   expect(saved.modelProviders[0]).toMatchObject({ name: "Provider A", protocol: "anthropic", enabled: true, poolExclude: false });
   expect(saved.modelProviders[1]).toMatchObject({ name: "Provider B", protocol: "openai-responses", enabled: false, poolExclude: true });
   await expect(page.locator("#model-routing-status")).toContainText("已保存");
+  await page.locator("#model-recovery-interval").fill("90");
+  await expect(page.locator("#save-model-routing")).toBeVisible();
+  await page.locator("#save-model-routing").click();
+  await expect.poll(() => configPuts().at(-1)?.body.modelRecoveryInterval).toBe(90);
+
+  const routingGeometry = await page.evaluate(() => {
+    const header = document.querySelector(".model-routing-page-header").getBoundingClientRect();
+    const copy = document.querySelector(".model-routing-header-copy").getBoundingClientRect();
+    const actions = document.querySelector(".model-routing-header-actions").getBoundingClientRect();
+    const shell = document.querySelector(".model-routing-shell").getBoundingClientRect();
+    const workspace = document.querySelector("#exercise-view").getBoundingClientRect();
+    return {
+      leftDelta: Math.abs(copy.left - shell.left),
+      rightDelta: Math.abs(actions.right - shell.right),
+      trackWidthDelta: Math.abs(shell.width - workspace.width),
+      overflow: document.documentElement.scrollWidth - window.innerWidth,
+      headerWidth: header.width,
+    };
+  });
+  expect(routingGeometry.leftDelta).toBeLessThanOrEqual(1);
+  expect(routingGeometry.rightDelta).toBeLessThanOrEqual(1);
+  expect(routingGeometry.trackWidthDelta).toBeLessThanOrEqual(1);
+  expect(routingGeometry.overflow).toBeLessThanOrEqual(1);
+  expect(routingGeometry.headerWidth).toBeGreaterThan(1000);
+
   await page.locator("#show-exercise-view").click();
   await expect(routingPage).toBeHidden();
 });

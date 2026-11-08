@@ -1,4 +1,6 @@
 import {
+  codexAgentLabel,
+  codexEventAgent,
   codexEventDefaultExpanded,
   codexEventPresentation,
   codexEventStateKey,
@@ -10,9 +12,8 @@ import {
   codexTaskFullTime,
   codexTaskLogTime,
   codexTaskTime,
-  codexUsageSummary,
   normalizeCodexEvents,
-} from "./codex-presenters.js?v=20261104-archive1";
+} from "./codex-presenters.js?v=20261109-brtex1";
 import { formatBytes, formatDuration, formatNumber } from "./formatters.js?v=20261104-archive1";
 import { createElement, icon, refreshIcons } from "./rich-text.js?v=20261104-archive1";
 
@@ -67,58 +68,70 @@ export function createCodexSessionView({
     return `${result}${exit} · ${duration}`;
   }
 
-  function renderEventCard(taskId, event, index) {
+  function renderEventRow(taskId, event, index, showAgent) {
     const presentation = codexEventPresentation(event);
     const key = codexEventStateKey(taskId, event, index);
-    const expanded = eventExpanded(key, event);
-    const card = createElement("article", `codex-event ${presentation.tone}${expanded ? " is-expanded" : " is-collapsed"}`);
-    const toggle = createElement("button", "codex-event-toggle");
+    let expanded = eventExpanded(key, event);
+    const agent = codexEventAgent(event);
+    const card = createElement(
+      "article",
+      `codex-event transcript-row ${presentation.tone}${expanded ? " is-expanded" : " is-collapsed"}`,
+    );
+    card.dataset.agent = agent;
+    card.dataset.kind = event.kind || "event";
+    const toggle = createElement("button", "transcript-toggle codex-event-toggle");
     toggle.type = "button";
     toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
-    const header = createElement("span", "codex-event-header");
-    const time = createElement("time", "codex-event-time", codexTaskLogTime(event.at));
-    time.dateTime = event.at || "";
-    time.title = codexTaskFullTime(event.at);
-    const badges = createElement("span", "codex-event-badges");
-    if (Number(event.repeatCount || 1) > 1) {
-      badges.append(createElement("span", "codex-repeat-badge", `×${event.repeatCount}`));
+    toggle.setAttribute("aria-label", `${presentation.label}：${presentation.summary}`);
+    toggle.title = `${presentation.label} · ${codexTaskFullTime(event.at)}`;
+    const header = createElement("span", "transcript-row-header");
+    const chevron = createElement("span", "transcript-chevron");
+    chevron.append(icon(expanded ? "chevron-down" : "chevron-right"));
+    const isTool = event.kind === "command_execution";
+    const running = isTool && ["in_progress", "running", "started"].includes(event.status) && !event.finishedAt;
+    const failed = event.status === "failed" || (event.exitCode != null && Number(event.exitCode) !== 0);
+    const toolState = running ? "running" : failed ? "failed" : event.status === "completed" ? "completed" : "muted";
+    const kindIcon = createElement("span", `transcript-icon ${isTool ? toolState : presentation.tone}`);
+    kindIcon.append(icon(isTool ? "terminal" : presentation.tone === "error" ? "flag" : event.kind.startsWith("user.") ? "user" : "message-square"));
+    kindIcon.title = presentation.label;
+    header.append(chevron, kindIcon);
+    if (showAgent) {
+      const badge = createElement("span", "transcript-agent", codexAgentLabel(agent));
+      badge.title = agent;
+      header.append(badge);
     }
-    if (event.kind === "reasoning") {
-      badges.append(createElement("span", "codex-character-count", `${String(event.summary || "").length} 字`));
+    if (isTool) header.append(createElement("span", "transcript-tool-name", "Bash"));
+    const summary = createElement("span", "transcript-summary", presentation.summary);
+    if (event.kind === "reasoning") summary.append(createElement("small", "transcript-thinking", "· 含推理"));
+    header.append(summary);
+    if (isTool) {
+      const status = createElement("span", `transcript-status ${toolState}`, running ? "执行中…" : failed ? "✕ 失败" : event.status === "completed" ? "✓" : "已停止");
+      status.title = commandStatusText(event);
+      header.append(status);
     }
-    if (event.kind === "command_execution") {
-      badges.append(createElement("span", `codex-command-state ${event.status || "running"}`, commandStatusText(event)));
-    }
-    header.append(
-      createElement("span", "codex-event-label", presentation.label),
-      badges,
-      time,
-      icon(expanded ? "chevron-up" : "chevron-down"),
-    );
-    toggle.append(header, createElement("span", "codex-event-summary", presentation.summary));
+    toggle.append(header);
     toggle.addEventListener("click", () => {
-      setEventExpanded(key, !expanded);
-      const selected = state.codexTasks.find((task) => task.id === taskId);
-      onRefreshDetail(selected || null);
+      expanded = !expanded;
+      setEventExpanded(key, expanded);
+      toggle.setAttribute("aria-expanded", String(expanded));
+      card.classList.toggle("is-expanded", expanded);
+      card.classList.toggle("is-collapsed", !expanded);
+      full.hidden = !expanded;
+      chevron.replaceChildren(icon(expanded ? "chevron-down" : "chevron-right"));
+      refreshIcons();
     });
     card.append(toggle);
-    const full = createElement("div", "codex-event-full");
+    const full = createElement("pre", "transcript-detail codex-event-full");
     full.hidden = !expanded;
     if (event.kind === "command_execution") {
-      full.append(
-        createElement("p", "codex-event-section-label", "完整命令"),
-        createElement("pre", "codex-command-full", String(event.command || event.summary || "")),
-      );
-      if (event.output) {
-        full.append(
-          createElement("p", "codex-event-section-label", "命令输出"),
-          createElement("pre", "codex-command-output", event.output),
-        );
+      full.textContent = `【命令】\n${event.command || event.summary || "（空）"}`;
+      if (!running && (event.output || event.status === "completed" || failed)) {
+        full.textContent += `\n\n【输出 ${failed ? "✕" : "✓"}】\n${event.output || "（空）"}`;
       }
     } else {
-      full.append(createElement("pre", "codex-event-content", String(event.summary || presentation.summary || "")));
+      full.textContent = `【${event.kind === "reasoning" ? "推理" : "说明"}】\n${event.summary || presentation.summary || ""}`;
       if (event.output && event.output !== event.summary) {
-        full.append(createElement("pre", "codex-command-output", event.output));
+        full.textContent += `\n\n${event.output}`;
       }
     }
     card.append(full);
@@ -167,39 +180,30 @@ export function createCodexSessionView({
       return;
     }
     const fragment = document.createDocumentFragment();
+    const transcript = createElement("div", "codex-transcript-list brtex-transcript");
+    const showAgent = new Set(rows.map(codexEventAgent)).size > 1;
     roundData(rows, task).forEach((round) => {
       const roundKey = `${task.id}:${round.number}`;
       const collapsed = state.codexCollapsedRounds.has(roundKey);
-      const section = createElement("section", `codex-round${collapsed ? " is-collapsed" : ""}`);
+      const section = createElement("section", `codex-round transcript-round${collapsed ? " is-collapsed" : ""}`);
       section.dataset.round = String(round.number);
-      const heading = createElement("button", "codex-round-heading");
+      const heading = createElement("button", "transcript-round-heading");
       heading.type = "button";
       heading.setAttribute("aria-expanded", collapsed ? "false" : "true");
-      const main = createElement("span", "codex-round-main");
-      main.append(
-        icon(collapsed ? "chevron-right" : "chevron-down"),
-        createElement("strong", "", round.number ? `第 ${round.number} 轮` : "会话事件"),
-        createElement("span", `codex-round-status ${codexStatusClass(round.status)}`, codexStatusLabel(round.status)),
-      );
-      const metrics = createElement("span", "codex-round-metrics");
-      metrics.append(
-        createElement("span", "", codexSummary(round.input, 72)),
-        createElement("span", "", `${codexTaskLogTime(round.startedAt)} → ${round.finishedAt ? codexTaskLogTime(round.finishedAt) : "进行中"}`),
-        createElement("span", "", round.startedAt ? codexTaskDuration(round.startedAt, round.finishedAt) : "耗时未知"),
-        createElement("span", "", codexUsageSummary(round.usage)),
-      );
-      heading.append(main, metrics);
+      heading.textContent = round.number ? `第 ${round.number} 轮` : "会话事件";
+      heading.title = `${codexStatusLabel(round.status)} · ${codexTaskLogTime(round.startedAt)}`;
       heading.addEventListener("click", () => {
         if (collapsed) state.codexCollapsedRounds.delete(roundKey);
         else state.codexCollapsedRounds.add(roundKey);
         onRefreshDetail(task);
       });
-      const body = createElement("div", "codex-round-events");
+      const body = createElement("div", "transcript-round-events");
       body.hidden = collapsed;
-      round.rows.forEach((event, index) => body.append(renderEventCard(task.id, event, index)));
+      round.rows.forEach((event, index) => body.append(renderEventRow(task.id, event, index, showAgent)));
       section.append(heading, body);
-      fragment.append(section);
+      transcript.append(section);
     });
+    fragment.append(transcript);
     els.codexTaskEvents.replaceChildren(fragment);
   }
 

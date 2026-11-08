@@ -5,14 +5,14 @@ import {
   codexTaskTime,
   isCodexTerminal,
   mergeCodexEventLists,
-} from "./modules/codex-presenters.js?v=20261104-archive1";
-import { createCodexSessionView } from "./modules/codex-session-view.js?v=20261104-archive1";
+} from "./modules/codex-presenters.js?v=20261109-brtex1";
+import { createCodexSessionView } from "./modules/codex-session-view.js?v=20261109-brtex1";
 import { createCodexSessionController } from "./modules/codex-session-controller.js?v=20261104-archive1";
 import { filterAttachmentExercise } from "./modules/attachment-model.js?v=20261104-archive1";
 import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261104-archive1";
 import { createApiClient } from "./modules/api.js?v=20261104-archive1";
 import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261104-archive1";
-import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261104-archive1";
+import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261109-brtex1";
 import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261104-archive1";
 import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261104-archive1";
 import { createElement, icon, refreshIcons, renderRichText as renderSafeRichText } from "./modules/rich-text.js?v=20261104-archive1";
@@ -168,11 +168,37 @@ import {
     modelRecoverySummary: $("model-recovery-summary"),
     modelProviderList: $("model-provider-list"),
     addModelProvider: $("add-model-provider"),
+    openModelPool: $("open-model-pool"),
+    modelPoolHeaderBadge: $("model-pool-header-badge"),
     modelRetryDelays: $("model-retry-delays"),
     modelRecoveryInterval: $("model-recovery-interval"),
     codexAutoCompactTokenLimit: $("codex-auto-compact-limit"),
     modelRoutingStatus: $("model-routing-status"),
     saveModelRouting: $("save-model-routing"),
+    modelProviderSheet: $("model-provider-sheet"),
+    modelProviderSheetTitle: $("model-provider-sheet-title"),
+    modelProviderSheetDescription: $("model-provider-sheet-description"),
+    closeModelProviderSheet: $("close-model-provider-sheet"),
+    modelSheetName: $("model-sheet-name"),
+    modelSheetProtocol: $("model-sheet-protocol"),
+    modelSheetBaseUrl: $("model-sheet-base-url"),
+    modelSheetModel: $("model-sheet-model"),
+    modelSheetFetchModels: $("model-sheet-fetch-models"),
+    modelSheetModels: $("model-sheet-models"),
+    modelSheetApiKey: $("model-sheet-api-key"),
+    modelSheetEnabled: $("model-sheet-enabled"),
+    modelSheetPool: $("model-sheet-pool"),
+    modelSheetTestResult: $("model-sheet-test-result"),
+    modelSheetTest: $("model-sheet-test"),
+    modelSheetDelete: $("model-sheet-delete"),
+    modelSheetSave: $("model-sheet-save"),
+    modelPoolSheet: $("model-pool-sheet"),
+    closeModelPoolSheet: $("close-model-pool-sheet"),
+    modelPoolEnabledSheet: $("model-pool-enabled-sheet"),
+    modelPoolParticipantCountSheet: $("model-pool-participant-count-sheet"),
+    modelPoolChain: $("model-pool-chain"),
+    modelPoolSheetStatus: $("model-pool-sheet-status"),
+    saveModelPool: $("save-model-pool"),
     openToolManager: $("open-tool-manager"),
     toolManagerDialog: $("tool-manager-dialog"),
     environmentStatusItems: $("environment-status-items"),
@@ -775,6 +801,7 @@ import {
   }
 
   function closeModelRoutingPage() {
+    modelRoutingController?.stopPolling?.();
     els.modelRoutingPage.hidden = true;
     document.body.classList.remove("model-routing-open");
     if (!document.querySelector("dialog[data-page-dialog][open]") && els.codexTaskPage.hidden) {
@@ -4198,7 +4225,7 @@ import {
   }
 
   function bindModelRoutingEvents() {
-    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "model-pool-enabled", "add-model-provider", "model-retry-delays", "model-recovery-interval", "codex-auto-compact-limit", "model-routing-status", "save-model-routing"], () => {
+    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "model-pool-enabled", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-retry-delays", "model-recovery-interval", "codex-auto-compact-limit", "model-routing-status", "save-model-routing"], () => {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);
