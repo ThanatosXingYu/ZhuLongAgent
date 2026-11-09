@@ -12,7 +12,7 @@ import { filterAttachmentExercise } from "./modules/attachment-model.js?v=202611
 import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261104-archive1";
 import { createApiClient } from "./modules/api.js?v=20261104-archive1";
 import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261104-archive1";
-import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261110-models1";
+import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261110-models2";
 import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261104-archive1";
 import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261104-archive1";
 import { createElement, icon, refreshIcons, renderRichText as renderSafeRichText } from "./modules/rich-text.js?v=20261104-archive1";
@@ -4249,7 +4249,7 @@ import {
   }
 
   function bindModelRoutingEvents() {
-    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-routing-status", "save-model-routing"], () => {
+    bindModuleOnce("模型配置", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-routing-status", "save-model-routing"], () => {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);
@@ -4372,7 +4372,7 @@ import {
       bindSettingsEvents();
       updateCaptchaRotation();
     });
-    await runInitModule("模型路由", async () => bindModelRoutingEvents());
+    await runInitModule("模型配置", async () => bindModelRoutingEvents());
     await runInitModule("工具管理", async () => bindToolEvents());
     await runInitModule("附件", async () => bindAttachmentEvents());
     await runInitModule("Codex", async () => bindCodexEvents());

@@ -476,6 +476,8 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
   await page.locator("#model-sheet-save").click();
   await expect(page.locator(".model-provider-card")).toHaveCount(2);
   await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
+  await expect(page.locator(".model-provider-card").first()).toHaveClass(/is-active-provider/);
+  await expect(page.locator(".model-provider-card").nth(1)).not.toHaveClass(/is-active-provider/);
 
   const profilePosts = () => requests.filter((request) => request.method === "POST" && request.path === "/api/llm/profiles");
   await expect.poll(() => profilePosts().length).toBe(2);
@@ -487,6 +489,14 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
   await secondCard.locator("button", { hasText: "设为激活" }).click();
   await expect.poll(() => requests.some((request) => request.path === "/api/llm/profiles/active" && request.method === "POST")).toBe(true);
   await expect(secondCard).toHaveClass(/is-active-provider/);
+  await expect(page.locator(".model-provider-card").first()).not.toHaveClass(/is-active-provider/);
+
+  await page.locator(".model-provider-card").first().click();
+  await expect(page.locator("#model-provider-sheet")).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#model-sheet-delete").click();
+  await expect(page.locator(".model-provider-card")).toHaveCount(1);
+  await expect.poll(() => requests.some((request) => request.method === "DELETE" && request.path === "/api/llm/profiles/provider-1")).toBe(true);
 
   await page.locator("#open-model-pool").click();
   await expect(page.locator("#model-pool-sheet")).toBeVisible();

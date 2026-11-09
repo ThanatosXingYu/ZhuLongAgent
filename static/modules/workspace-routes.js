@@ -4,7 +4,7 @@ export const SIDEBAR_VIEW_TITLES = Object.freeze({
   "settings-dialog": "平台与设置",
   "attachment-manager-dialog": "附件管理",
   "tool-manager-dialog": "CTF 工具",
-  "model-routing-page": "模型路由",
+  "model-routing-page": "模型配置",
   "codex-task-page": "Codex 会话",
   "codex-archive-page": "归档会话",
 });
