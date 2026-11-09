@@ -43,7 +43,14 @@ class AttachmentProtocol(Protocol):
 
 
 class ModelProtocol(Protocol):
-    def complete(self, model: str, messages: list[Message], tools: list[Tool]) -> Message: ...
+    def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        tools: list[Tool],
+        *,
+        session_id: str = "",
+    ) -> Message: ...
 
     def enabled(self) -> bool: ...
 
@@ -170,6 +177,14 @@ class SolverService:
             "strategy": "round-robin",
             "providers": [],
         }
+
+    def reset_model_pool(self, provider_id: str = "") -> dict[str, Any]:
+        reset = getattr(self.model, "reset", None)
+        if callable(reset):
+            result = reset(provider_id)
+            if isinstance(result, dict):
+                return result
+        return self.status()
 
     def prompt(self, exercise_id: int) -> PromptResult:
         data = self._load_exercise(exercise_id)

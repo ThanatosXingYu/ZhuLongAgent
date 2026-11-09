@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from internal.config import Config
-from internal.model_router import ModelRouter
+from internal.model_router import ModelRouter, set_bound_profile_id
 from internal.openai_client import Message, ModelCallError
 
 
@@ -21,7 +21,12 @@ class FakeClient:
         self.endpoint = f"{base_url}/{protocol}"
 
     def complete(
-        self, _model: str, _messages: list[Message], _tools: list[Any] | None = None
+        self,
+        _model: str,
+        _messages: list[Message],
+        _tools: list[Any] | None = None,
+        *,
+        session_id: str = "",
     ) -> Message:
         self.calls += 1
         if isinstance(self.result, Exception):
@@ -74,7 +79,7 @@ def test_model_router_round_robin_keeps_active_first_and_rotates_fallbacks() -> 
 
     assert first.content == "a"
     assert second.content == "b"
-    assert [client.calls for client in clients] == [2, 1]
+    assert [client.calls for client in clients] == [4, 1]
 
 
 def test_model_router_failover_retries_then_switches_provider() -> None:
@@ -90,8 +95,9 @@ def test_model_router_failover_retries_then_switches_provider() -> None:
     assert result.content == "ok"
     assert failed.calls == 3
     assert healthy.calls == 1
-    assert sleeps == [1.0, 2.0, 2.0]
-    assert router._providers[0].unavailable_until > 0
+    assert sleeps == [1.0, 2.0]
+    assert router._providers[0].unavailable_until == 0
+    assert router._providers[0].fails == 1
 
 
 def test_model_router_recovers_provider_after_recovery_window() -> None:
@@ -103,13 +109,16 @@ def test_model_router_recovers_provider_after_recovery_window() -> None:
     router._providers[1].client = healthy  # type: ignore[assignment]
 
     assert router.complete("auto", [Message("user", "first")]).content == "healthy"
-    assert router._providers[0].unavailable_until == 60.0
+    assert router._providers[0].fails == 1
     assert router.complete("auto", [Message("user", "second")]).content == "healthy"
-    now[0] = 61.0
+    assert router._providers[0].fails == 2
+    assert router.complete("auto", [Message("user", "third")]).content == "healthy"
+    assert router._providers[0].unavailable_until == 30.0
+    now[0] = 31.0
     failed.result = "recovered"
 
     assert router.complete("auto", [Message("user", "after recovery")]).content == "recovered"
-    assert failed.calls == 2
+    assert failed.calls == 10
 
 
 def test_model_router_does_not_retry_request_level_failure() -> None:
@@ -119,11 +128,11 @@ def test_model_router_does_not_retry_request_level_failure() -> None:
     router._providers[0].client = rejected  # type: ignore[assignment]
     router._providers[1].client = healthy  # type: ignore[assignment]
 
-    result = router.complete("auto", [Message("user", "solve")])
+    with pytest.raises(ModelCallError, match="bad request"):
+        router.complete("auto", [Message("user", "solve")])
 
-    assert result.content == "ok"
     assert rejected.calls == 1
-    assert healthy.calls == 1
+    assert healthy.calls == 0
     assert router._providers[0].unavailable_until == 0
 
 
@@ -136,7 +145,7 @@ def test_model_router_restarts_retry_delays_for_each_provider() -> None:
     with pytest.raises(RuntimeError, match="所有模型提供商均失败"):
         router.complete("auto", [Message("user", "solve")])
 
-    assert sleeps == [1.0, 2.0, 2.0, 1.0, 2.0]
+    assert sleeps == [1.0, 2.0, 1.0, 2.0]
 
 
 def test_model_router_pool_disabled_uses_only_active_provider() -> None:
@@ -163,3 +172,47 @@ def test_model_router_skips_provider_excluded_from_pool() -> None:
         router.complete("auto", [Message("user", "solve")])
 
     assert fallback.calls == 0
+
+
+def test_bound_profile_uses_fallback_only_when_enabled() -> None:
+    config = _config("failover")
+    router = ModelRouter(config, sleep=lambda _seconds: None)
+    bound = FakeClient(ModelCallError("unauthorized", status=401, retryable=False))
+    fallback = FakeClient("fallback")
+    router._providers[0].client = bound  # type: ignore[assignment]
+    router._providers[1].client = fallback  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="所有模型提供商均失败"):
+        router.complete(set_bound_profile_id("auto", "a"), [Message("user", "one")])
+
+    assert bound.calls == 1
+    assert fallback.calls == 0
+
+    enabled = replace(config, model_pool_bind_fallback=True)
+    router = ModelRouter(enabled, sleep=lambda _seconds: None)
+    bound = FakeClient(ModelCallError("unauthorized", status=401, retryable=False))
+    fallback = FakeClient("fallback")
+    router._providers[0].client = bound  # type: ignore[assignment]
+    router._providers[1].client = fallback  # type: ignore[assignment]
+
+    assert router.complete(
+        set_bound_profile_id("auto", "a"), [Message("user", "two")]
+    ).content == "fallback"
+    assert bound.calls == 1
+    assert fallback.calls == 1
+
+
+def test_hard_failure_trips_breaker_immediately_and_reset_restores_it() -> None:
+    router = ModelRouter(_config("failover"), sleep=lambda _seconds: None)
+    hard = FakeClient(ModelCallError("forbidden", status=403, retryable=False))
+    fallback = FakeClient("fallback")
+    router._providers[0].client = hard  # type: ignore[assignment]
+    router._providers[1].client = fallback  # type: ignore[assignment]
+
+    assert router.complete("auto", [Message("user", "one")]).content == "fallback"
+    assert router._providers[0].unavailable_until > 0
+    assert router.status()["providers"][0]["state"] == "tripped"
+
+    router.reset("a")
+    assert router._providers[0].unavailable_until == 0
+    assert router.status()["providers"][0]["state"] == "ok"

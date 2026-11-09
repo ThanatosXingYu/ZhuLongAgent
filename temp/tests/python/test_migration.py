@@ -741,6 +741,87 @@ def test_model_routing_status_reaches_router_through_solver(tmp_path: Path) -> N
     assert client.post("/api/model-routing/status").status_code == 405
 
 
+def test_llm_profile_crud_activation_and_retry_policy(tmp_path: Path) -> None:
+    store = RuntimeConfigStore(Config(), tmp_path / ".runtime-config.json")
+    app = create_app(Source(), config_store=store)
+    with TestClient(app) as client:
+        created = client.post(
+            "/api/llm/profiles",
+            json={
+                "name": "主模型",
+                "baseUrl": "https://primary.example/v1",
+                "apiKey": "profile-secret-a",
+                "model": "model-a",
+                "protocol": "openai-chat",
+                "priority": 20,
+                "streaming": True,
+                "maxTokens": 4096,
+                "maxTokensField": "max_completion_tokens",
+                "thinkingType": "enabled",
+                "reasoningEffort": "high",
+                "retry": {
+                    "connect": {"attempts": 2, "interval_ms": 500},
+                    "empty": {"attempts": 1, "interval_ms": 0},
+                    "stream": {"attempts": 3, "interval_ms": 10000},
+                },
+            },
+        )
+        assert created.status_code == 200
+        assert "profile-secret-a" not in created.text
+        primary_id = created.json()["data"]["id"]
+
+        second = client.post(
+            "/api/llm/profiles",
+            json={
+                "name": "备用模型",
+                "baseUrl": "https://backup.example/v1",
+                "apiKey": "profile-secret-b",
+                "model": "model-b",
+                "protocol": "anthropic",
+                "priority": 10,
+                "poolExclude": True,
+            },
+        )
+        assert second.status_code == 200
+        backup_id = second.json()["data"]["id"]
+
+        profiles = client.get("/api/llm/profiles")
+        assert profiles.status_code == 200
+        assert len(profiles.json()["data"]["profiles"]) == 2
+        assert "profile-secret-a" not in profiles.text
+        assert "profile-secret-b" not in profiles.text
+
+        rejected = client.delete(f"/api/llm/profiles/{primary_id}")
+        assert rejected.status_code == 409
+        assert rejected.json()["error"]["code"] == "ACTIVE_MODEL_PROFILE_DELETE"
+
+        activated = client.post(
+            "/api/llm/profiles/active", json={"id": backup_id}
+        )
+        assert activated.status_code == 200
+        assert store.get().model_active_provider_id == backup_id
+
+        removed = client.delete(f"/api/llm/profiles/{primary_id}")
+        assert removed.status_code == 200
+        assert removed.json()["data"]["deleted"] == primary_id
+
+        retry = client.post(
+            "/api/llm/retry-policy",
+            json={
+                "connect": {"attempts": 1, "interval_ms": 100},
+                "empty": {"attempts": 2, "interval_ms": 0},
+                "stream": {"attempts": 4, "interval_ms": 5000},
+                "breaker": {"attempts": 2, "interval_ms": 90000},
+                "intent": {"attempts": 1, "interval_ms": 3000},
+            },
+        )
+        assert retry.status_code == 200
+        assert retry.json()["data"]["breaker"]["interval_ms"] == 90000
+        persisted = store.public()["modelRetryPolicy"]
+        assert persisted["stream"]["attempts"] == 4
+        assert persisted["intent"]["interval_ms"] == 3000
+
+
 def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:
     assert _listen_parts("127.0.0.1:8080") == ("127.0.0.1", 8080)
     assert _listen_parts(":8080") == ("0.0.0.0", 8080)

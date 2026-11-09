@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 import socket
+import ssl
 import time
 from dataclasses import dataclass, field
+from http.client import HTTPResponse
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import ProxyHandler, Request, build_opener, urlopen
 
 MAX_RESPONSE_BYTES = 4 * 1024 * 1024
 SUPPORTED_PROTOCOLS = frozenset({"openai-responses", "openai-chat", "anthropic"})
@@ -103,6 +105,12 @@ def test_model_connection(
     model: str,
     protocol: str = DEFAULT_PROTOCOL,
     timeout: float = 20.0,
+    *,
+    proxy: str = "",
+    thinking_type: str = "",
+    reasoning_effort: str = "",
+    streaming: bool = True,
+    session_header_key: str = "",
 ) -> dict[str, Any]:
     started = time.monotonic()
     client = OpenAIClient(
@@ -110,6 +118,11 @@ def test_model_connection(
         api_key,
         timeout=timeout,
         protocol=protocol,
+        proxy=proxy,
+        streaming=streaming,
+        thinking_type=thinking_type,
+        reasoning_effort=reasoning_effort,
+        session_header_key=session_header_key,
     )
     reply = client.complete(
         model,
@@ -219,11 +232,25 @@ class OpenAIClient:
         api_key: str = "",
         timeout: float = 120.0,
         protocol: str = DEFAULT_PROTOCOL,
+        proxy: str = "",
+        streaming: bool = True,
+        max_tokens: int = 0,
+        max_tokens_field: str = "",
+        thinking_type: str = "",
+        reasoning_effort: str = "",
+        session_header_key: str = "",
     ) -> None:
         self.endpoint = ""
         self.api_key = ""
         self.protocol = DEFAULT_PROTOCOL
         self.timeout = timeout
+        self.proxy = ""
+        self.streaming = streaming
+        self.max_tokens = max_tokens
+        self.max_tokens_field = max_tokens_field
+        self.thinking_type = thinking_type
+        self.reasoning_effort = reasoning_effort
+        self.session_header_key = session_header_key
         self.configure(base_url, api_key, protocol)
 
     def configure(
@@ -241,6 +268,20 @@ class OpenAIClient:
         }[self.protocol]
         self.endpoint = f"{base_url.rstrip('/')}{suffix}" if base_url.strip() else ""
 
+    def configure_profile(self, profile: Mapping[str, Any]) -> None:
+        self.configure(
+            str(profile.get("baseUrl", "") or ""),
+            str(profile.get("apiKey", "") or ""),
+            str(profile.get("protocol", "") or ""),
+        )
+        self.proxy = str(profile.get("proxy", "") or "").strip()
+        self.streaming = bool(profile.get("streaming", True))
+        self.max_tokens = int(profile.get("maxTokens", 0) or 0)
+        self.max_tokens_field = str(profile.get("maxTokensField", "") or "")
+        self.thinking_type = str(profile.get("thinkingType", "") or "")
+        self.reasoning_effort = str(profile.get("reasoningEffort", "") or "")
+        self.session_header_key = str(profile.get("sessionHeaderKey", "") or "")
+
     def enabled(self) -> bool:
         return bool(self.endpoint)
 
@@ -251,6 +292,7 @@ class OpenAIClient:
         tools: list[Tool] | None = None,
         *,
         tool_choice: str | None = None,
+        session_id: str = "",
     ) -> Message:
         if not self.enabled():
             raise RuntimeError("model endpoint is not configured")
@@ -261,11 +303,28 @@ class OpenAIClient:
                 messages,
                 selected_tools,
                 tool_choice=tool_choice,
+                max_tokens=self.max_tokens,
+                max_tokens_field=self.max_tokens_field,
+                thinking_type=self.thinking_type,
+                reasoning_effort=self.reasoning_effort,
             )
         elif self.protocol == "openai-responses":
-            payload = _responses_payload(model, messages, selected_tools)
+            payload = _responses_payload(
+                model,
+                messages,
+                selected_tools,
+                max_tokens=self.max_tokens,
+                reasoning_effort=self.reasoning_effort,
+            )
         else:
-            payload = _anthropic_payload(model, messages, selected_tools)
+            payload = _anthropic_payload(
+                model,
+                messages,
+                selected_tools,
+                max_tokens=self.max_tokens,
+                thinking_type=self.thinking_type,
+                reasoning_effort=self.reasoning_effort,
+            )
         request = Request(
             self.endpoint,
             data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
@@ -277,8 +336,13 @@ class OpenAIClient:
             },
         )
         _add_auth_headers(request, self.protocol, self.api_key)
+        if self.session_header_key and session_id:
+            request.add_header(
+                self.session_header_key,
+                session_id,
+            )
         try:
-            with urlopen(request, timeout=self.timeout) as response:  # noqa: S310 - endpoint is operator configuration.
+            with _open(request, timeout=self.timeout, proxy=self.proxy) as response:  # noqa: S310 - endpoint is operator configuration.
                 status = int(response.status)
                 data = response.read(MAX_RESPONSE_BYTES + 1)
         except HTTPError as error:
@@ -339,12 +403,83 @@ def _add_auth_headers(request: Request, protocol: str, api_key: str) -> None:
     request.add_header("Authorization", f"Bearer {key}")
 
 
+def _open(
+    request: Request,
+    *,
+    timeout: float,
+    proxy: str = "",
+) -> Any:
+    if not proxy:
+        return urlopen(request, timeout=timeout)
+    parsed = urlsplit(proxy)
+    if parsed.scheme in {"http", "https"}:
+        opener = build_opener(
+            ProxyHandler(
+                {
+                    "http": proxy,
+                    "https": proxy,
+                }
+            )
+        )
+        return opener.open(request, timeout=timeout)
+    if parsed.scheme in {"socks5", "socks5h"}:
+        try:
+            import socks  # type: ignore[import-not-found]
+        except ImportError as exc:
+            raise ModelCallError("当前环境缺少 SOCKS 代理支持") from exc
+        host = parsed.hostname or ""
+        port = parsed.port or 1080
+        username = parsed.username or ""
+        password = parsed.password or ""
+        proxy_type = socks.SOCKS5
+        sock = socks.socksocket()
+        sock.set_proxy(
+            proxy_type,
+            host,
+            port,
+            rdns=parsed.scheme == "socks5h",
+            username=username or None,
+            password=password or None,
+        )
+        sock.settimeout(timeout)
+        target = urlsplit(request.full_url)
+        tls = target.scheme == "https"
+        sock.connect(
+            (target.hostname or "", target.port or (443 if tls else 80))
+        )
+        if tls:
+            context = ssl.create_default_context()
+            wrapped = context.wrap_socket(sock, server_hostname=target.hostname)
+        else:
+            wrapped = sock
+        path = target.path or "/"
+        if target.query:
+            path += f"?{target.query}"
+        lines = [f"{request.get_method()} {path} HTTP/1.1"]
+        lines.extend(f"{key}: {value}" for key, value in request.header_items())
+        lines.append("Connection: close")
+        lines.append("")
+        lines.append("")
+        wrapped.sendall("\r\n".join(lines).encode("latin-1"))
+        data = request.data
+        if isinstance(data, bytes):
+            wrapped.sendall(data)
+        response = HTTPResponse(wrapped)
+        response.begin()
+        return response
+    raise ModelCallError("模型代理协议无效")
+
+
 def _chat_payload(
     model: str,
     messages: list[Message],
     tools: list[Tool],
     *,
     tool_choice: str | None = None,
+    max_tokens: int = 0,
+    max_tokens_field: str = "",
+    thinking_type: str = "",
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -353,11 +488,27 @@ def _chat_payload(
     if tools:
         payload["tools"] = [tool.to_dict() for tool in tools]
         payload["tool_choice"] = tool_choice or "auto"
+    if max_tokens > 0:
+        field = (
+            "max_completion_tokens"
+            if max_tokens_field == "max_completion_tokens"
+            else "max_tokens"
+        )
+        payload[field] = max_tokens
+    if thinking_type:
+        payload["thinking"] = {"type": thinking_type}
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
     return payload
 
 
 def _responses_payload(
-    model: str, messages: list[Message], tools: list[Tool]
+    model: str,
+    messages: list[Message],
+    tools: list[Tool],
+    *,
+    max_tokens: int = 0,
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     instructions = "\n\n".join(
         message.content
@@ -382,6 +533,10 @@ def _responses_payload(
             for tool in tools
         ]
         payload["tool_choice"] = "auto"
+    if max_tokens > 0:
+        payload["max_output_tokens"] = max_tokens
+    if reasoning_effort:
+        payload["reasoning"] = {"effort": reasoning_effort}
     return payload
 
 
@@ -414,7 +569,13 @@ def _responses_input(messages: list[Message]) -> list[dict[str, Any]]:
 
 
 def _anthropic_payload(
-    model: str, messages: list[Message], tools: list[Tool]
+    model: str,
+    messages: list[Message],
+    tools: list[Tool],
+    *,
+    max_tokens: int = 0,
+    thinking_type: str = "",
+    reasoning_effort: str = "",
 ) -> dict[str, Any]:
     system = "\n\n".join(
         message.content
@@ -423,7 +584,7 @@ def _anthropic_payload(
     )
     payload: dict[str, Any] = {
         "model": model,
-        "max_tokens": ANTHROPIC_MAX_TOKENS,
+        "max_tokens": max_tokens or ANTHROPIC_MAX_TOKENS,
         "messages": _anthropic_messages(messages),
     }
     if system:
@@ -437,6 +598,10 @@ def _anthropic_payload(
             }
             for tool in tools
         ]
+    if thinking_type in {"disabled", "enabled"}:
+        payload["thinking"] = {"type": thinking_type}
+    if reasoning_effort:
+        payload["output_config"] = {"effort": reasoning_effort}
     return payload
 
 

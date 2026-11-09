@@ -246,6 +246,35 @@ class ModelProviderPatch(BaseModel):
     protocol: Literal["openai-responses", "openai-chat", "anthropic"]
     enabled: bool = True
     pool_exclude: bool = Field(default=False, alias="poolExclude")
+    priority: int = Field(default=0, ge=-1_000_000, le=1_000_000)
+    proxy: str = Field(default="", max_length=2048)
+    rate_per_second: int = Field(default=0, alias="ratePerSecond", ge=0, le=100_000)
+    rate_per_minute: int = Field(default=0, alias="ratePerMinute", ge=0, le=1_000_000)
+    context_window_k: int = Field(default=0, alias="contextWindowK", ge=0, le=1_000_000)
+    thinking_type: Literal["", "disabled", "enabled"] = Field(
+        default="", alias="thinkingType"
+    )
+    reasoning_effort: Literal["", "low", "medium", "high", "xhigh", "max"] = Field(
+        default="", alias="reasoningEffort"
+    )
+    streaming: bool = True
+    max_tokens: int = Field(default=0, alias="maxTokens", ge=0, le=10_000_000)
+    max_tokens_field: Literal["", "max_tokens", "max_completion_tokens"] = Field(
+        default="", alias="maxTokensField"
+    )
+    session_header_key: str = Field(default="", alias="sessionHeaderKey", max_length=128)
+    retry: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_profile_options(self) -> "ModelProviderPatch":
+        if self.max_tokens_field and self.protocol != "openai-chat":
+            raise ValueError("maxTokensField is only valid for openai-chat")
+        if self.session_header_key and any(
+            character <= " " or character in {":", "(", ")", ","}
+            for character in self.session_header_key
+        ):
+            raise ValueError("sessionHeaderKey is invalid")
+        return self
 
 
 class RuntimeConfigPatch(BaseModel):
@@ -271,6 +300,9 @@ class RuntimeConfigPatch(BaseModel):
     model_pool_enabled: bool | None = Field(
         default=None, alias="modelPoolEnabled"
     )
+    model_pool_bind_fallback: bool | None = Field(
+        default=None, alias="modelPoolBindFallback"
+    )
     model_routing_strategy: Literal["round-robin", "failover"] | None = Field(
         default=None, alias="modelRoutingStrategy"
     )
@@ -279,6 +311,9 @@ class RuntimeConfigPatch(BaseModel):
     )
     model_recovery_interval: int | None = Field(
         default=None, alias="modelRecoveryInterval", ge=10, le=3600
+    )
+    model_retry_policy: dict[str, Any] | None = Field(
+        default=None, alias="modelRetryPolicy"
     )
     codex_base_url: str | None = Field(default=None, alias="codexBaseUrl")
     codex_api_key: str | None = Field(default=None, alias="codexApiKey")
@@ -328,6 +363,78 @@ class ModelTestRequest(BaseModel):
     protocol: Literal[
         "openai-responses", "openai-chat", "anthropic"
     ] = "openai-chat"
+    proxy: str = Field(default="", max_length=2048)
+    thinking_type: Literal["", "disabled", "enabled"] = Field(
+        default="", alias="thinkingType"
+    )
+    reasoning_effort: Literal["", "low", "medium", "high", "xhigh", "max"] = Field(
+        default="", alias="reasoningEffort"
+    )
+    streaming: bool = True
+    session_header_key: str = Field(default="", alias="sessionHeaderKey", max_length=128)
+
+
+class ModelProfileRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    id: str | None = Field(default=None, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    base_url: str = Field(alias="baseUrl", min_length=1, max_length=2048)
+    api_key: str | None = Field(default=None, alias="apiKey", max_length=4096)
+    model: str = Field(min_length=1, max_length=256)
+    protocol: Literal["openai-responses", "openai-chat", "anthropic"]
+    proxy: str = Field(default="", max_length=2048)
+    priority: int = Field(default=0, ge=-1_000_000, le=1_000_000)
+    pool_exclude: bool = Field(default=False, alias="poolExclude")
+    rate_per_second: int = Field(default=0, alias="ratePerSecond", ge=0, le=100_000)
+    rate_per_minute: int = Field(default=0, alias="ratePerMinute", ge=0, le=1_000_000)
+    context_window_k: int = Field(default=0, alias="contextWindowK", ge=0, le=1_000_000)
+    thinking_type: Literal["", "disabled", "enabled"] = Field(
+        default="", alias="thinkingType"
+    )
+    reasoning_effort: Literal["", "low", "medium", "high", "xhigh", "max"] = Field(
+        default="", alias="reasoningEffort"
+    )
+    streaming: bool = True
+    max_tokens: int = Field(default=0, alias="maxTokens", ge=0, le=10_000_000)
+    max_tokens_field: Literal["", "max_tokens", "max_completion_tokens"] = Field(
+        default="", alias="maxTokensField"
+    )
+    session_header_key: str = Field(default="", alias="sessionHeaderKey", max_length=128)
+    retry: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> "ModelProfileRequest":
+        if self.max_tokens_field and self.protocol != "openai-chat":
+            raise ValueError("maxTokensField is only valid for openai-chat")
+        if self.session_header_key and any(
+            character <= " " or character in {":", "(", ")", ","}
+            for character in self.session_header_key
+        ):
+            raise ValueError("sessionHeaderKey is invalid")
+        return self
+
+
+class ModelProfileActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    id: str = Field(min_length=1, max_length=64)
+
+
+class ModelPoolResetRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    id: str = Field(default="", max_length=64)
+
+
+class ModelRetryPolicyRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, str_strip_whitespace=True
+    )
+    connect: dict[str, Any] = Field(default_factory=dict)
+    empty: dict[str, Any] = Field(default_factory=dict)
+    stream: dict[str, Any] = Field(default_factory=dict)
+    breaker: dict[str, Any] = Field(default_factory=dict)
+    intent: dict[str, Any] = Field(default_factory=dict)
 
 
 class CodexStartRequest(BaseModel):
@@ -878,6 +985,206 @@ def create_app(
             return _error_response(
                 500, "MODEL_ROUTING_STATUS_FAILED", "模型路由状态读取失败"
             )
+
+    @app.api_route(
+        "/api/llm/profiles",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def llm_profiles(request: Request) -> JSONResponse:
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        if request.method == "GET":
+            return _success_response(
+                {"profiles": config_store.public()["modelProviders"]}
+            )
+        if request.method != "POST":
+            return _method_error("GET, POST")
+        parsed, error = await _validated_request(request, ModelProfileRequest)
+        if error is not None:
+            return error
+        assert parsed is not None
+        try:
+            current = config_store.get()
+            providers = json.loads(current.model_providers_json or "[]")
+        except json.JSONDecodeError:
+            providers = []
+        existing = [
+            dict(item) for item in providers if isinstance(item, Mapping)
+        ]
+        profile_id = parsed.id or f"provider-{int(asyncio.get_running_loop().time() * 1000)}"
+        old = next(
+            (item for item in existing if str(item.get("id", "")) == profile_id),
+            None,
+        )
+        if parsed.id and old is None:
+            return _error_response(404, "MODEL_PROFILE_NOT_FOUND", "模型配置不存在")
+        api_key = parsed.api_key
+        if api_key is None and old is not None:
+            api_key = str(old.get("apiKey", "") or "")
+        provider = {
+            "id": profile_id,
+            "name": parsed.name,
+            "baseUrl": parsed.base_url,
+            "apiKey": api_key or "",
+            "model": parsed.model,
+            "protocol": parsed.protocol,
+            "enabled": True,
+            "poolExclude": parsed.pool_exclude,
+            "priority": parsed.priority,
+            "proxy": parsed.proxy,
+            "ratePerSecond": parsed.rate_per_second,
+            "ratePerMinute": parsed.rate_per_minute,
+            "contextWindowK": parsed.context_window_k,
+            "thinkingType": parsed.thinking_type,
+            "reasoningEffort": parsed.reasoning_effort,
+            "streaming": parsed.streaming,
+            "maxTokens": parsed.max_tokens,
+            "maxTokensField": parsed.max_tokens_field,
+            "sessionHeaderKey": parsed.session_header_key,
+            "retry": parsed.retry,
+        }
+        updated = [item for item in existing if str(item.get("id", "")) != profile_id]
+        updated.append(provider)
+        active_id = current.model_active_provider_id or profile_id
+        try:
+            await asyncio.to_thread(
+                config_store.update,
+                {
+                    "model_providers_json": json.dumps(
+                        updated, ensure_ascii=False, separators=(",", ":")
+                    ),
+                    "model_active_provider_id": active_id,
+                },
+            )
+        except ConfigError as exc:
+            return _error_response(400, "INVALID_CONFIG", str(exc))
+        return _success_response({"id": profile_id, "config": config_store.public()})
+
+    @app.api_route(
+        "/api/llm/profiles/active",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def llm_profile_active(request: Request) -> JSONResponse:
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        if request.method != "POST":
+            return _method_error("POST")
+        parsed, error = await _validated_request(request, ModelProfileActivateRequest)
+        if error is not None:
+            return error
+        assert parsed is not None
+        try:
+            await asyncio.to_thread(
+                config_store.update,
+                {"model_active_provider_id": parsed.id},
+            )
+        except ConfigError as exc:
+            return _error_response(400, "INVALID_CONFIG", str(exc))
+        return _success_response({"ok": True, "config": config_store.public()})
+
+    @app.api_route(
+        "/api/llm/profiles/{profile_id}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def llm_profile_delete(request: Request, profile_id: str) -> JSONResponse:
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        if request.method != "DELETE":
+            return _method_error("DELETE")
+        current = config_store.get()
+        if current.model_active_provider_id == profile_id:
+            return _error_response(
+                409,
+                "ACTIVE_MODEL_PROFILE_DELETE",
+                "当前激活的模型配置不能删除，请先激活其他配置",
+            )
+        try:
+            providers = json.loads(current.model_providers_json or "[]")
+        except json.JSONDecodeError:
+            providers = []
+        remaining = [
+            dict(item)
+            for item in providers
+            if isinstance(item, Mapping) and str(item.get("id", "")) != profile_id
+        ]
+        if len(remaining) == len(providers):
+            return _error_response(404, "MODEL_PROFILE_NOT_FOUND", "模型配置不存在")
+        try:
+            await asyncio.to_thread(
+                config_store.update,
+                {
+                    "model_providers_json": json.dumps(
+                        remaining, ensure_ascii=False, separators=(",", ":")
+                    )
+                },
+            )
+        except ConfigError as exc:
+            return _error_response(400, "INVALID_CONFIG", str(exc))
+        return _success_response({"deleted": profile_id})
+
+    @app.api_route(
+        "/api/llm/pool",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def llm_pool(request: Request) -> JSONResponse:
+        if request.method != "GET":
+            return _method_error("GET")
+        status = getattr(services.ai, "status", None)
+        if not callable(status):
+            return _success_response(
+                {"enabled": False, "bind_fallback": False, "chain": []}
+            )
+        try:
+            result = await asyncio.to_thread(status)
+        except Exception:
+            LOGGER.exception("LLM pool status failed")
+            return _error_response(500, "MODEL_POOL_STATUS_FAILED", "模型轮询状态读取失败")
+        return _success_response(_pool_response(result))
+
+    @app.api_route(
+        "/api/llm/pool/reset",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def llm_pool_reset(request: Request) -> JSONResponse:
+        if request.method != "POST":
+            return _method_error("POST")
+        parsed, error = await _validated_request(request, ModelPoolResetRequest)
+        if error is not None:
+            return error
+        assert parsed is not None
+        reset = getattr(services.ai, "reset_model_pool", None)
+        if not callable(reset):
+            return _success_response({"enabled": False, "bind_fallback": False, "chain": []})
+        try:
+            result = await asyncio.to_thread(reset, parsed.id)
+        except Exception:
+            LOGGER.exception("LLM pool reset failed")
+            return _error_response(500, "MODEL_POOL_RESET_FAILED", "模型轮询状态恢复失败")
+        return _success_response(_pool_response(result))
+
+    @app.api_route(
+        "/api/llm/retry-policy",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+    )
+    async def llm_retry_policy(request: Request) -> JSONResponse:
+        if config_store is None:
+            return _error_response(503, "CONFIG_UNAVAILABLE", "运行时配置服务未启用")
+        if request.method == "GET":
+            return _success_response(config_store.public()["modelRetryPolicy"])
+        if request.method != "POST":
+            return _method_error("GET, POST")
+        try:
+            parsed, error = await _validated_request(request, ModelRetryPolicyRequest)
+            if error is not None:
+                return error
+            assert parsed is not None
+            await asyncio.to_thread(
+                config_store.update,
+                {"model_retry_policy_json": json.dumps(parsed.model_dump(), separators=(",", ":"))},
+            )
+        except (ConfigError, ValidationError) as exc:
+            return _error_response(400, "INVALID_CONFIG", str(exc))
+        return _success_response(config_store.public()["modelRetryPolicy"])
 
     @app.api_route(
         "/api/platform/bind",
@@ -2361,10 +2668,15 @@ def _runtime_patch_values(
     values = patch.model_dump(exclude_unset=True)
     providers = values.pop("model_providers", None)
     delays = values.pop("model_retry_delays", None)
+    retry_policy = values.pop("model_retry_policy", None)
     if delays is not None:
         values["model_retry_delays"] = ",".join(
             str(int(delay) if float(delay).is_integer() else delay)
             for delay in delays
+        )
+    if retry_policy is not None:
+        values["model_retry_policy_json"] = json.dumps(
+            retry_policy, ensure_ascii=False, separators=(",", ":")
         )
     if providers is not None:
         try:
@@ -2411,6 +2723,32 @@ def _runtime_patch_values(
                     "protocol": protocol,
                     "enabled": bool(provider_data.get("enabled", True)),
                     "poolExclude": bool(provider_data.get("pool_exclude", False)),
+                    "priority": int(provider_data.get("priority", 0) or 0),
+                    "proxy": str(provider_data.get("proxy", "") or ""),
+                    "ratePerSecond": int(
+                        provider_data.get("rate_per_second", 0) or 0
+                    ),
+                    "ratePerMinute": int(
+                        provider_data.get("rate_per_minute", 0) or 0
+                    ),
+                    "contextWindowK": int(
+                        provider_data.get("context_window_k", 0) or 0
+                    ),
+                    "thinkingType": str(
+                        provider_data.get("thinking_type", "") or ""
+                    ),
+                    "reasoningEffort": str(
+                        provider_data.get("reasoning_effort", "") or ""
+                    ),
+                    "streaming": bool(provider_data.get("streaming", True)),
+                    "maxTokens": int(provider_data.get("max_tokens", 0) or 0),
+                    "maxTokensField": str(
+                        provider_data.get("max_tokens_field", "") or ""
+                    ),
+                    "sessionHeaderKey": str(
+                        provider_data.get("session_header_key", "") or ""
+                    ),
+                    "retry": provider_data.get("retry", {}),
                 }
             )
         values["model_providers_json"] = json.dumps(
@@ -2421,6 +2759,19 @@ def _runtime_patch_values(
 
 def _is_source_context_error(message: str) -> bool:
     return "s_source_id" in message
+
+
+def _pool_response(value: Any) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        return {"enabled": False, "bind_fallback": False, "chain": []}
+    providers = value.get("providers", [])
+    return {
+        "enabled": bool(value.get("poolEnabled", value.get("enabled", False))),
+        "bind_fallback": bool(
+            value.get("bindFallback", value.get("bind_fallback", False))
+        ),
+        "chain": list(providers) if isinstance(providers, list) else [],
+    }
 
 
 def _bind_match_with_recovery(

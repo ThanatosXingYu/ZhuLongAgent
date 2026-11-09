@@ -22,6 +22,7 @@ DEFAULT_CODEX_PROTOCOL = "openai-responses"
 MODEL_PROTOCOLS = frozenset({"openai-responses", "openai-chat", "anthropic"})
 DEFAULT_MODEL_RETRY_DELAYS = "1,5,10,10,15"
 DEFAULT_MODEL_RECOVERY_INTERVAL = 60
+DEFAULT_MODEL_RETRY_POLICY = "{}"
 DEFAULT_CODEX_MAX_CONCURRENCY = 10
 DEFAULT_CODEX_AUTO_COMPACT_TOKEN_LIMIT = 500_000
 DEFAULT_CODEX_CONTEXT_WINDOW = 872_000
@@ -57,10 +58,12 @@ class Config:
     model_protocol: str = DEFAULT_MODEL_PROTOCOL
     model_providers_json: str = "[]"
     model_active_provider_id: str = ""
-    model_pool_enabled: bool = True
-    model_routing_strategy: str = "round-robin"
+    model_pool_enabled: bool = False
+    model_pool_bind_fallback: bool = False
+    model_routing_strategy: str = "failover"
     model_retry_delays: str = DEFAULT_MODEL_RETRY_DELAYS
     model_recovery_interval: int = DEFAULT_MODEL_RECOVERY_INTERVAL
+    model_retry_policy_json: str = DEFAULT_MODEL_RETRY_POLICY
     codex_base_url: str = ""
     codex_api_key: str = ""
     codex_model: str = ""
@@ -141,6 +144,11 @@ class RuntimeConfigStore:
                     "model_pool_enabled",
                     current.model_pool_enabled,
                 ),
+                model_pool_bind_fallback=_bool_value(
+                    values,
+                    "model_pool_bind_fallback",
+                    current.model_pool_bind_fallback,
+                ),
                 model_routing_strategy=_value(
                     values, "model_routing_strategy", current.model_routing_strategy
                 ),
@@ -151,6 +159,11 @@ class RuntimeConfigStore:
                     values,
                     "model_recovery_interval",
                     current.model_recovery_interval,
+                ),
+                model_retry_policy_json=_value(
+                    values,
+                    "model_retry_policy_json",
+                    current.model_retry_policy_json,
                 ),
                 codex_base_url=_value(values, "codex_base_url", current.codex_base_url),
                 codex_api_key=_value(values, "codex_api_key", current.codex_api_key),
@@ -205,9 +218,13 @@ class RuntimeConfigStore:
             "modelProviders": _public_model_providers(config.model_providers_json),
             "modelActiveProviderId": config.model_active_provider_id,
             "modelPoolEnabled": config.model_pool_enabled,
+            "modelPoolBindFallback": config.model_pool_bind_fallback,
             "modelRoutingStrategy": config.model_routing_strategy,
             "modelRetryDelays": _parse_retry_delays(config.model_retry_delays),
             "modelRecoveryInterval": config.model_recovery_interval,
+            "modelRetryPolicy": _public_model_retry_policy(
+                config.model_retry_policy_json
+            ),
             "modelApiKeyConfigured": bool(config.model_api_key),
             "modelApiKeyMasked": _mask_secret(config.model_api_key),
             "codexBaseUrl": config.codex_base_url,
@@ -271,6 +288,11 @@ class RuntimeConfigStore:
                     "model_pool_enabled",
                     current.model_pool_enabled,
                 ),
+                model_pool_bind_fallback=_persisted_bool(
+                    raw,
+                    "model_pool_bind_fallback",
+                    current.model_pool_bind_fallback,
+                ),
                 model_routing_strategy=_persisted_value(
                     raw,
                     "model_routing_strategy",
@@ -283,6 +305,11 @@ class RuntimeConfigStore:
                     raw,
                     "model_recovery_interval",
                     current.model_recovery_interval,
+                ),
+                model_retry_policy_json=_persisted_value(
+                    raw,
+                    "model_retry_policy_json",
+                    current.model_retry_policy_json,
                 ),
                 codex_base_url=_persisted_value(
                     raw, "codex_base_url", current.codex_base_url
@@ -370,13 +397,14 @@ def validate_runtime_config(config: Config) -> None:
         raise ConfigError("model is required when baseurl is set")
     if config.model_protocol not in MODEL_PROTOCOLS:
         raise ConfigError("model_protocol is invalid")
-    if config.model_routing_strategy not in {"round-robin", "failover"}:
+    if config.model_routing_strategy not in {"round-robin", "failover", "priority"}:
         raise ConfigError("model_routing_strategy is invalid")
     delays = _parse_retry_delays(config.model_retry_delays)
     if not delays or len(delays) > 10 or any(delay < 0 or delay > 300 for delay in delays):
         raise ConfigError("model_retry_delays is invalid")
     if not 10 <= config.model_recovery_interval <= 3600:
         raise ConfigError("model_recovery_interval is invalid")
+    _public_model_retry_policy(config.model_retry_policy_json)
     providers = _load_model_providers(config.model_providers_json)
     provider_ids = {str(provider["id"]) for provider in providers}
     if config.model_active_provider_id and config.model_active_provider_id not in provider_ids:
@@ -551,6 +579,18 @@ def _load_model_providers(value: str) -> list[dict[str, Any]]:
         api_key = str(provider.get("apiKey", "") or "")
         enabled = provider.get("enabled", True)
         pool_exclude = provider.get("poolExclude", False)
+        priority = provider.get("priority", 0)
+        proxy = str(provider.get("proxy", "") or "").strip()
+        rate_per_second = provider.get("ratePerSecond", 0)
+        rate_per_minute = provider.get("ratePerMinute", 0)
+        context_window_k = provider.get("contextWindowK", 0)
+        thinking_type = str(provider.get("thinkingType", "") or "").strip()
+        reasoning_effort = str(provider.get("reasoningEffort", "") or "").strip()
+        streaming = provider.get("streaming", True)
+        max_tokens = provider.get("maxTokens", 0)
+        max_tokens_field = str(provider.get("maxTokensField", "") or "").strip()
+        session_header_key = str(provider.get("sessionHeaderKey", "") or "").strip()
+        retry = provider.get("retry", {})
         if (
             not provider_id
             or len(provider_id) > 64
@@ -563,9 +603,42 @@ def _load_model_providers(value: str) -> list[dict[str, Any]]:
             or len(api_key) > 4096
             or not isinstance(enabled, bool)
             or not isinstance(pool_exclude, bool)
+            or isinstance(priority, bool)
+            or not isinstance(priority, int)
+            or not -1_000_000 <= priority <= 1_000_000
+            or len(proxy) > 2048
+            or isinstance(rate_per_second, bool)
+            or not isinstance(rate_per_second, int)
+            or not 0 <= rate_per_second <= 100_000
+            or isinstance(rate_per_minute, bool)
+            or not isinstance(rate_per_minute, int)
+            or not 0 <= rate_per_minute <= 1_000_000
+            or isinstance(context_window_k, bool)
+            or not isinstance(context_window_k, int)
+            or not 0 <= context_window_k <= 1_000_000
+            or thinking_type not in {"", "disabled", "enabled"}
+            or reasoning_effort
+            not in {"", "low", "medium", "high", "xhigh", "max"}
+            or not isinstance(streaming, bool)
+            or isinstance(max_tokens, bool)
+            or not isinstance(max_tokens, int)
+            or not 0 <= max_tokens <= 10_000_000
+            or max_tokens_field
+            not in {"", "max_tokens", "max_completion_tokens"}
+            or (max_tokens_field and protocol != "openai-chat")
+            or len(session_header_key) > 128
+            or not isinstance(retry, Mapping)
         ):
             raise ConfigError("model_providers_json is invalid")
         _validate_http_url(base_url, "provider baseUrl")
+        if proxy:
+            _validate_proxy_url(proxy)
+        if session_header_key and any(
+            character <= " " or character in {":", "(", ")", ","}
+            for character in session_header_key
+        ):
+            raise ConfigError("model_providers_json is invalid")
+        normalized_retry = _normalize_model_retry_override(retry)
         seen.add(provider_id)
         providers.append(
             {
@@ -577,6 +650,18 @@ def _load_model_providers(value: str) -> list[dict[str, Any]]:
                 "protocol": protocol,
                 "enabled": enabled,
                 "poolExclude": pool_exclude,
+                "priority": priority,
+                "proxy": proxy,
+                "ratePerSecond": rate_per_second,
+                "ratePerMinute": rate_per_minute,
+                "contextWindowK": context_window_k,
+                "thinkingType": thinking_type,
+                "reasoningEffort": reasoning_effort,
+                "streaming": streaming,
+                "maxTokens": max_tokens,
+                "maxTokensField": max_tokens_field,
+                "sessionHeaderKey": session_header_key,
+                "retry": normalized_retry,
             }
         )
     if len(providers) > 16:
@@ -598,6 +683,67 @@ def _public_model_providers(value: str) -> list[dict[str, Any]]:
         }
         for provider in providers
     ]
+
+
+_ZERO_RETRY_RULE: dict[str, int] = {"attempts": 0, "interval_ms": 0}
+_RETRY_LAYERS = ("connect", "empty", "stream", "breaker", "intent")
+_PROFILE_RETRY_LAYERS = ("connect", "empty", "stream")
+
+
+def _normalize_retry_rule(value: Any) -> dict[str, int]:
+    if not isinstance(value, Mapping):
+        raise ConfigError("model retry rule is invalid")
+    attempts = value.get("attempts", 0)
+    interval_ms = value.get("interval_ms", value.get("intervalMs", 0))
+    if (
+        isinstance(attempts, bool)
+        or not isinstance(attempts, int)
+        or not -1 <= attempts <= 100
+        or isinstance(interval_ms, bool)
+        or not isinstance(interval_ms, int)
+        or not 0 <= interval_ms <= 3_600_000
+    ):
+        raise ConfigError("model retry rule is invalid")
+    return {"attempts": attempts, "interval_ms": interval_ms}
+
+
+def _normalize_model_retry_override(value: Mapping[str, Any]) -> dict[str, Any]:
+    unknown = set(value) - set(_PROFILE_RETRY_LAYERS) - {
+        "intervalMs",
+    }
+    if unknown:
+        raise ConfigError("model retry override is invalid")
+    return {
+        layer: _normalize_retry_rule(value.get(layer, _ZERO_RETRY_RULE))
+        for layer in _PROFILE_RETRY_LAYERS
+    }
+
+
+def _public_model_retry_policy(value: str) -> dict[str, Any]:
+    try:
+        raw = json.loads(value or "{}")
+    except json.JSONDecodeError as exc:
+        raise ConfigError("model_retry_policy_json is invalid") from exc
+    if not isinstance(raw, Mapping):
+        raise ConfigError("model_retry_policy_json is invalid")
+    unknown = set(raw) - set(_RETRY_LAYERS)
+    if unknown:
+        raise ConfigError("model_retry_policy_json is invalid")
+    return {
+        layer: _normalize_retry_rule(raw.get(layer, _ZERO_RETRY_RULE))
+        for layer in _RETRY_LAYERS
+    }
+
+
+def _validate_proxy_url(value: str) -> None:
+    try:
+        parsed = urlsplit(value)
+    except ValueError as exc:
+        raise ConfigError("模型代理地址无效") from exc
+    if parsed.scheme not in {"http", "https", "socks5", "socks5h"}:
+        raise ConfigError("模型代理地址无效")
+    if not parsed.hostname:
+        raise ConfigError("模型代理地址无效")
 
 
 def _public_match_url(value: str) -> str:
