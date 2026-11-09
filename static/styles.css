@@ -1825,6 +1825,13 @@ dialog.is-page-dialog {
   --routed-page-track: min(var(--content-width), calc(100% - 48px));
 }
 
+.model-routing-page-header {
+  padding-top: 20px;
+  padding-right: max(24px, calc((100% - var(--routed-page-track)) / 2));
+  padding-bottom: 20px;
+  padding-left: max(24px, calc((100% - var(--routed-page-track)) / 2));
+}
+
 .model-routing-page[hidden],
 .codex-task-page[hidden] {
   display: none;
@@ -6011,49 +6018,27 @@ dialog.is-page-dialog .dialog-header,
   .environment-status-grid { grid-template-columns: 1fr; }
 }
 
-/* Routed model page: keep the header actions and card grid on one track.
-   The body owns the scrollbar, so reserve both gutters on desktop; below the
-   sidebar breakpoint the page uses a simple 12px inset instead. */
-.model-routing-page-body {
-  scrollbar-gutter: stable both-edges;
-}
 
+/* Model configuration page track: keep the header and content aligned even
+   when the scroll container reserves a scrollbar gutter. */
 .model-routing-page-header {
-  padding-top: 8px;
-  padding-right: max(16px,
-      calc((100% - min(var(--content-width), calc(100% - 32px))) / 2));
-  padding-bottom: 8px;
-  padding-left: max(16px,
-      calc((100% - min(var(--content-width), calc(100% - 32px))) / 2));
+  padding-top: 20px;
+  padding-right: max(24px, calc((100% - min(var(--content-width), calc(100% - 48px))) / 2));
+  padding-bottom: 20px;
+  padding-left: max(24px, calc((100% - min(var(--content-width), calc(100% - 48px))) / 2));
 }
 
 .model-routing-shell {
-  width: min(var(--content-width), calc(100% - 2px));
+  width: min(var(--content-width), calc(100% - 48px));
   margin-inline: auto;
 }
 
-@media (max-width: 1040px) {
-  .model-routing-page-body {
-    scrollbar-gutter: auto;
-  }
-
+@media (max-width: 820px) {
   .model-routing-page-header {
-    padding-right: 11px;
-    padding-left: 11px;
+    padding: 14px 12px;
   }
 
   .model-routing-shell {
     width: calc(100% - 24px);
-  }
-}
-
-@media (max-width: 560px) {
-  .model-routing-page-header {
-    padding-right: 10px;
-    padding-left: 10px;
-  }
-
-  .model-routing-shell {
-    width: calc(100% - 20px);
   }
 }

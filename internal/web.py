@@ -2594,9 +2594,16 @@ def _codex_chat_upstreams(config: Config) -> list[tuple[str, str]]:
         ),
         None,
     )
-    pool_candidates = [
-        item for item in chat_providers if not bool(item.get("poolExclude", False))
-    ]
+    pool_candidates = sorted(
+        (
+            item
+            for item in chat_providers
+            if not bool(item.get("poolExclude", False))
+            and str(item.get("id", "") or "")
+            != str(config.model_active_provider_id or "")
+        ),
+        key=lambda item: -int(item.get("priority", 0) or 0),
+    )
     ordered: list[Mapping[str, Any]] = []
     if active is not None:
         ordered.append(active)

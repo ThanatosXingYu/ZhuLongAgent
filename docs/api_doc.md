@@ -234,6 +234,58 @@ X-GCSIS-Action: environment-manager
 
 `available` 表示提供商当前已启用、未处于失败冷却期且属于路由候选链；`cooldownSeconds` 是当前失败恢复窗口的剩余秒数；`lastError` 是最近一次可回显的调用错误摘要。该接口不返回 API Key 或请求凭据。
 
+### 模型配置（LLM Profile）
+
+模型配置页使用以下接口管理独立配置。激活配置恒为故障转移链第 1 顺位；其余配置按 `priority` 从高到低排列，同优先级轮流打头。`poolExclude=true` 的配置不进入故障转移目标，但仍可被显式绑定使用。
+
+#### 列出与保存配置
+
+`GET /api/llm/profiles` 返回 `profiles` 数组；`POST /api/llm/profiles` 新建或更新单个配置。更新时省略 `id` 表示新建；提供已有 `id` 表示更新。更新 API Key 时传 `apiKey`，留空则保留原 Key。响应中的 `config` 与 `GET /api/config` 的公开结构一致，不会回显完整 Key。
+
+```json
+{
+  "id": "provider-a",
+  "name": "Primary",
+  "baseUrl": "https://model.example.test/v1",
+  "apiKey": "example-model-key",
+  "model": "solver-model",
+  "protocol": "openai-chat",
+  "priority": 50,
+  "poolExclude": false,
+  "proxy": "socks5://127.0.0.1:1080",
+  "ratePerSecond": 0,
+  "ratePerMinute": 0,
+  "contextWindowK": 200,
+  "thinkingType": "enabled",
+  "reasoningEffort": "high",
+  "streaming": true,
+  "maxTokens": 4096,
+  "maxTokensField": "max_completion_tokens",
+  "sessionHeaderKey": "x-session-id",
+  "retry": {
+    "connect": {"attempts": 2, "interval_ms": 500},
+    "empty": {"attempts": 0, "interval_ms": 0},
+    "stream": {"attempts": 10, "interval_ms": 10000}
+  }
+}
+```
+
+`protocol` 支持 `openai-chat`、`openai-responses`、`anthropic`。`thinkingType` 为空表示不发送；`reasoningEffort` 为空表示不发送。`retry` 是单个配置对建连、空响应、同 provider 安全重试三层全局默认值的覆盖；每项 `attempts=0` 跟随全局、`-1` 关闭该层、`>0` 使用指定次数，`interval_ms=0` 跟随默认退避、`>0` 使用固定毫秒间隔。
+
+#### 激活与删除
+
+`POST /api/llm/profiles/active`，请求体 `{"id": "provider-b"}`，将该配置设为全局激活配置。`DELETE /api/llm/profiles/{id}` 删除配置；当前激活配置不可删除，服务返回 `409 ACTIVE_MODEL_PROFILE_DELETE`，需要先激活其他配置。
+
+#### 轮询状态与恢复
+
+`GET /api/llm/pool` 返回 `enabled`、`bind_fallback` 和按实际链序排列的 `chain`。每个成员包含 `profile_id`、`name`、`model`、`format`、`priority`、`active`、`excluded`、`state`（`ok` / `degraded` / `tripped`）、`fails`、`trips`、`cooldown_secs`、`last_error`。显式绑定的配置默认只使用该配置；仅当 `bind_fallback=true` 时，绑定配置失败才回落到轮询链。
+
+`POST /api/llm/pool/reset`，请求体 `{"id": "provider-a"}` 清除单个配置的熔断状态；`id` 为空或省略时清除全部。响应与 `GET /api/llm/pool` 相同。
+
+#### 全局重试与退避
+
+`GET /api/llm/retry-policy` 返回五层策略；`POST /api/llm/retry-policy` 保存后即时生效。五层为 `connect`、`empty`、`stream`、`breaker`、`intent`，每层都是 `{"attempts": number, "interval_ms": number}`。`attempts=0` 使用内置默认，`-1` 关闭该层，`>0` 使用指定次数；`interval_ms=0` 使用默认退避/冷却梯度，`>0` 使用固定间隔。
+
 ## 比赛绑定与登录
 
 ### 绑定比赛

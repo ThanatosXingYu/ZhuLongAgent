@@ -671,6 +671,66 @@ def test_codex_proxy_prefers_active_chat_provider() -> None:
     )
 
 
+def test_codex_proxy_orders_fallbacks_by_priority_and_skips_excluded() -> None:
+    providers = [
+        {
+            "id": "active",
+            "name": "Active",
+            "baseUrl": "https://active.example/v1",
+            "apiKey": "active-key",
+            "model": "active-model",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": False,
+            "priority": 0,
+        },
+        {
+            "id": "low",
+            "name": "Low",
+            "baseUrl": "https://low.example/v1",
+            "apiKey": "low-key",
+            "model": "low-model",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": False,
+            "priority": 5,
+        },
+        {
+            "id": "high",
+            "name": "High",
+            "baseUrl": "https://high.example/v1",
+            "apiKey": "high-key",
+            "model": "high-model",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": False,
+            "priority": 50,
+        },
+        {
+            "id": "excluded",
+            "name": "Excluded",
+            "baseUrl": "https://excluded.example/v1",
+            "apiKey": "excluded-key",
+            "model": "excluded-model",
+            "protocol": "openai-chat",
+            "enabled": True,
+            "poolExclude": True,
+            "priority": 99,
+        },
+    ]
+    config = Config(
+        model_providers_json=json.dumps(providers),
+        model_active_provider_id="active",
+        model_pool_enabled=True,
+    )
+
+    assert web_module._codex_chat_upstreams(config) == [
+        ("https://active.example/v1", "active-key"),
+        ("https://high.example/v1", "high-key"),
+        ("https://low.example/v1", "low-key"),
+    ]
+
+
 def test_codex_proxy_streams_initial_heartbeat_and_response_events(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

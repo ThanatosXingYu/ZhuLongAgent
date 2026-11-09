@@ -524,14 +524,20 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
     breaker: { attempts: 2, interval_ms: 90000 },
   });
   await expect(page.locator("#model-routing-status")).toContainText("即时生效");
+  await expect(page.locator('[data-model-panel="routing"]')).toBeVisible();
+  await page.waitForTimeout(100);
 
   const routingGeometry = await page.evaluate(() => {
     const copy = document.querySelector(".model-routing-header-copy").getBoundingClientRect();
     const shell = document.querySelector(".model-routing-shell").getBoundingClientRect();
-    const workspace = document.querySelector("#exercise-view").getBoundingClientRect();
+    const page = document.querySelector("#model-routing-page").getBoundingClientRect();
+    const contentWidth = Number.parseFloat(
+      getComputedStyle(document.documentElement).getPropertyValue("--content-width"),
+    );
+    const expectedWidth = Math.min(contentWidth, page.width - 48);
     return {
       leftDelta: Math.abs(copy.left - shell.left),
-      trackWidthDelta: Math.abs(shell.width - workspace.width),
+      trackWidthDelta: Math.abs(shell.width - expectedWidth),
       overflow: document.documentElement.scrollWidth - window.innerWidth,
     };
   });
