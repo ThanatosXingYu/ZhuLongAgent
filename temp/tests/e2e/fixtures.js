@@ -46,11 +46,15 @@ export async function installApiMock(page, overrides = {}) {
     config: {
       configured: true, matchUrl: "https://match.example/competition", matchTitle: "Regression CTF",
       modelBaseUrl: "", modelName: "", codexBaseUrl: "http://model", codexModel: "deepseek-v4-flash",
-      modelActiveProviderId: "", modelPoolEnabled: true,
+      modelActiveProviderId: "", modelPoolEnabled: false, modelPoolBindFallback: false,
       modelProtocol: "openai-chat", codexProtocol: "openai-responses",
       codexMaxConcurrency: 10, codexAutoCompactTokenLimit: 500000, codexSystemPrompt: "", codexCtfSkillsEnabled: true,
       codexAutoResumeInterrupted: false, modelApiKeyConfigured: false, codexApiKeyConfigured: true,
-      modelProviders: [],
+      modelProviders: [], modelRetryPolicy: {
+        connect: { attempts: 0, interval_ms: 0 }, empty: { attempts: 0, interval_ms: 0 },
+        stream: { attempts: 0, interval_ms: 0 }, breaker: { attempts: 0, interval_ms: 0 },
+        intent: { attempts: 0, interval_ms: 0 },
+      },
     },
     toolCatalog: {
       status: "idle", root: "work/tools", tools: [
@@ -91,6 +95,65 @@ export async function installApiMock(page, overrides = {}) {
         data = state.config;
         break;
       }
+      case "/api/llm/profiles": {
+        if (request.method() === "POST" && body && typeof body === "object") {
+          const existing = state.config.modelProviders.find((item) => item.id === body.id);
+          const id = body.id || `provider-${state.config.modelProviders.length + 1}`;
+          const profile = {
+            ...body, id, apiKey: "", apiKeyConfigured: Boolean(body.apiKey) || Boolean(existing?.apiKeyConfigured),
+            apiKeyMasked: body.apiKey ? "sk-…test" : (existing?.apiKeyMasked || ""),
+          };
+          const next = state.config.modelProviders.filter((item) => item.id !== id);
+          next.push(profile);
+          state.config = { ...state.config, modelProviders: next, modelActiveProviderId: state.config.modelActiveProviderId || id };
+        }
+        data = request.method() === "POST"
+          ? { id: body?.id || state.config.modelProviders.at(-1)?.id, config: state.config }
+          : { profiles: state.config.modelProviders.map((provider) => ({
+              ...provider,
+              isDefault: provider.id === state.config.modelActiveProviderId,
+              is_default: provider.id === state.config.modelActiveProviderId,
+            })) };
+        break;
+      }
+      case "/api/llm/profiles/active": {
+        state.config = { ...state.config, modelActiveProviderId: body.id };
+        data = { ok: true, config: state.config };
+        break;
+      }
+      case "/api/llm/pool": data = {
+        enabled: state.config.modelPoolEnabled, bind_fallback: state.config.modelPoolBindFallback,
+        chain: state.config.modelProviders.map((provider, index) => ({
+          profile_id: provider.id, name: provider.name, model: provider.model, format: provider.protocol,
+          priority: provider.priority || 0, active: provider.id === state.config.modelActiveProviderId,
+          excluded: Boolean(provider.poolExclude), state: "ok", fails: 0, trips: 0, cooldown_secs: 0,
+        })),
+      }; break;
+      case "/api/llm/profiles/1":
+      case "/api/llm/profiles/2":
+      case "/api/llm/profiles/provider-1":
+      case "/api/llm/profiles/provider-2": {
+        const id = url.pathname.split("/").at(-1);
+        state.config = {
+          ...state.config,
+          modelProviders: state.config.modelProviders.filter((provider) => provider.id !== id),
+        };
+        data = { deleted: id };
+        break;
+      }
+      case "/api/llm/pool/reset": data = {
+        enabled: state.config.modelPoolEnabled, bind_fallback: state.config.modelPoolBindFallback,
+        chain: state.config.modelProviders.map((provider) => ({
+          profile_id: provider.id, name: provider.name, model: provider.model, format: provider.protocol,
+          priority: provider.priority || 0, active: provider.id === state.config.modelActiveProviderId,
+          excluded: Boolean(provider.poolExclude), state: "ok", fails: 0, trips: 0, cooldown_secs: 0,
+        })),
+      }; break;
+      case "/api/llm/retry-policy": {
+        if (request.method() === "POST" && body && typeof body === "object") state.config.modelRetryPolicy = body;
+        data = state.config.modelRetryPolicy;
+        break;
+      }
       case "/api/platform/auth": data = { authenticated: true, teamName: "QA Team", userName: "Tester", score: 100, rank: 1, memberCount: 2, organization: "Lab" }; break;
       case "/api/overview": data = { stagePoint: 100, stageRank: 1, solvedCount: 2, teamName: "QA Team", organization: "QA Lab" }; break;
       case "/api/exercises": data = exerciseGroups; break;
@@ -106,12 +169,6 @@ export async function installApiMock(page, overrides = {}) {
       case "/api/tools": data = state.toolCatalog; break;
       case "/api/model-test": data = { model: body?.model || "model", reply: "OK", latencyMs: 42 }; break;
       case "/api/models": data = { models: ["model-a", "model-b"], kind: body?.kind || "model" }; break;
-      case "/api/model-routing/status": data = {
-        activeProviderId: "",
-        poolEnabled: true,
-        strategy: "round-robin",
-        providers: [],
-      }; break;
       case "/api/environment": data = { items: [], summary: "环境可用" }; break;
       case "/api/codex/tasks": {
         const query = (url.searchParams.get("query") || "").toLowerCase();

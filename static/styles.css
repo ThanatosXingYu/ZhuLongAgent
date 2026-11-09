@@ -1951,6 +1951,11 @@ dialog.is-page-dialog {
 .model-routing-status.success { color: #166534; }
 .model-routing-status.error { color: #b91c1c; }
 .model-routing-panel { min-width: 0; }
+.model-routing-panel:not([hidden]) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+}
 
 /* Provider cards */
 .model-provider-list {
@@ -2320,6 +2325,17 @@ dialog.model-pool-sheet::backdrop {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.model-sheet-grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.model-sheet-retry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+  padding: 12px 0 2px;
+}
+
 .model-sheet-field {
   min-width: 0;
   display: grid;
@@ -2511,6 +2527,25 @@ dialog.model-pool-sheet::backdrop {
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 6px;
+}
+
+.model-pool-chain-row.is-excluded {
+  opacity: 0.55;
+}
+
+.model-pool-chain-row .icon-button {
+  width: 26px;
+  min-height: 26px;
+  flex: 0 0 26px;
+}
+
+.model-pool-excluded-badge {
+  padding: 0 5px;
+  color: var(--text-faint);
+  background: #f4f4f5;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 600;
 }
 
 .model-pool-order {

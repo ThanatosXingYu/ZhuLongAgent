@@ -12,7 +12,7 @@ import { filterAttachmentExercise } from "./modules/attachment-model.js?v=202611
 import { createFaultCenter, installGlobalErrorBoundary, requireElements, safeInitModule } from "./modules/dom.js?v=20261104-archive1";
 import { createApiClient } from "./modules/api.js?v=20261104-archive1";
 import { formatBytes, formatDate, formatDuration, formatNumber, safeURL } from "./modules/formatters.js?v=20261104-archive1";
-import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261109-brtex1";
+import { createModelRoutingController } from "./modules/model-routing-controller.js?v=20261110-models1";
 import { createOverviewNoticeController } from "./modules/overview-notice-controller.js?v=20261104-archive1";
 import { REALTIME_STATUS, RealtimeClient } from "./modules/realtime.js?v=20261104-archive1";
 import { createElement, icon, refreshIcons, renderRichText as renderSafeRichText } from "./modules/rich-text.js?v=20261104-archive1";
@@ -170,9 +170,6 @@ import {
     addModelProvider: $("add-model-provider"),
     openModelPool: $("open-model-pool"),
     modelPoolHeaderBadge: $("model-pool-header-badge"),
-    modelRetryDelays: $("model-retry-delays"),
-    modelRecoveryInterval: $("model-recovery-interval"),
-    codexAutoCompactTokenLimit: $("codex-auto-compact-limit"),
     modelRoutingStatus: $("model-routing-status"),
     saveModelRouting: $("save-model-routing"),
     modelProviderSheet: $("model-provider-sheet"),
@@ -186,7 +183,23 @@ import {
     modelSheetFetchModels: $("model-sheet-fetch-models"),
     modelSheetModels: $("model-sheet-models"),
     modelSheetApiKey: $("model-sheet-api-key"),
-    modelSheetEnabled: $("model-sheet-enabled"),
+    modelSheetProxy: $("model-sheet-proxy"),
+    modelSheetSessionHeader: $("model-sheet-session-header"),
+    modelSheetRateSecond: $("model-sheet-rate-second"),
+    modelSheetRateMinute: $("model-sheet-rate-minute"),
+    modelSheetContextWindow: $("model-sheet-context-window"),
+    modelSheetPriority: $("model-sheet-priority"),
+    modelSheetMaxTokens: $("model-sheet-max-tokens"),
+    modelSheetMaxTokensField: $("model-sheet-max-tokens-field"),
+    modelSheetThinkingType: $("model-sheet-thinking-type"),
+    modelSheetReasoningEffort: $("model-sheet-reasoning-effort"),
+    modelSheetStreaming: $("model-sheet-streaming"),
+    modelSheetRetryConnectAttempts: $("model-sheet-retry-connect-attempts"),
+    modelSheetRetryConnectInterval: $("model-sheet-retry-connect-interval"),
+    modelSheetRetryEmptyAttempts: $("model-sheet-retry-empty-attempts"),
+    modelSheetRetryEmptyInterval: $("model-sheet-retry-empty-interval"),
+    modelSheetRetryStreamAttempts: $("model-sheet-retry-stream-attempts"),
+    modelSheetRetryStreamInterval: $("model-sheet-retry-stream-interval"),
     modelSheetPool: $("model-sheet-pool"),
     modelSheetTestResult: $("model-sheet-test-result"),
     modelSheetTest: $("model-sheet-test"),
@@ -195,10 +208,21 @@ import {
     modelPoolSheet: $("model-pool-sheet"),
     closeModelPoolSheet: $("close-model-pool-sheet"),
     modelPoolEnabledSheet: $("model-pool-enabled-sheet"),
+    modelPoolBindFallbackSheet: $("model-pool-bind-fallback-sheet"),
     modelPoolParticipantCountSheet: $("model-pool-participant-count-sheet"),
     modelPoolChain: $("model-pool-chain"),
     modelPoolSheetStatus: $("model-pool-sheet-status"),
     saveModelPool: $("save-model-pool"),
+    modelRetryConnectAttempts: $("model-retry-connect-attempts"),
+    modelRetryConnectInterval: $("model-retry-connect-interval"),
+    modelRetryEmptyAttempts: $("model-retry-empty-attempts"),
+    modelRetryEmptyInterval: $("model-retry-empty-interval"),
+    modelRetryStreamAttempts: $("model-retry-stream-attempts"),
+    modelRetryStreamInterval: $("model-retry-stream-interval"),
+    modelRetryBreakerAttempts: $("model-retry-breaker-attempts"),
+    modelRetryBreakerInterval: $("model-retry-breaker-interval"),
+    modelRetryIntentAttempts: $("model-retry-intent-attempts"),
+    modelRetryIntentInterval: $("model-retry-intent-interval"),
     openToolManager: $("open-tool-manager"),
     toolManagerDialog: $("tool-manager-dialog"),
     environmentStatusItems: $("environment-status-items"),
@@ -4225,7 +4249,7 @@ import {
   }
 
   function bindModelRoutingEvents() {
-    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "model-pool-enabled", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-retry-delays", "model-recovery-interval", "codex-auto-compact-limit", "model-routing-status", "save-model-routing"], () => {
+    bindModuleOnce("模型路由", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-routing-status", "save-model-routing"], () => {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);

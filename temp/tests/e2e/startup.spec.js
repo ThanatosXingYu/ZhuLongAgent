@@ -442,14 +442,14 @@ test("设置页支持默认比赛、三种模型协议与请求包登录", async
   await expect.poll(() => popup.url()).toContain("/2026qwbs10");
 });
 
-test("模型配置全屏页面支持多提供商、轮询和重试策略", async ({ page }) => {
+test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", async ({ page }) => {
   const { requests } = await openWorkbench(page);
   await page.locator("#open-model-routing").click();
   const routingPage = page.locator("#model-routing-page");
   await expect(routingPage).toBeVisible();
   await expect(page.locator(".model-routing-page-header")).toBeVisible();
-  await expect(page.locator("dialog#model-routing-dialog")).toHaveCount(0);
   await expect(page.locator(".model-provider-card")).toHaveCount(0);
+
   await page.locator("#add-model-provider").click();
   const sheet = page.locator("#model-provider-sheet");
   await expect(sheet).toBeVisible();
@@ -457,9 +457,9 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator("#model-sheet-base-url").fill("https://a.example/v1");
   await page.locator("#model-sheet-model").fill("model-a");
   await page.locator("#model-sheet-protocol").selectOption("anthropic");
+  await page.locator("#model-sheet-priority").fill("20");
   await page.locator("#model-sheet-test").click();
   await expect(page.locator("#model-sheet-test-result")).toContainText("连接成功");
-  await expect(page.locator("#model-sheet-test-result")).toContainText("42ms");
   await page.locator("#model-sheet-save").click();
   await expect(sheet).toBeHidden();
   await expect(page.locator(".model-provider-card")).toHaveCount(1);
@@ -471,69 +471,63 @@ test("模型配置全屏页面支持多提供商、轮询和重试策略", async
   await page.locator("#model-sheet-base-url").fill("https://b.example/v1");
   await page.locator("#model-sheet-model").fill("model-b");
   await page.locator("#model-sheet-protocol").selectOption("openai-responses");
+  await page.locator("#model-sheet-priority").fill("10");
   await page.locator("#model-sheet-pool").uncheck();
-  await page.locator("#model-sheet-enabled").uncheck();
   await page.locator("#model-sheet-save").click();
   await expect(page.locator(".model-provider-card")).toHaveCount(2);
-  await expect(page.locator("#model-active-provider-count")).toHaveText("1");
   await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
+
+  const profilePosts = () => requests.filter((request) => request.method === "POST" && request.path === "/api/llm/profiles");
+  await expect.poll(() => profilePosts().length).toBe(2);
+  expect(profilePosts()[0].body).toMatchObject({ name: "Provider A", priority: 20, protocol: "anthropic" });
+  expect(profilePosts()[1].body).toMatchObject({ name: "Provider B", poolExclude: true, priority: 10 });
+  expect(profilePosts()[0].body.apiKey).toBeUndefined();
+
+  const secondCard = page.locator(".model-provider-card").nth(1);
+  await secondCard.locator("button", { hasText: "设为激活" }).click();
+  await expect.poll(() => requests.some((request) => request.path === "/api/llm/profiles/active" && request.method === "POST")).toBe(true);
+  await expect(secondCard).toHaveClass(/is-active-provider/);
 
   await page.locator("#open-model-pool").click();
   await expect(page.locator("#model-pool-sheet")).toBeVisible();
-  await page.locator("#model-pool-enabled-sheet").uncheck();
-  await expect(page.locator("#model-pool-state")).toHaveText("已关闭");
   await page.locator("#model-pool-enabled-sheet").check();
+  await expect.poll(() => requests.some((request) => request.method === "PUT" && request.path === "/api/config" && request.body?.modelPoolEnabled === true)).toBe(true);
+  await page.locator("#model-pool-bind-fallback-sheet").check();
+  await expect.poll(() => requests.some((request) => request.method === "PUT" && request.path === "/api/config" && request.body?.modelPoolBindFallback === true)).toBe(true);
+  await expect(page.locator("#model-pool-state")).toHaveText("已开启");
   await page.locator("#close-model-pool-sheet").click();
 
   await page.locator('[data-model-tab="routing"]').click();
   await expect(page.locator('[data-model-panel="providers"]')).toBeHidden();
-  await page.locator('[data-routing="failover"]').click();
-  await expect(page.locator("#model-strategy-summary")).toHaveText("故障转移");
-  await page.locator("#model-retry-delays").fill("1,5,10,10,15");
-  await page.locator("#model-recovery-interval").fill("60");
-  await expect(page.locator("#codex-auto-compact-limit")).toHaveValue("500000");
-  await page.locator("#open-model-pool").click();
-  await page.locator("#save-model-pool").click();
-  const activeProviderId = await page.locator(".model-provider-card").first().getAttribute("data-provider-id");
-
-  const configPuts = () => requests.filter((request) => request.method === "PUT" && request.path === "/api/config");
-  await expect.poll(() => configPuts().at(-1)?.body).toMatchObject({
-    modelActiveProviderId: activeProviderId,
-    modelPoolEnabled: true,
-    modelRoutingStrategy: "failover",
-    modelRetryDelays: [1, 5, 10, 10, 15],
-    modelRecoveryInterval: 60,
-    codexAutoCompactTokenLimit: 500000,
-  });
-  const saved = configPuts().at(-1)?.body;
-  expect(saved.modelProviders).toHaveLength(2);
-  expect(saved.modelProviders[0]).toMatchObject({ name: "Provider A", protocol: "anthropic", enabled: true, poolExclude: false });
-  expect(saved.modelProviders[1]).toMatchObject({ name: "Provider B", protocol: "openai-responses", enabled: false, poolExclude: true });
-  await expect(page.locator("#model-routing-status")).toContainText("已保存");
-  await page.locator("#model-recovery-interval").fill("90");
-  await expect(page.locator("#save-model-routing")).toBeVisible();
+  await page.locator("#model-retry-connect-attempts").fill("2");
+  await page.locator("#model-retry-connect-interval").fill("500");
+  await page.locator("#model-retry-stream-attempts").fill("4");
+  await page.locator("#model-retry-stream-interval").fill("10000");
+  await page.locator("#model-retry-breaker-attempts").fill("2");
+  await page.locator("#model-retry-breaker-interval").fill("90000");
   await page.locator("#save-model-routing").click();
-  await expect.poll(() => configPuts().at(-1)?.body.modelRecoveryInterval).toBe(90);
+  const retryPosts = () => requests.filter((request) => request.method === "POST" && request.path === "/api/llm/retry-policy");
+  await expect.poll(() => retryPosts().length).toBe(1);
+  expect(retryPosts()[0].body).toMatchObject({
+    connect: { attempts: 2, interval_ms: 500 },
+    stream: { attempts: 4, interval_ms: 10000 },
+    breaker: { attempts: 2, interval_ms: 90000 },
+  });
+  await expect(page.locator("#model-routing-status")).toContainText("即时生效");
 
   const routingGeometry = await page.evaluate(() => {
-    const header = document.querySelector(".model-routing-page-header").getBoundingClientRect();
     const copy = document.querySelector(".model-routing-header-copy").getBoundingClientRect();
-    const actions = document.querySelector(".model-routing-header-actions").getBoundingClientRect();
     const shell = document.querySelector(".model-routing-shell").getBoundingClientRect();
     const workspace = document.querySelector("#exercise-view").getBoundingClientRect();
     return {
       leftDelta: Math.abs(copy.left - shell.left),
-      rightDelta: Math.abs(actions.right - shell.right),
       trackWidthDelta: Math.abs(shell.width - workspace.width),
       overflow: document.documentElement.scrollWidth - window.innerWidth,
-      headerWidth: header.width,
     };
   });
   expect(routingGeometry.leftDelta).toBeLessThanOrEqual(1);
-  expect(routingGeometry.rightDelta).toBeLessThanOrEqual(1);
   expect(routingGeometry.trackWidthDelta).toBeLessThanOrEqual(1);
   expect(routingGeometry.overflow).toBeLessThanOrEqual(1);
-  expect(routingGeometry.headerWidth).toBeGreaterThan(1000);
 
   await page.locator("#show-exercise-view").click();
   await expect(routingPage).toBeHidden();

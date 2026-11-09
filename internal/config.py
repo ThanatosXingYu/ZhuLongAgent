@@ -201,6 +201,11 @@ class RuntimeConfigStore:
 
     def public(self) -> dict[str, Any]:
         config = self.get()
+        model_providers = _public_model_providers(config.model_providers_json)
+        for provider in model_providers:
+            active = str(provider.get("id", "")) == config.model_active_provider_id
+            provider["isDefault"] = active
+            provider["is_default"] = active
         return {
             "configured": bool(
                 config.match_url and config.match_key and config.platform_token
@@ -215,7 +220,7 @@ class RuntimeConfigStore:
             "modelBaseUrl": config.model_base_url,
             "modelName": config.model_name,
             "modelProtocol": config.model_protocol,
-            "modelProviders": _public_model_providers(config.model_providers_json),
+            "modelProviders": model_providers,
             "modelActiveProviderId": config.model_active_provider_id,
             "modelPoolEnabled": config.model_pool_enabled,
             "modelPoolBindFallback": config.model_pool_bind_fallback,

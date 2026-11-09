@@ -1,5 +1,6 @@
 # Keep the original Go project as a local reference only.
 /gcsisTools/
+/temp/BRTEX/
 
 # Local environments, dependency caches, and build output.
 /.venv/

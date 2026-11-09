@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>CTF 比赛工作台</title>
-  <link rel="stylesheet" href="/styles.css?v=20261109-layout1">
+  <link rel="stylesheet" href="/styles.css?v=20261110-models1">
   <link rel="stylesheet" href="/modules/codex-transcript.css?v=20261109-brtex2">
 </head>
 <body>
@@ -682,44 +682,96 @@
           <div id="model-provider-list" class="model-provider-list"></div>
         </section>
         <section class="model-routing-panel" data-model-panel="routing" hidden>
-          <div class="model-retry-layout">
+          <div class="model-retry-layout" id="model-retry-policy">
             <section class="model-settings-card">
               <div class="model-settings-card-heading">
-                <h3>路由策略</h3>
-                <p>默认提供商始终为首选；关闭轮询后不再尝试其它配置。</p>
+                <h3>建连重试</h3>
+                <p>SDK 拿到 200 之前：连接重置、超时、429、5xx 等瞬时错误。</p>
               </div>
-              <div class="model-segmented" role="group" aria-label="模型轮询策略">
-                <button class="login-mode-button is-active" type="button" data-routing="round-robin" aria-pressed="true">每次请求轮询</button>
-                <button class="login-mode-button" type="button" data-routing="failover" aria-pressed="false">错误后故障转移</button>
+              <div class="model-retry-rule">
+                <label class="model-setting-row" for="model-retry-connect-attempts">
+                  <span><strong>重试次数</strong><small>空/0 = 默认 3；-1 = 关闭</small></span>
+                  <input id="model-retry-connect-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 3">
+                </label>
+                <label class="model-setting-row" for="model-retry-connect-interval">
+                  <span><strong>固定间隔(ms)</strong><small>0 = 默认指数退避</small></span>
+                  <input id="model-retry-connect-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
+                </label>
               </div>
-              <label class="model-setting-row" for="model-retry-delays">
-                <span><strong>重试间隔</strong><small>秒，逗号分隔；最长 10 个间隔</small></span>
-                <input id="model-retry-delays" type="text" inputmode="decimal" value="1,5,10,10,15" placeholder="1,5,10,10,15">
-              </label>
-              <label class="model-setting-row" for="model-recovery-interval">
-                <span><strong>恢复窗口</strong><small>失败提供商冷却秒数，范围 10–3600</small></span>
-                <input id="model-recovery-interval" type="number" min="10" max="3600" step="1" value="60">
-              </label>
             </section>
             <section class="model-settings-card">
               <div class="model-settings-card-heading">
-                <h3>Codex 上下文</h3>
-                <p>达到阈值时由 Codex 自动压缩历史上下文。</p>
+                <h3>空响应重试</h3>
+                <p>只对 OpenAI 格式生效：HTTP 200 但没有任何内容块。</p>
               </div>
-              <label class="model-setting-row" for="codex-auto-compact-limit">
-                <span><strong>自动压缩阈值</strong><small>token，建议 500000</small></span>
-                <input id="codex-auto-compact-limit" type="number" min="16384" max="872000" step="1000" value="500000">
-              </label>
+              <div class="model-retry-rule">
+                <label class="model-setting-row" for="model-retry-empty-attempts">
+                  <span><strong>重试次数</strong><small>空/0 = 默认 2；-1 = 关闭</small></span>
+                  <input id="model-retry-empty-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 2">
+                </label>
+                <label class="model-setting-row" for="model-retry-empty-interval">
+                  <span><strong>固定间隔(ms)</strong><small>0 = 默认指数退避</small></span>
+                  <input id="model-retry-empty-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
+                </label>
+              </div>
+            </section>
+            <section class="model-settings-card">
+              <div class="model-settings-card-heading">
+                <h3>同配置安全重试</h3>
+                <p>流已建立但尚未交付任何输出时的断流、429 或 5xx。</p>
+              </div>
+              <div class="model-retry-rule">
+                <label class="model-setting-row" for="model-retry-stream-attempts">
+                  <span><strong>重试次数</strong><small>空/0 = 默认 10；-1 = 关闭</small></span>
+                  <input id="model-retry-stream-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 10">
+                </label>
+                <label class="model-setting-row" for="model-retry-stream-interval">
+                  <span><strong>固定间隔(ms)</strong><small>0 = 默认固定 10s</small></span>
+                  <input id="model-retry-stream-interval" type="number" min="0" step="1" value="0" placeholder="默认 10s">
+                </label>
+              </div>
+            </section>
+            <section class="model-settings-card">
+              <div class="model-settings-card-heading">
+                <h3>轮询熔断</h3>
+                <p>连续瞬时失败达到阈值时熔断；401/403/404 首次即熔断。</p>
+              </div>
+              <div class="model-retry-rule">
+                <label class="model-setting-row" for="model-retry-breaker-attempts">
+                  <span><strong>连续失败阈值</strong><small>空/0 = 默认 3；-1 = 不因瞬时错误熔断</small></span>
+                  <input id="model-retry-breaker-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 3">
+                </label>
+                <label class="model-setting-row" for="model-retry-breaker-interval">
+                  <span><strong>固定冷却(ms)</strong><small>0 = 默认 30s → 10min 梯度</small></span>
+                  <input id="model-retry-breaker-interval" type="number" min="0" step="1" value="0" placeholder="默认梯度">
+                </label>
+              </div>
+            </section>
+            <section class="model-settings-card">
+              <div class="model-settings-card-heading">
+                <h3>意图重跑</h3>
+                <p>最外层重跑：前面所有重试耗尽后，整条意图从头再执行。</p>
+              </div>
+              <div class="model-retry-rule">
+                <label class="model-setting-row" for="model-retry-intent-attempts">
+                  <span><strong>重跑次数</strong><small>空/0 = 默认 2；-1 = 不重跑</small></span>
+                  <input id="model-retry-intent-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 2">
+                </label>
+                <label class="model-setting-row" for="model-retry-intent-interval">
+                  <span><strong>固定间隔(ms)</strong><small>0 = 默认固定 3s</small></span>
+                  <input id="model-retry-intent-interval" type="number" min="0" step="1" value="0" placeholder="默认 3s">
+                </label>
+              </div>
             </section>
           </div>
           <button id="save-model-routing" class="button button-primary" type="button">
             <i data-lucide="save" aria-hidden="true"></i>
-            <span>保存配置</span>
+            <span>保存重试与退避</span>
           </button>
         </section>
       </div>
     </div>
-    <input id="model-pool-enabled" type="checkbox" role="switch" checked hidden>
+    <input id="model-pool-enabled" type="checkbox" role="switch" hidden>
     <span id="model-active-provider-name" hidden></span>
     <span id="model-total-provider-count" hidden></span>
     <span id="model-pool-state" hidden></span>
@@ -777,15 +829,116 @@
         <span>API Key</span>
         <input id="model-sheet-api-key" type="password" autocomplete="new-password" placeholder="API Key">
       </label>
-      <section class="model-sheet-group">
-        <label class="model-sheet-toggle">
-          <span><strong>启用配置</strong><small>关闭后不会参与任何请求</small></span>
-          <input id="model-sheet-enabled" type="checkbox" checked>
+      <label class="model-sheet-field">
+        <span>代理</span>
+        <input id="model-sheet-proxy" class="is-mono" type="text" maxlength="2048" placeholder="socks5://user:pass@127.0.0.1:1080">
+      </label>
+      <label class="model-sheet-field">
+        <span>自定义会话头</span>
+        <input id="model-sheet-session-header" class="is-mono" type="text" maxlength="128" placeholder="可选，如 x-session-id">
+      </label>
+      <div class="model-sheet-grid three">
+        <label class="model-sheet-field">
+          <span>每秒限速</span>
+          <input id="model-sheet-rate-second" type="number" min="0" max="100000" step="1" value="0">
         </label>
+        <label class="model-sheet-field">
+          <span>每分钟限速</span>
+          <input id="model-sheet-rate-minute" type="number" min="0" max="1000000" step="1" value="0">
+        </label>
+        <label class="model-sheet-field">
+          <span>上下文窗口(K)</span>
+          <input id="model-sheet-context-window" type="number" min="0" max="1000000" step="1" value="0">
+        </label>
+      </div>
+      <div class="model-sheet-grid three">
+        <label class="model-sheet-field">
+          <span>轮询优先级</span>
+          <input id="model-sheet-priority" type="number" min="-1000000" max="1000000" step="1" value="0">
+        </label>
+        <label class="model-sheet-field">
+          <span>输出上限</span>
+          <input id="model-sheet-max-tokens" type="number" min="0" max="10000000" step="1" value="0" placeholder="0 = 不发送">
+        </label>
+        <label class="model-sheet-field">
+          <span>上限字段名</span>
+          <span class="select-wrap">
+            <select id="model-sheet-max-tokens-field">
+              <option value="">max_tokens（默认）</option>
+              <option value="max_completion_tokens">max_completion_tokens</option>
+            </select>
+            <i data-lucide="chevron-down" aria-hidden="true"></i>
+          </span>
+        </label>
+      </div>
+      <div class="model-sheet-grid two">
+        <label class="model-sheet-field">
+          <span>思考开关</span>
+          <span class="select-wrap">
+            <select id="model-sheet-thinking-type">
+              <option value="">不发送（默认）</option>
+              <option value="disabled">关闭</option>
+              <option value="enabled">开启</option>
+            </select>
+            <i data-lucide="chevron-down" aria-hidden="true"></i>
+          </span>
+        </label>
+        <label class="model-sheet-field">
+          <span>思考强度</span>
+          <span class="select-wrap">
+            <select id="model-sheet-reasoning-effort">
+              <option value="">不发送（默认）</option>
+              <option value="low">low</option>
+              <option value="medium">medium</option>
+              <option value="high">high</option>
+              <option value="xhigh">xhigh</option>
+              <option value="max">max</option>
+            </select>
+            <i data-lucide="chevron-down" aria-hidden="true"></i>
+          </span>
+        </label>
+      </div>
+      <section class="model-sheet-group">
         <label class="model-sheet-toggle">
           <span><strong>参与轮询</strong><small>激活配置始终参与；其它配置可单独排除</small></span>
           <input id="model-sheet-pool" type="checkbox" checked>
         </label>
+        <label class="model-sheet-toggle">
+          <span><strong>流式输出</strong><small>关闭后走非流式请求，部分网关更稳定</small></span>
+          <input id="model-sheet-streaming" type="checkbox" checked>
+        </label>
+      </section>
+      <section class="model-sheet-group">
+        <div class="model-sheet-section-heading">
+          <h3>本配置重试覆盖</h3>
+          <p>留空或 0 = 跟随全局；-1 = 关闭该层</p>
+        </div>
+        <div class="model-sheet-retry-grid">
+          <label class="model-sheet-field">
+            <span>建连次数</span>
+            <input id="model-sheet-retry-connect-attempts" type="number" min="-1" step="1" value="0" placeholder="默认">
+          </label>
+          <label class="model-sheet-field">
+            <span>建连间隔(ms)</span>
+            <input id="model-sheet-retry-connect-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
+          </label>
+          <label class="model-sheet-field">
+            <span>空响应次数</span>
+            <input id="model-sheet-retry-empty-attempts" type="number" min="-1" step="1" value="0" placeholder="默认">
+          </label>
+          <label class="model-sheet-field">
+            <span>空响应间隔(ms)</span>
+            <input id="model-sheet-retry-empty-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
+          </label>
+          <label class="model-sheet-field">
+            <span>断流次数</span>
+            <input id="model-sheet-retry-stream-attempts" type="number" min="-1" step="1" value="0" placeholder="默认">
+          </label>
+          <label class="model-sheet-field">
+            <span>断流间隔(ms)</span>
+            <input id="model-sheet-retry-stream-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
+          </label>
+        </div>
       </section>
       <div id="model-sheet-test-result" class="model-sheet-test-result" role="status"></div>
     </div>
@@ -826,16 +979,24 @@
             <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
           </label>
         </div>
+        <div class="model-sheet-toggle">
+          <span><strong>指定配置失败时也兜底</strong><small>默认关闭：显式绑定的配置失败即失败，不会悄悄换模型</small></span>
+          <label class="switch-row" title="指定配置失败时也兜底">
+            <span class="visually-hidden">指定配置失败时也兜底</span>
+            <input id="model-pool-bind-fallback-sheet" type="checkbox" role="switch">
+            <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+          </label>
+        </div>
       </section>
       <section class="model-pool-chain-section">
         <div class="model-sheet-section-heading">
-          <h3>请求顺序</h3>
+          <h3>故障转移顺序</h3>
           <p id="model-pool-participant-count-sheet">0 个参与项</p>
         </div>
         <div id="model-pool-chain" class="model-pool-chain"></div>
       </section>
       <div class="model-pool-note">
-        激活配置恒为第 1 顺位，其余启用且参与轮询的配置按添加顺序轮换。失败项会进入恢复窗口，期间自动跳过。
+        激活配置恒为第 1 顺位，其余按优先级从高到低；同优先级轮流打头。失败项在冷却期内自动跳过。
       </div>
     </div>
     <footer class="model-sheet-footer">
@@ -1215,6 +1376,6 @@
   <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="false" hidden></div>
 
   <script src="/vendor/lucide.min.js?v=0.468.0" defer></script>
-  <script type="module" src="/app.js?v=20261109-brtex2"></script>
+  <script type="module" src="/app.js?v=20261110-models1"></script>
 </body>
 </html>
