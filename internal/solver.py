@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import unicodedata
+import inspect
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Protocol
@@ -20,6 +21,20 @@ from .download import (
 from .openai_client import Message, Tool, ToolCall, ToolFunction
 
 MAX_MODEL_ROUNDS = 12
+
+
+def _supports_session_id(model: object) -> bool:
+    complete = getattr(model, "complete", None)
+    if not callable(complete):
+        return False
+    try:
+        parameters = inspect.signature(complete).parameters
+    except (TypeError, ValueError):
+        return False
+    return "session_id" in parameters or any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
 
 
 class SourceProtocol(Protocol):
@@ -223,9 +238,18 @@ class SolverService:
         ]
         tools = solver_tools()
         state = _RunState()
+        supports_session_id = _supports_session_id(model)
         for _round in range(MAX_MODEL_ROUNDS):
             try:
-                message = model.complete(self.model_name, messages, tools)
+                if supports_session_id:
+                    message = model.complete(
+                        self.model_name,
+                        messages,
+                        tools,
+                        session_id=f"exercise-{exercise_id}-round-{_round + 1}",
+                    )
+                else:
+                    message = model.complete(self.model_name, messages, tools)
             except Exception as exc:
                 if state.solved:
                     warning = f"模型在正确提交后返回错误：{exc}"

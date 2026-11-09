@@ -25,6 +25,7 @@ _DEFAULT_RECOVERY_SECONDS = 60
 _DEFAULT_BREAKER_ATTEMPTS = 3
 _DEFAULT_BREAKER_INTERVALS = (30, 60, 60, 120, 300, 600)
 _BIND_PREFIX = "bind:"
+_CHARS_PER_TOKEN = 3.5
 
 
 @dataclass
@@ -43,6 +44,13 @@ class _ProviderState:
     trips: int = 0
     last_at: float = 0.0
     retry: Mapping[str, Mapping[str, int]] = field(default_factory=dict)
+    rate_per_second: int = 0
+    rate_per_minute: int = 0
+    context_window_k: int = 0
+    second_window_started: float = 0.0
+    second_calls: int = 0
+    minute_window_started: float = 0.0
+    minute_calls: int = 0
 
 
 @dataclass(frozen=True)
@@ -120,6 +128,9 @@ class ModelRouter:
                         trips=old.trips if old else 0,
                         last_at=old.last_at if old else 0.0,
                         retry=_normalized_profile_retry(item.get("retry")),
+                        rate_per_second=int(item.get("ratePerSecond", 0) or 0),
+                        rate_per_minute=int(item.get("ratePerMinute", 0) or 0),
+                        context_window_k=int(item.get("contextWindowK", 0) or 0),
                     )
                 )
             self._providers = states
@@ -155,6 +166,7 @@ class ModelRouter:
         session_id: str = "",
     ) -> Message:
         bound_id = _bound_profile_id(model)
+        estimated_tokens = _estimate_tokens(messages, tools or [])
         with self._lock:
             head_id = bound_id or self._active_provider_id
             eligible = self._eligible_providers(
@@ -169,10 +181,18 @@ class ModelRouter:
             available = [
                 provider
                 for provider in ordered
-                if provider.enabled and provider.unavailable_until <= now
+                if provider.enabled
+                and provider.unavailable_until <= now
+                and _fits_context(provider, estimated_tokens)
             ]
         if not available:
-            available = ordered[:1]
+            available = [
+                provider
+                for provider in ordered
+                if provider.enabled and _fits_context(provider, estimated_tokens)
+            ][:1]
+        if not available:
+            raise RuntimeError("没有配置能容纳当前上下文窗口")
         last_error: Exception | None = None
         for provider_index, provider in enumerate(available):
             retry_rule = _provider_retry_rule(provider, policy)
@@ -277,6 +297,7 @@ class ModelRouter:
         tools: list[Tool] | None,
         session_id: str,
     ) -> Message:
+        self._wait_for_rate_limit(provider)
         message = provider.client.complete(
             provider.model, messages, tools, session_id=session_id
         )
@@ -285,6 +306,33 @@ class ModelRouter:
             provider.last_error = ""
             provider.fails = 0
         return message
+
+    def _wait_for_rate_limit(self, provider: _ProviderState) -> None:
+        while True:
+            with self._lock:
+                now = self._now()
+                if now - provider.second_window_started >= 1.0:
+                    provider.second_window_started = now
+                    provider.second_calls = 0
+                if now - provider.minute_window_started >= 60.0:
+                    provider.minute_window_started = now
+                    provider.minute_calls = 0
+                waits: list[float] = []
+                if (
+                    provider.rate_per_second > 0
+                    and provider.second_calls >= provider.rate_per_second
+                ):
+                    waits.append(1.0 - (now - provider.second_window_started))
+                if (
+                    provider.rate_per_minute > 0
+                    and provider.minute_calls >= provider.rate_per_minute
+                ):
+                    waits.append(60.0 - (now - provider.minute_window_started))
+                if not waits:
+                    provider.second_calls += 1
+                    provider.minute_calls += 1
+                    return
+            self._sleep(max(0.001, min(waits)))
 
     def _record_failure(
         self, provider: _ProviderState, exc: Exception, policy: _RetryPolicy
@@ -502,3 +550,24 @@ def _can_failover(error: Exception) -> bool:
 
 def _is_hard_failure(error: Exception) -> bool:
     return isinstance(error, ModelCallError) and error.status in {401, 402, 403, 404}
+
+
+def _estimate_tokens(
+    messages: list[Message], tools: list[Tool]
+) -> int:
+    characters = 0
+    for message in messages:
+        characters += len(message.content)
+        characters += len(message.reasoning_content)
+        for call in message.tool_calls:
+            characters += len(call.function.name) + len(call.function.arguments)
+    for tool in tools:
+        characters += len(tool.function.name) + len(tool.function.description)
+        characters += len(json.dumps(tool.function.parameters, ensure_ascii=False))
+    return max(0, int(characters / _CHARS_PER_TOKEN))
+
+
+def _fits_context(provider: _ProviderState, estimated_tokens: int) -> bool:
+    if provider.context_window_k <= 0:
+        return True
+    return estimated_tokens <= provider.context_window_k * 1000

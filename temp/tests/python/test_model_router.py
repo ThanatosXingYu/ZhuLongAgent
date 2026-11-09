@@ -216,3 +216,42 @@ def test_hard_failure_trips_breaker_immediately_and_reset_restores_it() -> None:
     router.reset("a")
     assert router._providers[0].unavailable_until == 0
     assert router.status()["providers"][0]["state"] == "ok"
+
+
+def test_model_router_rate_limit_waits_before_second_call() -> None:
+    clock = [100.0]
+    sleeps: list[float] = []
+
+    def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        clock[0] += seconds
+
+    router = ModelRouter(_config("failover"), sleep=sleep, now=lambda: clock[0])
+    router._providers[0].rate_per_second = 1
+    router._providers[0].rate_per_minute = 0
+    client = FakeClient("ok")
+    router._providers[0].client = client  # type: ignore[assignment]
+
+    assert router.complete("auto", [Message("user", "one")]).content == "ok"
+    assert router.complete("auto", [Message("user", "two")]).content == "ok"
+
+    assert client.calls == 2
+    assert sleeps == [1.0]
+
+
+def test_model_router_skips_profile_that_cannot_hold_context() -> None:
+    router = ModelRouter(_config("failover"), sleep=lambda _seconds: None)
+    small = FakeClient("small")
+    large = FakeClient("large")
+    router._providers[0].client = small  # type: ignore[assignment]
+    router._providers[0].context_window_k = 1
+    router._providers[1].client = large  # type: ignore[assignment]
+    router._providers[1].context_window_k = 1000
+
+    result = router.complete(
+        "auto", [Message("user", "x" * 4000)]
+    )
+
+    assert result.content == "large"
+    assert small.calls == 0
+    assert large.calls == 1
