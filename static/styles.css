@@ -2025,11 +2025,11 @@ dialog.is-page-dialog {
 }
 
 .model-provider-card.is-active-provider .model-provider-star {
-  color: #eab308;
+  color: #fbbf24;
 }
 
 .model-provider-card.is-active-provider .model-provider-star svg {
-  fill: #eab308;
+  fill: #fbbf24;
 }
 
 .model-provider-identity {
