@@ -307,6 +307,7 @@ class OpenAIClient:
                 max_tokens_field=self.max_tokens_field,
                 thinking_type=self.thinking_type,
                 reasoning_effort=self.reasoning_effort,
+                streaming=self.streaming,
             )
         elif self.protocol == "openai-responses":
             payload = _responses_payload(
@@ -315,6 +316,7 @@ class OpenAIClient:
                 selected_tools,
                 max_tokens=self.max_tokens,
                 reasoning_effort=self.reasoning_effort,
+                streaming=self.streaming,
             )
         else:
             payload = _anthropic_payload(
@@ -324,6 +326,7 @@ class OpenAIClient:
                 max_tokens=self.max_tokens,
                 thinking_type=self.thinking_type,
                 reasoning_effort=self.reasoning_effort,
+                streaming=self.streaming,
             )
         request = Request(
             self.endpoint,
@@ -480,10 +483,12 @@ def _chat_payload(
     max_tokens_field: str = "",
     thinking_type: str = "",
     reasoning_effort: str = "",
+    streaming: bool = True,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
         "messages": [message.to_dict() for message in messages],
+        "stream": streaming,
     }
     if tools:
         payload["tools"] = [tool.to_dict() for tool in tools]
@@ -509,6 +514,7 @@ def _responses_payload(
     *,
     max_tokens: int = 0,
     reasoning_effort: str = "",
+    streaming: bool = True,
 ) -> dict[str, Any]:
     instructions = "\n\n".join(
         message.content
@@ -518,6 +524,7 @@ def _responses_payload(
     payload: dict[str, Any] = {
         "model": model,
         "input": _responses_input(messages),
+        "stream": streaming,
     }
     if instructions:
         payload["instructions"] = instructions
@@ -576,6 +583,7 @@ def _anthropic_payload(
     max_tokens: int = 0,
     thinking_type: str = "",
     reasoning_effort: str = "",
+    streaming: bool = True,
 ) -> dict[str, Any]:
     system = "\n\n".join(
         message.content
@@ -586,6 +594,7 @@ def _anthropic_payload(
         "model": model,
         "max_tokens": max_tokens or ANTHROPIC_MAX_TOKENS,
         "messages": _anthropic_messages(messages),
+        "stream": streaming,
     }
     if system:
         payload["system"] = system

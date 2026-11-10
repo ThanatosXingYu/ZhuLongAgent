@@ -237,3 +237,40 @@ def test_fetch_models_uses_anthropic_auth_headers(
 
     assert models == ["claude-demo"]
     assert _headers(captured[0])["x-api-key"] == "secret"
+
+
+@pytest.mark.parametrize(
+    ("protocol", "response"),
+    [
+        (
+            "openai-chat",
+            {"choices": [{"message": {"role": "assistant", "content": "ok"}}]},
+        ),
+        (
+            "openai-responses",
+            {"output": [{"type": "message", "content": [{"type": "output_text", "text": "ok"}]}]},
+        ),
+        ("anthropic", {"content": [{"type": "text", "text": "ok"}]}),
+    ],
+)
+def test_streaming_flag_is_forwarded_for_every_protocol(
+    monkeypatch: pytest.MonkeyPatch,
+    protocol: str,
+    response: dict[str, Any],
+) -> None:
+    captured: list[Request] = []
+
+    def open_request(request: Request, **_kwargs: Any) -> FakeResponse:
+        captured.append(request)
+        return FakeResponse(response)
+
+    monkeypatch.setattr(model_module, "urlopen", open_request)
+    OpenAIClient(
+        "https://provider.example/v1",
+        "secret",
+        protocol=protocol,
+        streaming=False,
+    ).complete("demo", [Message("user", "hello")])
+
+    payload = json.loads(captured[0].data or b"{}")
+    assert payload["stream"] is False
