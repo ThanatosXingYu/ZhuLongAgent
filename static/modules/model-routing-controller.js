@@ -342,6 +342,24 @@ export function createModelRoutingController({
     return "";
   }
 
+  const MAX_TOKENS_FIELD_HINTS = {
+    "openai-chat":
+      "上限发哪个键。max_tokens 是默认，绝大多数兼容网关只认它；OpenAI 官方推理模型（o 系列 / GPT-5）反过来只认 max_completion_tokens，收到 max_tokens 会直接报 unsupported_parameter。",
+    anthropic: "仅 openai 格式可选。Anthropic 的字段名固定为 max_tokens。",
+    "openai-responses": "仅 openai 格式可选。Responses API 的字段名固定为 max_output_tokens。",
+  };
+
+  function updateMaxTokensFieldState() {
+    const protocol = els.modelSheetProtocol.value;
+    if (els.modelSheetMaxTokensFieldHint) {
+      els.modelSheetMaxTokensFieldHint.textContent =
+        MAX_TOKENS_FIELD_HINTS[protocol] || MAX_TOKENS_FIELD_HINTS["openai-chat"];
+    }
+    if (els.modelSheetMaxTokensField) {
+      els.modelSheetMaxTokensField.disabled = protocol !== "openai-chat";
+    }
+  }
+
   function resetProfileSheet(profile = null) {
     editingProfileId = profile?.id || "";
     els.modelProviderSheetTitle.textContent = profile ? `编辑：${profile.name || profile.id}` : "新建模型配置";
@@ -355,6 +373,7 @@ export function createModelRoutingController({
     if (saveIcon) saveIcon.setAttribute("data-lucide", profile ? "save" : "plus");
     els.modelSheetName.value = profile?.name || "";
     els.modelSheetProtocol.value = profile?.protocol || "anthropic";
+    updateMaxTokensFieldState();
     els.modelSheetBaseUrl.value = profile?.baseUrl || "";
     els.modelSheetModel.value = profile?.model || "";
     els.modelSheetApiKey.value = "";
@@ -691,11 +710,7 @@ export function createModelRoutingController({
     els.modelProviderSheet.addEventListener("close", () => {
       editingProfileId = "";
     });
-    els.modelSheetProtocol.addEventListener("change", () => {
-      if (els.modelSheetMaxTokensField) {
-        els.modelSheetMaxTokensField.disabled = els.modelSheetProtocol.value !== "openai-chat";
-      }
-    });
+    els.modelSheetProtocol.addEventListener("change", updateMaxTokensFieldState);
     els.openModelPool.addEventListener("click", () => {
       renderPoolChain();
       setSheetStatus("");

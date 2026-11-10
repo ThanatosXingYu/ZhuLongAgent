@@ -193,6 +193,7 @@ import {
     modelSheetPriority: $("model-sheet-priority"),
     modelSheetMaxTokens: $("model-sheet-max-tokens"),
     modelSheetMaxTokensField: $("model-sheet-max-tokens-field"),
+    modelSheetMaxTokensFieldHint: $("model-sheet-max-tokens-field-hint"),
     modelSheetThinkingType: $("model-sheet-thinking-type"),
     modelSheetReasoningEffort: $("model-sheet-reasoning-effort"),
     modelSheetStreaming: $("model-sheet-streaming"),

@@ -903,7 +903,7 @@
           <input id="model-sheet-max-tokens" type="number" min="0" max="10000000" step="1" value="0" placeholder="0">
         </div>
         <div class="model-sheet-card-row is-bordered">
-          <span><strong>上限字段名</strong><small>仅 openai 格式可选。Anthropic 的字段名固定为 max_tokens。Responses API 的字段名固定为 max_output_tokens。</small></span>
+          <span><strong>上限字段名</strong><small id="model-sheet-max-tokens-field-hint">上限发哪个键。max_tokens 是默认，绝大多数兼容网关只认它；OpenAI 官方推理模型（o 系列 / GPT-5）反过来只认 max_completion_tokens，收到 max_tokens 会直接报 unsupported_parameter。</small></span>
           <span class="select-wrap model-sheet-select-compact">
             <select id="model-sheet-max-tokens-field">
               <option value="">max_tokens（默认）</option>
