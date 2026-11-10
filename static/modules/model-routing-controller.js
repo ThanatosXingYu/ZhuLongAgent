@@ -56,7 +56,7 @@ export function createModelRoutingController({
   function healthOf(profile) {
     const member = memberById(profile.id);
     if (!profile.apiKeyConfigured) {
-      return { label: "未配置 Key", tone: "warning", hint: "需要填写 API Key 后才能调用" };
+      return { label: "未配置 Key", tone: "muted", hint: "未填 API Key，无法调用" };
     }
     if (member && member.state === "tripped") {
       const seconds = Number(member.cooldown_secs || 0);
@@ -359,7 +359,7 @@ export function createModelRoutingController({
     els.modelSheetModel.value = profile?.model || "";
     els.modelSheetApiKey.value = "";
     els.modelSheetApiKey.placeholder = profile?.apiKeyConfigured
-      ? `当前 Key：${profile.apiKeyMasked || "已配置"}（留空保持）`
+      ? `已设置（${profile.apiKeyMasked || "已配置"}），留空保持不变`
       : "sk-…";
     if (els.modelSheetProxy) els.modelSheetProxy.value = profile?.proxy || "";
     if (els.modelSheetSessionHeader) els.modelSheetSessionHeader.value = profile?.sessionHeaderKey || "";
