@@ -160,7 +160,7 @@
 .model-provider-card-actions .model-provider-activate:disabled {
   color: var(--text);
   background: #fff;
-  opacity: 1;
+  opacity: 0.5;
 }
 
 .model-provider-card-actions .model-provider-remove {
