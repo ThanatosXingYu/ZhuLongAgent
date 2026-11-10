@@ -2069,10 +2069,10 @@ dialog.is-page-dialog {
   white-space: nowrap;
 }
 
-.model-health.success { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
-.model-health.warning { color: #92400e; background: #fffbeb; border-color: #fde68a; }
-.model-health.error { color: #991b1b; background: #fef2f2; border-color: #fecaca; }
-.model-health.muted { color: var(--text-faint); background: #f4f4f5; }
+.model-health.success { color: #059669; background: transparent; border-color: rgb(16 185 129 / 50%); }
+.model-health.warning { color: #d97706; background: transparent; border-color: rgb(245 158 11 / 50%); }
+.model-health.error { color: #dc2626; background: transparent; border-color: rgb(239 68 68 / 50%); }
+.model-health.muted { color: var(--text-muted); background: transparent; border-color: rgb(113 113 122 / 40%); }
 
 .model-provider-card-details {
   min-width: 0;
