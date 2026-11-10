@@ -212,8 +212,6 @@ import {
     modelPoolParticipantCountSheet: $("model-pool-participant-count-sheet"),
     modelPoolChain: $("model-pool-chain"),
     modelPoolRecoverAll: $("model-pool-recover-all"),
-    modelPoolSheetStatus: $("model-pool-sheet-status"),
-    saveModelPool: $("save-model-pool"),
     modelRetryConnectAttempts: $("model-retry-connect-attempts"),
     modelRetryConnectInterval: $("model-retry-connect-interval"),
     modelRetryEmptyAttempts: $("model-retry-empty-attempts"),

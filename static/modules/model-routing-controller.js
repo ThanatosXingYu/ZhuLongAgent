@@ -21,9 +21,8 @@ export function createModelRoutingController({
   }
 
   function setSheetStatus(message, kind = "") {
-    if (!els.modelPoolSheetStatus) return;
-    els.modelPoolSheetStatus.textContent = message;
-    els.modelPoolSheetStatus.className = `settings-status${kind ? ` ${kind}` : ""}`;
+    if (!message) return;
+    showToast(message, kind === "error" ? "error" : "success");
   }
 
   function setTab(tab) {
