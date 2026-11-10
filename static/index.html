@@ -832,7 +832,7 @@
           </span>
         </label>
       </div>
-      <div class="model-sheet-field">
+      <div class="model-sheet-field model-sheet-model-field">
         <span>模型</span>
         <div class="model-sheet-inline">
           <input id="model-sheet-model" class="is-mono" type="text" maxlength="256" placeholder="claude-opus-4-8">
@@ -840,8 +840,8 @@
             <i data-lucide="refresh-cw" aria-hidden="true"></i>
           </button>
         </div>
+        <div id="model-sheet-models" class="model-sheet-models" hidden></div>
       </div>
-      <div id="model-sheet-models" class="model-sheet-models" hidden></div>
       <label class="model-sheet-field">
         <span>Base URL（可选）</span>
         <input id="model-sheet-base-url" class="is-mono" type="url" placeholder="https://api.openai.com/v1">

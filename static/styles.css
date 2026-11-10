@@ -2344,10 +2344,20 @@ dialog.model-pool-sheet::backdrop {
   margin-bottom: 0;
 }
 
+.model-sheet-model-field {
+  position: relative;
+}
+
 .model-sheet-models {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 5;
+  width: 288px;
   max-height: 288px;
   display: grid;
-  overflow: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 4px;
   background: #fff;
   border: 1px solid var(--line);
