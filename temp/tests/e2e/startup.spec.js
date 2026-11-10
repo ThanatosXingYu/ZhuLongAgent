@@ -453,6 +453,19 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
   await page.locator("#add-model-provider").click();
   const sheet = page.locator("#model-provider-sheet");
   await expect(sheet).toBeVisible();
+  const sheetGeometry = await sheet.evaluate((node) => {
+    const rect = node.getBoundingClientRect();
+    const field = node.querySelector(".model-sheet-field").getBoundingClientRect();
+    const footer = node.querySelector(".model-sheet-footer").getBoundingClientRect();
+    return {
+      width: Math.round(rect.width),
+      fieldHeight: Math.round(field.height),
+      footerHeight: Math.round(footer.height),
+    };
+  });
+  expect(sheetGeometry.width).toBe(576);
+  expect(sheetGeometry.fieldHeight).toBe(54);
+  expect(sheetGeometry.footerHeight).toBe(57);
   await page.locator("#model-sheet-name").fill("Provider A");
   await page.locator("#model-sheet-base-url").fill("https://a.example/v1");
   await page.locator("#model-sheet-model").fill("model-a");
