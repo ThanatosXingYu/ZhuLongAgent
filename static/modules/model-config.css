@@ -37,12 +37,20 @@
 }
 
 .model-routing-tabs button {
+  height: 25px;
   min-height: 25px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 2px 6px;
   border-radius: 8px;
+  border: 0;
   font-size: 14px;
   font-weight: 500;
 }
+
+.model-routing-tabs button:first-child { min-width: 70px; }
+.model-routing-tabs button:last-child { min-width: 84px; }
 
 .model-routing-tabs {
   gap: 0;
