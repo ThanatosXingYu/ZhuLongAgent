@@ -1913,7 +1913,7 @@ dialog.is-page-dialog {
   width: var(--routed-page-track);
   margin: 0 auto 32px;
   display: grid;
-  gap: 16px;
+  gap: 10px;
 }
 
 .model-routing-tabs {
