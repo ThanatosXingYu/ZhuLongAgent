@@ -1987,8 +1987,8 @@ dialog.is-page-dialog {
 }
 
 .model-provider-card:hover {
-  border-color: #a1a1aa;
-  box-shadow: 0 2px 8px rgba(24, 24, 27, 0.05);
+  border-color: rgb(9 9 11 / 30%);
+  box-shadow: none;
 }
 
 .model-provider-card:focus-visible {
@@ -1997,8 +1997,8 @@ dialog.is-page-dialog {
 }
 
 .model-provider-card.is-active-provider {
-  background: #fffdf5;
-  border-color: #f0c96a;
+  background: rgb(251 191 36 / 5%);
+  border-color: rgb(251 191 36 / 50%);
 }
 
 .model-provider-card.is-disabled {
