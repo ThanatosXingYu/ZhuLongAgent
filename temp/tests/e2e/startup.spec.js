@@ -531,18 +531,21 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
     const copy = document.querySelector(".model-routing-header-copy").getBoundingClientRect();
     const shell = document.querySelector(".model-routing-shell").getBoundingClientRect();
     const page = document.querySelector("#model-routing-page").getBoundingClientRect();
+    const body = document.querySelector(".model-routing-page-body");
     const contentWidth = Number.parseFloat(
       getComputedStyle(document.documentElement).getPropertyValue("--content-width"),
     );
-    const expectedWidth = Math.min(contentWidth, page.width - 48);
+    const expectedWidth = Math.min(contentWidth, body.clientWidth - 48);
     return {
       leftDelta: Math.abs(copy.left - shell.left),
       trackWidthDelta: Math.abs(shell.width - expectedWidth),
+      shellWithinPage: shell.left >= page.left - 1 && shell.right <= page.right + 1,
       overflow: document.documentElement.scrollWidth - window.innerWidth,
     };
   });
   expect(routingGeometry.leftDelta).toBeLessThanOrEqual(1);
   expect(routingGeometry.trackWidthDelta).toBeLessThanOrEqual(1);
+  expect(routingGeometry.shellWithinPage).toBe(true);
   expect(routingGeometry.overflow).toBeLessThanOrEqual(1);
 
   await page.locator("#show-exercise-view").click();
