@@ -2139,7 +2139,7 @@ dialog.is-page-dialog {
 
 .model-settings-card-heading {
   display: grid;
-  gap: 4px;
+  gap: 2px;
 }
 
 .model-settings-card-heading h3 {
