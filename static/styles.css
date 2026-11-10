@@ -2460,14 +2460,19 @@ dialog.model-pool-sheet::backdrop {
 
 .model-sheet-section-heading h3 {
   margin: 0;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .model-sheet-section-heading p {
   margin: 0;
   color: var(--text-faint);
   font-size: 10px;
+}
+
+.model-sheet-section-heading .button svg {
+  width: 14px;
+  height: 14px;
 }
 
 .model-pool-chain {
