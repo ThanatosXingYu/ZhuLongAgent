@@ -3,6 +3,13 @@
 
 .model-routing-page {
   --model-track: 1120px;
+  font-size: 14px;
+}
+
+.model-routing-page .model-retry-layout,
+.model-routing-page .model-settings-card,
+.model-routing-page .model-setting-row {
+  font-size: 14px;
 }
 
 .model-routing-page-header {
@@ -29,10 +36,15 @@
 
 .model-routing-tabs button {
   min-height: 25px;
-  padding: 0 10px;
+  padding: 2px 6px;
   border-radius: 8px;
   font-size: 14px;
   font-weight: 500;
+}
+
+.model-routing-tabs {
+  gap: 0;
+  align-items: center;
 }
 
 /* The reference page shows no standalone status line above the grids. */
@@ -56,6 +68,7 @@
   gap: 8px;
   padding: 16px;
   border-radius: 14px;
+  font-size: 14px;
 }
 
 .model-provider-card.is-active-provider {
@@ -64,16 +77,96 @@
 }
 
 .model-provider-card-top {
-  grid-template-columns: 16px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr);
   gap: 8px;
 }
 
-.model-provider-card-details { padding-left: 24px; font-size: 11px; }
+.model-provider-star,
+.model-provider-star svg {
+  width: 16px;
+  height: 16px;
+}
+
+.model-provider-card-top,
+.model-provider-identity {
+  gap: 0;
+}
+
+.model-provider-identity {
+  line-height: 1;
+}
+
+.model-provider-name-row {
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
+  line-height: 20px;
+}
+
+.model-provider-identity code {
+  height: 16px;
+  margin-top: 4px;
+  line-height: 16px;
+}
+
+.model-provider-name-row strong {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-provider-identity code {
+  font-size: 12px;
+}
+
+.model-protocol-badge {
+  min-height: 20px;
+  padding: 2px 8px;
+  border-radius: 26px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-health {
+  margin-left: auto;
+  min-height: 20px;
+  padding: 2px 8px;
+  border-radius: 26px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-provider-card-details { padding-left: 24px; font-size: 12px; }
 .model-provider-card-actions { padding-left: 24px; gap: 8px; }
 
 .model-provider-card-actions .model-provider-activate {
   flex: 1 1 auto;
   min-height: 28px;
+  border-radius: 8px;
+  font-size: 12.8px;
+}
+
+.model-provider-card-actions .model-provider-activate:disabled {
+  color: var(--text);
+  background: #fff;
+  opacity: 1;
+}
+
+.model-provider-card-actions .model-provider-remove {
+  width: 32px;
+  min-height: 32px;
+  flex: 0 0 32px;
+  padding: 0;
+  border-radius: 10px;
+}
+
+.model-provider-card-actions .model-provider-remove svg {
+  width: 16px;
+  height: 16px;
+}
+
+.model-routing-header-actions .button {
+  min-height: 28px;
+  padding: 0 10px;
   border-radius: 8px;
   font-size: 12.8px;
 }
@@ -88,4 +181,254 @@
   .model-provider-list { grid-template-columns: 1fr; }
   .model-routing-page-header { padding: 14px 12px; }
   .model-routing-shell { width: calc(100% - 24px); max-width: none; }
+}
+
+/* Model profile sheet: same field rhythm and sheet geometry as BRTEX. */
+.model-sheet-field input,
+.model-sheet-field select {
+  min-height: 32px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.model-sheet-field,
+.model-sheet-field > span:first-child {
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-sheet-field {
+  gap: 8px;
+}
+
+.model-sheet-field-hint,
+.model-sheet-test-result {
+  font-size: 12px;
+}
+
+.model-sheet-header h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 16px;
+  font-weight: 500;
+}
+
+.model-sheet-active-badge {
+  padding: 2px 8px;
+  color: #d97706;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.model-sheet-header p:last-child {
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.model-sheet-body {
+  gap: 16px;
+  padding: 0 16px 16px;
+}
+
+.model-sheet-footer {
+  gap: 8px;
+  padding: 12px 20px;
+}
+
+.model-sheet-footer .button {
+  min-height: 32px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.model-sheet-footer #model-sheet-test {
+  min-width: 100px;
+}
+
+.model-sheet-footer #model-sheet-save {
+  min-width: 66px;
+}
+
+.model-sheet-footer #model-sheet-save {
+  flex: 1 1 auto;
+}
+
+.model-sheet-retry-card {
+  display: grid;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.model-sheet-retry-heading {
+  display: grid;
+  gap: 2px;
+}
+
+.model-sheet-retry-heading > strong,
+.model-sheet-retry-title > strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-sheet-retry-heading > p,
+.model-sheet-retry-copy > p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.model-sheet-retry-layer {
+  display: grid;
+  gap: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.model-sheet-retry-layer:first-of-type {
+  border-top: 0;
+}
+
+.model-sheet-retry-title {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.model-sheet-retry-title > small {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-sheet-retry-copy {
+  display: grid;
+  gap: 2px;
+}
+
+.model-sheet-retry-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.model-sheet-retry-controls > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-sheet-retry-controls input {
+  width: 112px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+/* Retry policy: three-column card grid measured from BRTEX. */
+.model-retry-intro {
+  padding: 12px;
+  color: var(--text-muted);
+  background: #fafafa;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.model-retry-layout {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.model-settings-card {
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+}
+
+.model-settings-card-heading h3 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-settings-card-heading h3 > span {
+  font-weight: 400;
+}
+
+.model-settings-card-heading h3 > span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.model-settings-card-heading p {
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.model-setting-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.model-setting-label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-setting-row input {
+  width: 112px;
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.model-setting-row small {
+  flex-basis: 100%;
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-retry-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.model-retry-actions .button {
+  min-height: 32px;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+@media (max-width: 1023px) {
+  .model-retry-layout {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 767px) {
+  .model-retry-layout {
+    grid-template-columns: 1fr;
+  }
 }

@@ -172,9 +172,11 @@ import {
     modelPoolHeaderBadge: $("model-pool-header-badge"),
     modelRoutingStatus: $("model-routing-status"),
     saveModelRouting: $("save-model-routing"),
+    resetModelRouting: $("reset-model-routing"),
     modelProviderSheet: $("model-provider-sheet"),
     modelProviderSheetTitle: $("model-provider-sheet-title"),
     modelProviderSheetDescription: $("model-provider-sheet-description"),
+    modelSheetActiveBadge: $("model-sheet-active-badge"),
     closeModelProviderSheet: $("close-model-provider-sheet"),
     modelSheetName: $("model-sheet-name"),
     modelSheetProtocol: $("model-sheet-protocol"),
@@ -208,8 +210,11 @@ import {
     closeModelPoolSheet: $("close-model-pool-sheet"),
     modelPoolEnabledSheet: $("model-pool-enabled-sheet"),
     modelPoolBindFallbackSheet: $("model-pool-bind-fallback-sheet"),
+    modelPoolBindFallbackRow: $("model-pool-bind-fallback-row"),
     modelPoolParticipantCountSheet: $("model-pool-participant-count-sheet"),
     modelPoolChain: $("model-pool-chain"),
+    modelPoolChainSection: $("model-pool-chain-section"),
+    modelPoolNote: $("model-pool-note"),
     modelPoolRecoverAll: $("model-pool-recover-all"),
     modelRetryConnectAttempts: $("model-retry-connect-attempts"),
     modelRetryConnectInterval: $("model-retry-connect-interval"),
@@ -4253,7 +4258,9 @@ import {
       $("close-model-routing").addEventListener("click", closeModelRoutingPage);
       ensureModelRoutingController().bind();
       document.addEventListener("keydown", (event) => {
-        if (event.key === "Escape" && !els.modelRoutingPage.hidden) closeModelRoutingPage();
+        if (event.key !== "Escape" || els.modelRoutingPage.hidden) return;
+        if (document.querySelector("#model-provider-sheet[open], #model-pool-sheet[open]")) return;
+        closeModelRoutingPage();
       });
     });
   }

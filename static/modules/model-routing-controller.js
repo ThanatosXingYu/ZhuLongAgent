@@ -97,7 +97,6 @@ export function createModelRoutingController({
   function renderProfiles() {
     const fragment = document.createDocumentFragment();
     profiles.forEach((profile) => {
-      const health = healthOf(profile);
       const card = createElement(
         "article",
         `model-provider-card${isActiveProfile(profile) ? " is-active-provider" : ""}`,
@@ -109,19 +108,21 @@ export function createModelRoutingController({
       const top = createElement("div", "model-provider-card-top");
       const star = createElement("span", "model-provider-star");
       star.append(icon(isActiveProfile(profile) ? "star" : "circle"));
+      const health = healthOf(profile);
+      const badge = createElement("span", `model-health ${health.tone}`, health.label);
+      badge.title = health.hint;
       const identity = createElement("span", "model-provider-identity");
       const nameRow = createElement("span", "model-provider-name-row");
       nameRow.append(
         createElement("strong", "", profile.name || profile.id),
         createElement("span", "model-protocol-badge", protocolLabel(profile.protocol)),
+        badge,
       );
       identity.append(
         nameRow,
         createElement("code", "", profile.model || "未填写模型"),
       );
-      const badge = createElement("span", `model-health ${health.tone}`, health.label);
-      badge.title = health.hint;
-      top.append(star, identity, badge);
+      top.append(star, identity);
 
       const details = createElement("div", "model-provider-card-details");
       if (profile.apiKeyMasked) details.append(createElement("span", "", profile.apiKeyMasked));
@@ -130,7 +131,13 @@ export function createModelRoutingController({
       );
       if (profile.proxy) details.append(createElement("span", "truncate", `代理 ${profile.proxy}`));
       if (profile.reasoningEffort) {
-        details.append(createElement("span", "", `思考 ${profile.reasoningEffort}`));
+        details.append(
+          createElement(
+            "span",
+            "",
+            `思考 ${profile.reasoningEffort === "off" ? "关" : profile.reasoningEffort}`,
+          ),
+        );
       }
       if (pool.enabled && !isActiveProfile(profile)) {
         details.append(
@@ -262,6 +269,9 @@ export function createModelRoutingController({
     if (els.modelPoolEnabled) els.modelPoolEnabled.checked = pool.enabled;
     if (els.modelPoolEnabledSheet) els.modelPoolEnabledSheet.checked = pool.enabled;
     if (els.modelPoolBindFallbackSheet) els.modelPoolBindFallbackSheet.checked = pool.bind_fallback;
+    if (els.modelPoolBindFallbackRow) els.modelPoolBindFallbackRow.hidden = !pool.enabled;
+    if (els.modelPoolChainSection) els.modelPoolChainSection.hidden = !pool.enabled;
+    if (els.modelPoolNote) els.modelPoolNote.hidden = !pool.enabled;
     if (els.modelPoolState) els.modelPoolState.textContent = pool.enabled ? "已开启" : "已关闭";
     if (els.modelPoolHeaderBadge) els.modelPoolHeaderBadge.hidden = !pool.enabled;
     const participants = routingOrder().length;
@@ -302,11 +312,14 @@ export function createModelRoutingController({
       contextWindowK: Number(els.modelSheetContextWindow?.value || 0),
       priority: Number(els.modelSheetPriority?.value || 0),
       maxTokens: Number(els.modelSheetMaxTokens?.value || 0),
-      maxTokensField: els.modelSheetMaxTokensField?.value || "",
+      maxTokensField:
+        els.modelSheetProtocol.value === "openai-chat"
+          ? els.modelSheetMaxTokensField?.value || ""
+          : "",
       thinkingType: els.modelSheetThinkingType?.value || "",
       reasoningEffort: els.modelSheetReasoningEffort?.value || "",
       streaming: els.modelSheetStreaming?.checked !== false,
-      poolExclude: els.modelSheetPool.checked === false,
+      poolExclude: Boolean(els.modelSheetPool.checked),
       retry: {
         connect: retryRuleFrom("connect"),
         empty: retryRuleFrom("empty"),
@@ -338,8 +351,13 @@ export function createModelRoutingController({
     editingProfileId = profile?.id || "";
     els.modelProviderSheetTitle.textContent = profile ? `编辑：${profile.name || profile.id}` : "新建模型配置";
     els.modelProviderSheetDescription.textContent = profile
-      ? "修改后保存；留空 API Key 会保留当前 Key。"
+      ? "修改后点击保存；激活配置保存后对全部 Agent 立即生效。"
       : "新建后不会自动激活，请在卡片上「设为激活」。";
+    if (els.modelSheetActiveBadge) els.modelSheetActiveBadge.hidden = !isActiveProfile(profile);
+    const saveLabel = els.modelSheetSave.querySelector("span");
+    if (saveLabel) saveLabel.textContent = profile ? "保存" : "新建";
+    const saveIcon = els.modelSheetSave.querySelector("[data-lucide]");
+    if (saveIcon) saveIcon.setAttribute("data-lucide", profile ? "save" : "plus");
     els.modelSheetName.value = profile?.name || "";
     els.modelSheetProtocol.value = profile?.protocol || "openai-chat";
     els.modelSheetBaseUrl.value = profile?.baseUrl || "";
@@ -359,8 +377,8 @@ export function createModelRoutingController({
     if (els.modelSheetThinkingType) els.modelSheetThinkingType.value = profile?.thinkingType || "";
     if (els.modelSheetReasoningEffort) els.modelSheetReasoningEffort.value = profile?.reasoningEffort || "";
     if (els.modelSheetStreaming) els.modelSheetStreaming.checked = profile?.streaming !== false;
-    els.modelSheetPool.checked = profile ? !profile.poolExclude : true;
-    els.modelSheetPool.disabled = isActiveProfile(profile);
+    els.modelSheetPool.checked = Boolean(profile?.poolExclude);
+    els.modelSheetPool.disabled = false;
     setRetryRule("connect", profile?.retry?.connect);
     setRetryRule("empty", profile?.retry?.empty);
     setRetryRule("stream", profile?.retry?.stream);
@@ -393,6 +411,7 @@ export function createModelRoutingController({
 
   async function saveProfile() {
     const values = formValues();
+    const isEditing = Boolean(editingProfileId);
     const validation = validate(values);
     if (validation) {
       els.modelSheetTestResult.className = "model-sheet-test-result is-error";
@@ -412,8 +431,8 @@ export function createModelRoutingController({
         onConfigLoaded(result.config);
         await refresh({ silent: true });
         closeProfileSheet();
-        setStatus(editingProfileId ? "模型配置已保存" : "模型配置已创建", "success");
-        showToast(editingProfileId ? "模型配置已保存" : "模型配置已创建", "success");
+        setStatus(isEditing ? "模型配置已保存" : "模型配置已创建", "success");
+        showToast(isEditing ? "模型配置已保存" : "模型配置已创建", "success");
       } catch (error) {
         els.modelSheetTestResult.className = "model-sheet-test-result is-error";
         els.modelSheetTestResult.textContent = `保存失败：${error.message}`;
@@ -624,6 +643,13 @@ export function createModelRoutingController({
     });
   }
 
+  function resetRetryPolicy() {
+    const zero = { attempts: 0, interval_ms: 0 };
+    for (const layer of ["connect", "empty", "stream", "breaker", "intent"]) {
+      setRetryRule(layer, zero);
+    }
+  }
+
   async function refresh({ silent = false } = {}) {
     try {
       const [profileResult, poolResult, retryResult] = await Promise.all([
@@ -689,6 +715,7 @@ export function createModelRoutingController({
     });
     els.modelPoolRecoverAll?.addEventListener("click", () => void resetPool(""));
     els.saveModelRouting.addEventListener("click", () => void saveRetryPolicy());
+    els.resetModelRouting?.addEventListener("click", resetRetryPolicy);
     els.modelRoutingPage.querySelectorAll("[data-model-tab]").forEach((button) => {
       button.addEventListener("click", () => setTab(button.dataset.modelTab || "providers"));
     });

@@ -462,17 +462,23 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
   await expect(page.locator("#model-sheet-test-result")).toContainText("连接成功");
   await page.locator("#model-sheet-save").click();
   await expect(sheet).toBeHidden();
+  await expect(routingPage).toBeVisible();
   await expect(page.locator(".model-provider-card")).toHaveCount(1);
   await expect(page.locator(".model-provider-card").first()).toHaveClass(/is-active-provider/);
   await expect(page.locator("#model-active-provider-name")).toHaveText("Provider A");
 
+  await page.locator("#add-model-provider").click();
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(sheet).toBeHidden();
+  await expect(routingPage).toBeVisible();
   await page.locator("#add-model-provider").click();
   await page.locator("#model-sheet-name").fill("Provider B");
   await page.locator("#model-sheet-base-url").fill("https://b.example/v1");
   await page.locator("#model-sheet-model").fill("model-b");
   await page.locator("#model-sheet-protocol").selectOption("openai-responses");
   await page.locator("#model-sheet-priority").fill("10");
-  await page.locator("#model-sheet-pool").uncheck();
+  await page.locator("#model-sheet-pool").check();
   await page.locator("#model-sheet-save").click();
   await expect(page.locator(".model-provider-card")).toHaveCount(2);
   await expect(page.locator("#model-total-provider-count")).toHaveText("共 2 个");
@@ -497,8 +503,12 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
 
   await page.locator("#open-model-pool").click();
   await expect(page.locator("#model-pool-sheet")).toBeVisible();
+  await expect(page.locator("#model-pool-bind-fallback-row")).toBeHidden();
+  await expect(page.locator("#model-pool-chain-section")).toBeHidden();
   await page.locator("#model-pool-enabled-sheet").check();
   await expect.poll(() => requests.some((request) => request.method === "PUT" && request.path === "/api/config" && request.body?.modelPoolEnabled === true)).toBe(true);
+  await expect(page.locator("#model-pool-bind-fallback-row")).toBeVisible();
+  await expect(page.locator("#model-pool-chain-section")).toBeVisible();
   await page.locator("#model-pool-bind-fallback-sheet").check();
   await expect.poll(() => requests.some((request) => request.method === "PUT" && request.path === "/api/config" && request.body?.modelPoolBindFallback === true)).toBe(true);
   await expect(page.locator("#model-pool-state")).toHaveText("已开启");
