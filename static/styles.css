@@ -1891,15 +1891,15 @@ dialog.is-page-dialog {
 .model-header-badge {
   display: inline-flex;
   align-items: center;
-  min-height: 18px;
-  margin-left: 2px;
-  padding: 0 5px;
-  color: #166534;
-  background: #f0fdf4;
-  border: 1px solid #bbf7d0;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 600;
+  min-height: 20px;
+  margin-left: 4px;
+  padding: 0 8px;
+  color: #059669;
+  background: transparent;
+  border: 1px solid rgb(16 185 129 / 50%);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .model-routing-page-body {
@@ -2381,13 +2381,13 @@ dialog.model-pool-sheet::backdrop {
 }
 
 .model-sheet-models {
-  max-height: 180px;
+  max-height: 288px;
   display: grid;
   overflow: auto;
   padding: 4px;
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   box-shadow: 0 8px 20px rgba(24, 24, 27, 0.08);
 }
 
@@ -2396,14 +2396,14 @@ dialog.model-pool-sheet::backdrop {
 }
 
 .model-sheet-model-option {
-  min-height: 30px;
-  padding: 5px 7px;
+  min-height: 28px;
+  padding: 6px 8px;
   color: var(--text);
   background: transparent;
   border: 0;
-  border-radius: 4px;
+  border-radius: 6px;
   font-family: var(--font-code);
-  font-size: 10px;
+  font-size: 12px;
   text-align: left;
 }
 
