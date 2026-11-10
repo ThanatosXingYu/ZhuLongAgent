@@ -690,18 +690,18 @@
                 <p><strong>不走这层</strong>：其余状态码（400 / 401 / 403 / 404 / 413 / 422 等）都是确定性拒绝，重发也一样失败，直接上抛。</p>
                 <p>原样重发同一个请求。流一旦开始（已经拿到 200），中途断开就不归这层管了。</p>
               </div>
-              <div class="model-retry-rule">
-                <label class="model-setting-row" for="model-retry-connect-attempts">
-                  <span class="model-setting-label">重试次数</span>
+              <div class="model-retry-controls">
+                <div class="model-retry-control">
+                  <label for="model-retry-connect-attempts">重试次数</label>
                   <input id="model-retry-connect-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 3">
-                  <small>0.5s→1s→2s 指数（封顶 8s）</small>
-                </label>
-                <label class="model-setting-row" for="model-retry-connect-interval">
-                  <span class="model-setting-label">间隔 ms</span>
+                </div>
+                <div class="model-retry-control">
+                  <label for="model-retry-connect-interval">间隔 ms</label>
                   <input id="model-retry-connect-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
-                  <small>留空 = 用默认；-1 = 一次都不重试，失败立刻上抛。</small>
-                </label>
+                  <span class="model-retry-default">0.5s→1s→2s 指数（封顶 8s）</span>
+                </div>
               </div>
+              <p class="model-retry-hint">留空 = 用默认；-1 = 一次都不重试，失败立刻上抛。</p>
             </section>
             <section class="model-settings-card">
               <div class="model-settings-card-heading">
@@ -710,18 +710,18 @@
                 <p><strong>不走这层</strong>：因 max_tokens 截断而没有内容的不算（那要靠调高输出上限解决，重发只会再撞一次）。</p>
                 <p>重发整个 prompt，所以在长上下文上比较贵，次数不宜给大。</p>
               </div>
-              <div class="model-retry-rule">
-                <label class="model-setting-row" for="model-retry-empty-attempts">
-                  <span class="model-setting-label">重试次数</span>
+              <div class="model-retry-controls">
+                <div class="model-retry-control">
+                  <label for="model-retry-empty-attempts">重试次数</label>
                   <input id="model-retry-empty-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 2">
-                  <small>0.5s→1s→2s 指数（封顶 8s）</small>
-                </label>
-                <label class="model-setting-row" for="model-retry-empty-interval">
-                  <span class="model-setting-label">间隔 ms</span>
+                </div>
+                <div class="model-retry-control">
+                  <label for="model-retry-empty-interval">间隔 ms</label>
                   <input id="model-retry-empty-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
-                  <small>留空 = 用默认；-1 = 空响应直接原样交出。</small>
-                </label>
+                  <span class="model-retry-default">0.5s→1s→2s 指数（封顶 8s）</span>
+                </div>
               </div>
+              <p class="model-retry-hint">留空 = 用默认；-1 = 空响应直接原样交出。</p>
             </section>
             <section class="model-settings-card">
               <div class="model-settings-card-heading">
@@ -730,18 +730,18 @@
                 <p><strong>不走这层</strong>：额度耗尽（402 / insufficient_quota，交给轮询换配置）、上下文过长（413 / context length，交给压缩）、400 / 401 / 403 / 404 / 422 确定性拒绝，都不重试。</p>
                 <p>在同一个配置上重放同一个请求。因为还没交付任何输出，重放不会重复模型输出或工具执行。默认 10 次、每次固定 10s。</p>
               </div>
-              <div class="model-retry-rule">
-                <label class="model-setting-row" for="model-retry-stream-attempts">
-                  <span class="model-setting-label">重试次数</span>
+              <div class="model-retry-controls">
+                <div class="model-retry-control">
+                  <label for="model-retry-stream-attempts">重试次数</label>
                   <input id="model-retry-stream-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 10">
-                  <small>固定 10s</small>
-                </label>
-                <label class="model-setting-row" for="model-retry-stream-interval">
-                  <span class="model-setting-label">间隔 ms</span>
+                </div>
+                <div class="model-retry-control">
+                  <label for="model-retry-stream-interval">间隔 ms</label>
                   <input id="model-retry-stream-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
-                  <small>留空 = 用默认；-1 = 断流直接交给外层的意图重跑。</small>
-                </label>
+                  <span class="model-retry-default">固定 10s</span>
+                </div>
               </div>
+              <p class="model-retry-hint">留空 = 用默认；-1 = 断流直接交给外层的意图重跑。</p>
             </section>
             <section class="model-settings-card">
               <div class="model-settings-card-heading">
@@ -750,18 +750,18 @@
                 <p><strong>不走这层</strong>：成功一次即清零，所以偶尔抽风的配置不会被慢慢攒到熔断。</p>
                 <p>熔断后进入冷却，冷却期内轮询直接跳过这个配置。状态落库，重启不丢。</p>
               </div>
-              <div class="model-retry-rule">
-                <label class="model-setting-row" for="model-retry-breaker-attempts">
-                  <span class="model-setting-label">连续失败几次熔断</span>
+              <div class="model-retry-controls">
+                <div class="model-retry-control">
+                  <label for="model-retry-breaker-attempts">连续失败几次熔断</label>
                   <input id="model-retry-breaker-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 3">
-                  <small>30s→1min→1min→2min→5min→10min 梯度</small>
-                </label>
-                <label class="model-setting-row" for="model-retry-breaker-interval">
-                  <span class="model-setting-label">间隔 ms</span>
+                </div>
+                <div class="model-retry-control">
+                  <label for="model-retry-breaker-interval">间隔 ms</label>
                   <input id="model-retry-breaker-interval" type="number" min="0" step="1" value="0" placeholder="默认梯度">
-                  <small>留空 = 用默认；-1 = 瞬时失败永不熔断（确定性失败仍然熔断）。</small>
-                </label>
+                  <span class="model-retry-default">30s→1min→1min→2min→5min→10min 梯度</span>
+                </div>
               </div>
+              <p class="model-retry-hint">留空 = 用默认；-1 = 瞬时失败永不熔断（确定性失败仍然熔断）。</p>
             </section>
             <section class="model-settings-card">
               <div class="model-settings-card-heading">
@@ -770,18 +770,18 @@
                 <p><strong>不走这层</strong>：额度耗尽已经由轮询换配置处理，不在这里重跑；任务被暂停 / 终止 / 进入收尾时立即让位，不占用退避时间。</p>
                 <p>整条意图从头再跑一遍。它是最外层，一次重跑意味着里面几层的次数会再乘一遍。</p>
               </div>
-              <div class="model-retry-rule">
-                <label class="model-setting-row" for="model-retry-intent-attempts">
-                  <span class="model-setting-label">重跑次数</span>
+              <div class="model-retry-controls">
+                <div class="model-retry-control">
+                  <label for="model-retry-intent-attempts">重跑次数</label>
                   <input id="model-retry-intent-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 2">
-                  <small>固定 3s</small>
-                </label>
-                <label class="model-setting-row" for="model-retry-intent-interval">
-                  <span class="model-setting-label">间隔 ms</span>
+                </div>
+                <div class="model-retry-control">
+                  <label for="model-retry-intent-interval">间隔 ms</label>
                   <input id="model-retry-intent-interval" type="number" min="0" step="1" value="0" placeholder="默认退避">
-                  <small>留空 = 用默认；-1 = 不重跑，该意图直接判为 blocked。</small>
-                </label>
+                  <span class="model-retry-default">固定 3s</span>
+                </div>
               </div>
+              <p class="model-retry-hint">留空 = 用默认；-1 = 不重跑，该意图直接判为 blocked。</p>
             </section>
           </div>
           <div class="model-retry-actions">

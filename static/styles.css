@@ -2184,38 +2184,6 @@ dialog.is-page-dialog {
   box-shadow: 0 1px 2px rgba(24, 24, 27, 0.07);
 }
 
-.model-setting-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(150px, 220px);
-  align-items: center;
-  gap: 18px;
-  padding-top: 14px;
-  border-top: 1px solid var(--line);
-}
-
-.model-setting-row > span {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.model-setting-row strong {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 560;
-}
-
-.model-setting-row small {
-  color: var(--text-faint);
-  font-size: 10px;
-}
-
-.model-setting-row input {
-  width: 100%;
-  min-height: 34px;
-  padding: 0 9px;
-}
-
 /* Right-side provider and routing sheets */
 dialog.model-provider-sheet,
 dialog.model-pool-sheet {
@@ -3278,10 +3246,6 @@ dialog.model-pool-sheet::backdrop {
   }
   .model-sheet-model-row {
     grid-template-columns: minmax(0, 1fr) auto;
-  }
-  .model-setting-row {
-    grid-template-columns: 1fr;
-    gap: 7px;
   }
   .codex-task-layout {
     grid-template-columns: 1fr;

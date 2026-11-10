@@ -8,7 +8,7 @@
 
 .model-routing-page .model-retry-layout,
 .model-routing-page .model-settings-card,
-.model-routing-page .model-setting-row {
+.model-routing-page .model-retry-controls {
   font-size: 14px;
 }
 
@@ -394,7 +394,7 @@ dialog.model-pool-sheet,
 }
 
 .model-retry-layout {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -428,33 +428,6 @@ dialog.model-pool-sheet,
   line-height: 1.55;
 }
 
-.model-setting-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding-top: 10px;
-}
-
-.model-setting-label {
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
-.model-setting-row input {
-  width: 112px;
-  min-height: 32px;
-  padding: 0 10px;
-  border-radius: 10px;
-  font-size: 14px;
-}
-
-.model-setting-row small {
-  flex-basis: 100%;
-  color: var(--text-muted);
-  font-size: 12px;
-}
-
 .model-retry-actions {
   display: flex;
   gap: 8px;
@@ -467,14 +440,54 @@ dialog.model-pool-sheet,
   font-size: 14px;
 }
 
-@media (max-width: 1023px) {
+@media (min-width: 768px) {
   .model-retry-layout {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@media (max-width: 767px) {
+@media (min-width: 1280px) {
   .model-retry-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+}
+
+/* Retry layer controls: inline knob row matching BRTEX RetryRuleFields. */
+.model-retry-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+}
+
+.model-retry-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-retry-control > label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-retry-control input {
+  width: 112px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 14px;
+}
+
+.model-retry-default {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-retry-hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
