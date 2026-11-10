@@ -1001,24 +1001,22 @@
       </button>
     </header>
     <div class="model-sheet-body">
-      <section class="model-sheet-group">
-        <div class="model-sheet-toggle">
-          <span><strong>启用轮询</strong><small>默认关闭。关闭时始终只用激活配置，失败即失败。</small></span>
-          <label class="switch-row" title="启用模型提供商轮询">
-            <span class="visually-hidden">启用轮询</span>
-            <input id="model-pool-enabled-sheet" type="checkbox" role="switch" checked>
-            <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
-          </label>
-        </div>
-        <div id="model-pool-bind-fallback-row" class="model-sheet-toggle" hidden>
-          <span><strong>指定模型失败时也兜底</strong><small>默认关闭：Agent 或任务指定了某个配置就只用它，失败即失败（不会悄悄换成别的模型）。开启后，指定的配置失败时也会回落到下面的轮询链。</small></span>
-          <label class="switch-row" title="指定模型失败时也兜底">
-            <span class="visually-hidden">指定模型失败时也兜底</span>
-            <input id="model-pool-bind-fallback-sheet" type="checkbox" role="switch">
-            <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
-          </label>
-        </div>
-      </section>
+      <div class="model-sheet-toggle">
+        <span><strong>启用轮询</strong><small>默认关闭。关闭时始终只用激活配置，失败即失败。</small></span>
+        <label class="switch-row" title="启用模型提供商轮询">
+          <span class="visually-hidden">启用轮询</span>
+          <input id="model-pool-enabled-sheet" type="checkbox" role="switch" checked>
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </label>
+      </div>
+      <div id="model-pool-bind-fallback-row" class="model-sheet-toggle" hidden>
+        <span><strong>指定模型失败时也兜底</strong><small>默认关闭：Agent 或任务指定了某个配置就只用它，失败即失败（不会悄悄换成别的模型）。开启后，指定的配置失败时也会回落到下面的轮询链。</small></span>
+        <label class="switch-row" title="指定模型失败时也兜底">
+          <span class="visually-hidden">指定模型失败时也兜底</span>
+          <input id="model-pool-bind-fallback-sheet" type="checkbox" role="switch">
+          <span class="switch-track" aria-hidden="true"><span class="switch-thumb"></span></span>
+        </label>
+      </div>
       <section id="model-pool-chain-section" class="model-pool-chain-section" hidden>
         <div class="model-sheet-section-heading">
           <h3>轮询顺序</h3>

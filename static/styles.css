@@ -2379,25 +2379,14 @@ dialog.model-pool-sheet::backdrop {
   background: #f4f4f5;
 }
 
-.model-sheet-group {
-  display: grid;
-  gap: 0;
-  padding: 2px 12px;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-}
-
 .model-sheet-toggle {
-  min-height: 58px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 18px;
-  padding: 10px 0;
-}
-
-.model-sheet-toggle + .model-sheet-toggle {
-  border-top: 1px solid var(--line);
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
 }
 
 .model-sheet-toggle > span {
