@@ -1,0 +1,81 @@
+/* Model configuration page metrics measured from the local BRTEX reference.
+   Loaded last so the legacy routed-page rules in styles.css cannot override. */
+
+.model-routing-page {
+  --model-track: 1120px;
+}
+
+.model-routing-page-header {
+  min-height: 92px;
+  align-items: flex-start;
+  padding: 20px max(24px, calc((100% - var(--model-track)) / 2));
+}
+
+.model-routing-shell {
+  width: var(--model-track);
+  max-width: calc(100% - 32px);
+  margin: 0 auto 32px;
+  display: grid;
+  gap: 10px;
+}
+
+.model-routing-tabs {
+  height: 32px;
+  min-height: 32px;
+  padding: 3px;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
+.model-routing-tabs button {
+  min-height: 25px;
+  padding: 0 10px;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+}
+
+.model-routing-page .model-provider-list,
+.model-provider-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.model-provider-card {
+  min-height: 140px;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 14px;
+}
+
+.model-provider-card.is-active-provider {
+  background: #fff;
+  border-color: #f0c96a;
+}
+
+.model-provider-card-top {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.model-provider-card-details { padding-left: 24px; font-size: 11px; }
+.model-provider-card-actions { padding-left: 24px; gap: 8px; }
+
+.model-provider-card-actions .model-provider-activate {
+  flex: 1 1 auto;
+  min-height: 28px;
+  border-radius: 8px;
+  font-size: 12.8px;
+}
+
+@media (max-width: 1279px) {
+  .model-routing-page .model-provider-list,
+  .model-provider-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 767px) {
+  .model-routing-page .model-provider-list,
+  .model-provider-list { grid-template-columns: 1fr; }
+  .model-routing-page-header { padding: 14px 12px; }
+  .model-routing-shell { width: calc(100% - 24px); max-width: none; }
+}

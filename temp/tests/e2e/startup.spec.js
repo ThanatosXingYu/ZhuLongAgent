@@ -527,24 +527,28 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
   await expect(page.locator('[data-model-panel="routing"]')).toBeVisible();
   await page.waitForTimeout(100);
 
+  await page.locator('[data-model-tab="providers"]').click();
+  await expect(page.locator('[data-model-panel="providers"]')).toBeVisible();
+  await page.waitForTimeout(100);
+
   const routingGeometry = await page.evaluate(() => {
-    const copy = document.querySelector(".model-routing-header-copy").getBoundingClientRect();
     const shell = document.querySelector(".model-routing-shell").getBoundingClientRect();
     const page = document.querySelector("#model-routing-page").getBoundingClientRect();
-    const body = document.querySelector(".model-routing-page-body");
-    const contentWidth = Number.parseFloat(
-      getComputedStyle(document.documentElement).getPropertyValue("--content-width"),
-    );
-    const expectedWidth = Math.min(contentWidth, body.clientWidth - 48);
+    const card = document.querySelector(".model-provider-card").getBoundingClientRect();
+    const tabs = document.querySelector(".model-routing-tabs").getBoundingClientRect();
     return {
-      leftDelta: Math.abs(copy.left - shell.left),
-      trackWidthDelta: Math.abs(shell.width - expectedWidth),
+      cardWidth: Math.round(card.width),
+      cardHeight: Math.round(card.height),
+      tabsHeight: Math.round(tabs.height),
+      shellWidth: Math.round(shell.width),
       shellWithinPage: shell.left >= page.left - 1 && shell.right <= page.right + 1,
       overflow: document.documentElement.scrollWidth - window.innerWidth,
     };
   });
-  expect(routingGeometry.leftDelta).toBeLessThanOrEqual(1);
-  expect(routingGeometry.trackWidthDelta).toBeLessThanOrEqual(1);
+  expect(Math.abs(routingGeometry.cardWidth - (routingGeometry.shellWidth - 32) / 3)).toBeLessThanOrEqual(1);
+  expect(routingGeometry.cardHeight).toBe(140);
+  expect(routingGeometry.tabsHeight).toBe(32);
+  expect(routingGeometry.shellWidth).toBeGreaterThan(600);
   expect(routingGeometry.shellWithinPage).toBe(true);
   expect(routingGeometry.overflow).toBeLessThanOrEqual(1);
 
