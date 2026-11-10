@@ -364,8 +364,6 @@ export function createModelRoutingController({
     setRetryRule("connect", profile?.retry?.connect);
     setRetryRule("empty", profile?.retry?.empty);
     setRetryRule("stream", profile?.retry?.stream);
-    els.modelSheetDelete.hidden = !profile;
-    els.modelSheetDelete.disabled = isActiveProfile(profile);
     els.modelSheetTestResult.className = "model-sheet-test-result";
     els.modelSheetTestResult.textContent = "";
     els.modelSheetModels.hidden = true;
@@ -423,35 +421,11 @@ export function createModelRoutingController({
     });
   }
 
-  async function deleteProfile() {
-    const profile = profileById(editingProfileId);
-    if (!profile) return;
-    if (isActiveProfile(profile)) {
-      setStatus("当前激活配置不能删除，请先把其它配置设为激活", "error");
-      return;
-    }
-    if (!window.confirm(`删除模型配置「${profile.name || profile.id}」？`)) return;
-    await withButton(els.modelSheetDelete, async () => {
-      try {
-        await request(`/api/llm/profiles/${encodeURIComponent(profile.id)}`, {
-          method: "DELETE",
-        });
-        await refresh({ silent: true });
-        closeProfileSheet();
-        setStatus(`已删除：${profile.name || profile.id}`, "success");
-        showToast("模型配置已删除", "success");
-      } catch (error) {
-        setStatus(`删除失败：${error.message}`, "error");
-      }
-    });
-  }
-
   async function deleteProfileFromCard(profile) {
     if (isActiveProfile(profile)) {
       setStatus("当前激活配置不能删除，请先把其它配置设为激活", "error");
       return;
     }
-    if (!window.confirm(`删除模型配置「${profile.name || profile.id}」？`)) return;
     try {
       await request(`/api/llm/profiles/${encodeURIComponent(profile.id)}`, {
         method: "DELETE",
@@ -691,7 +665,6 @@ export function createModelRoutingController({
     els.addModelProvider.addEventListener("click", () => openProfileSheet());
     els.closeModelProviderSheet.addEventListener("click", closeProfileSheet);
     els.modelSheetSave.addEventListener("click", () => void saveProfile());
-    els.modelSheetDelete.addEventListener("click", () => void deleteProfile());
     els.modelSheetTest.addEventListener("click", () => void testProvider());
     els.modelSheetFetchModels.addEventListener("click", () => void fetchModels());
     els.modelProviderSheet.addEventListener("close", () => {

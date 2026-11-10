@@ -203,7 +203,6 @@ import {
     modelSheetPool: $("model-sheet-pool"),
     modelSheetTestResult: $("model-sheet-test-result"),
     modelSheetTest: $("model-sheet-test"),
-    modelSheetDelete: $("model-sheet-delete"),
     modelSheetSave: $("model-sheet-save"),
     modelPoolSheet: $("model-pool-sheet"),
     closeModelPoolSheet: $("close-model-pool-sheet"),

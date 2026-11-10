@@ -491,10 +491,7 @@ test("模型配置全屏页面支持 Profile CRUD、轮询和重试策略", asyn
   await expect(secondCard).toHaveClass(/is-active-provider/);
   await expect(page.locator(".model-provider-card").first()).not.toHaveClass(/is-active-provider/);
 
-  await page.locator(".model-provider-card").first().click();
-  await expect(page.locator("#model-provider-sheet")).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.locator("#model-sheet-delete").click();
+  await page.locator(".model-provider-card").first().locator(".model-provider-remove").click();
   await expect(page.locator(".model-provider-card")).toHaveCount(1);
   await expect.poll(() => requests.some((request) => request.method === "DELETE" && request.path === "/api/llm/profiles/provider-1")).toBe(true);
 
