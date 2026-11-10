@@ -2554,12 +2554,12 @@ dialog.model-pool-sheet::backdrop {
 }
 
 .model-pool-active-badge {
-  padding: 0 6px;
-  color: #d97706;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 6px;
-  font-size: 11px;
+  padding: 0 8px;
+  color: #f59e0b;
+  background: transparent;
+  border: 1px solid rgb(251 191 36 / 50%);
+  border-radius: 999px;
+  font-size: 12px;
   font-weight: 500;
 }
 
@@ -6074,14 +6074,14 @@ dialog.is-page-dialog .dialog-header,
 
 .model-protocol-badge {
   flex: 0 0 auto;
-  padding: 1px 6px;
-  color: var(--text-muted);
+  padding: 2px 8px;
+  color: var(--text);
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.02em;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0;
   text-transform: uppercase;
 }
 
