@@ -35,6 +35,16 @@
   font-weight: 500;
 }
 
+/* The reference page shows no standalone status line above the grids. */
+.model-routing-status:empty,
+.model-routing-status {
+  min-height: 0;
+}
+
+.model-routing-page:not([data-busy]) .model-routing-status {
+  display: none;
+}
+
 .model-routing-page .model-provider-list,
 .model-provider-list {
   grid-template-columns: repeat(3, minmax(0, 1fr));
