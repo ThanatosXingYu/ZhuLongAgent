@@ -35,11 +35,13 @@ class ModelCallError(RuntimeError):
         status: int = 0,
         retryable: bool = True,
         timed_out: bool = False,
+        layer: str = "connect",
     ) -> None:
         super().__init__(message)
         self.status = status
         self.retryable = retryable
         self.timed_out = timed_out
+        self.layer = layer
 
 
 def fetch_models(
@@ -334,7 +336,7 @@ class OpenAIClient:
             method="POST",
             headers={
                 "Content-Type": "application/json",
-                "Accept": "application/json",
+                "Accept": "text/event-stream" if self.streaming else "application/json",
                 "User-Agent": USER_AGENT,
             },
         )
@@ -353,10 +355,10 @@ class OpenAIClient:
             data = error.read(MAX_RESPONSE_BYTES + 1)
         except (TimeoutError, socket.timeout) as exc:
             raise ModelCallError(
-                f"call model timed out: {exc}", timed_out=True
+                f"call model timed out: {exc}", timed_out=True, layer="connect"
             ) from exc
         except (URLError, OSError) as exc:
-            raise ModelCallError(f"call model: {exc}") from exc
+            raise ModelCallError(f"call model: {exc}", layer="connect") from exc
         if len(data) > MAX_RESPONSE_BYTES:
             raise RuntimeError("model response is too large")
         if status < 200 or status >= 300:
@@ -364,13 +366,22 @@ class OpenAIClient:
                 f"model returned status {status}",
                 status=status,
                 retryable=status in {408, 429} or status >= 500,
+                layer="connect",
             )
+        if self.streaming and b"data:" in data[:4096]:
+            if self.protocol == "openai-chat":
+                return _parse_chat_stream(data)
+            if self.protocol == "openai-responses":
+                return _parse_responses_stream(data)
+            return _parse_anthropic_stream(data)
         try:
             result = json.loads(data.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise ModelCallError(f"decode model response: {exc}") from exc
+            raise ModelCallError(
+                f"decode model response: {exc}", layer="stream"
+            ) from exc
         if not isinstance(result, Mapping):
-            raise ModelCallError("model response is invalid")
+            raise ModelCallError("model response is invalid", layer="stream")
         if self.protocol == "openai-chat":
             return _parse_chat_response(result)
         if self.protocol == "openai-responses":
@@ -663,7 +674,10 @@ def _parse_chat_response(result: Mapping[str, Any]) -> Message:
     first = choices[0]
     if not isinstance(first, Mapping) or not isinstance(first.get("message"), Mapping):
         raise RuntimeError("model response has no choice")
-    return Message.from_dict(first["message"])
+    message = Message.from_dict(first["message"])
+    if not message.content and not message.tool_calls:
+        raise ModelCallError("model response was empty", layer="empty")
+    return message
 
 
 def _parse_responses_response(result: Mapping[str, Any]) -> Message:
@@ -672,7 +686,7 @@ def _parse_responses_response(result: Mapping[str, Any]) -> Message:
         output_text = result.get("output_text")
         if isinstance(output_text, str) and output_text.strip():
             return Message("assistant", output_text.strip())
-        raise RuntimeError("model response has no output")
+        raise ModelCallError("model response was empty", layer="empty")
     texts: list[str] = []
     calls: list[ToolCall] = []
     for item in output:
@@ -705,14 +719,14 @@ def _parse_responses_response(result: Mapping[str, Any]) -> Message:
         if isinstance(output_text, str) and output_text.strip():
             texts.append(output_text.strip())
         else:
-            raise RuntimeError("model response has no text or tool call")
+            raise ModelCallError("model response was empty", layer="empty")
     return Message("assistant", "\n".join(texts), tool_calls=tuple(calls))
 
 
 def _parse_anthropic_response(result: Mapping[str, Any]) -> Message:
     content = result.get("content")
     if not isinstance(content, list):
-        raise RuntimeError("model response has no content")
+        raise ModelCallError("model response was empty", layer="empty")
     texts: list[str] = []
     calls: list[ToolCall] = []
     for block in content:
@@ -739,5 +753,153 @@ def _parse_anthropic_response(result: Mapping[str, Any]) -> Message:
                 )
             )
     if not texts and not calls:
-        raise RuntimeError("model response has no text or tool call")
+        raise ModelCallError("model response was empty", layer="empty")
     return Message("assistant", "\n".join(texts), tool_calls=tuple(calls))
+
+
+def _sse_payloads(data: bytes) -> list[Mapping[str, Any]]:
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ModelCallError(f"decode model stream: {exc}", layer="stream") from exc
+    payloads: list[Mapping[str, Any]] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("data:"):
+            continue
+        chunk = line[5:].strip()
+        if not chunk or chunk == "[DONE]":
+            continue
+        try:
+            payload = json.loads(chunk)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, Mapping):
+            payloads.append(payload)
+    return payloads
+
+
+def _parse_chat_stream(data: bytes) -> Message:
+    texts: list[str] = []
+    reasoning: list[str] = []
+    calls: dict[int, dict[str, str]] = {}
+    for payload in _sse_payloads(data):
+        choices = payload.get("choices")
+        if not isinstance(choices, list):
+            continue
+        for choice in choices:
+            if not isinstance(choice, Mapping):
+                continue
+            delta = choice.get("delta")
+            if not isinstance(delta, Mapping):
+                continue
+            content = delta.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            reasoning_content = delta.get("reasoning_content")
+            if isinstance(reasoning_content, str):
+                reasoning.append(reasoning_content)
+            raw_calls = delta.get("tool_calls")
+            if not isinstance(raw_calls, list):
+                continue
+            for item in raw_calls:
+                if not isinstance(item, Mapping):
+                    continue
+                index = int(item.get("index", 0) or 0)
+                current = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                if item.get("id"):
+                    current["id"] = str(item["id"])
+                function = item.get("function")
+                if isinstance(function, Mapping):
+                    if function.get("name"):
+                        current["name"] += str(function["name"])
+                    if function.get("arguments"):
+                        current["arguments"] += str(function["arguments"])
+    message = Message(
+        "assistant",
+        "".join(texts),
+        tool_calls=tuple(
+            ToolCall(item["id"], "function", FunctionCall(item["name"], item["arguments"]))
+            for item in calls.values()
+            if item["name"]
+        ),
+        reasoning_content="".join(reasoning),
+    )
+    if not message.content and not message.tool_calls:
+        raise ModelCallError("model response was empty", layer="empty")
+    return message
+
+
+def _parse_responses_stream(data: bytes) -> Message:
+    texts: list[str] = []
+    calls: dict[str, dict[str, str]] = {}
+    for payload in _sse_payloads(data):
+        event_type = str(payload.get("type", "") or "")
+        if event_type == "response.output_text.delta":
+            delta = payload.get("delta")
+            if isinstance(delta, str):
+                texts.append(delta)
+        elif event_type in {"response.output_item.done", "response.output_item.added"}:
+            item = payload.get("item")
+            if isinstance(item, Mapping) and item.get("type") == "function_call":
+                call_id = str(item.get("call_id", item.get("id", "")) or "")
+                calls[call_id] = {
+                    "name": str(item.get("name", "") or ""),
+                    "arguments": str(item.get("arguments", "") or ""),
+                }
+        elif event_type == "response.completed":
+            response = payload.get("response")
+            if isinstance(response, Mapping):
+                try:
+                    return _parse_responses_response(response)
+                except ModelCallError:
+                    pass
+    message = Message(
+        "assistant",
+        "".join(texts),
+        tool_calls=tuple(
+            ToolCall(call_id, "function", FunctionCall(item["name"], item["arguments"]))
+            for call_id, item in calls.items()
+            if item["name"]
+        ),
+    )
+    if not message.content and not message.tool_calls:
+        raise ModelCallError("model response was empty", layer="empty")
+    return message
+
+
+def _parse_anthropic_stream(data: bytes) -> Message:
+    texts: list[str] = []
+    calls: dict[int, dict[str, str]] = {}
+    for payload in _sse_payloads(data):
+        event_type = str(payload.get("type", "") or "")
+        if event_type == "content_block_start":
+            index = int(payload.get("index", 0) or 0)
+            block = payload.get("content_block")
+            if isinstance(block, Mapping) and block.get("type") == "tool_use":
+                calls[index] = {
+                    "id": str(block.get("id", "") or ""),
+                    "name": str(block.get("name", "") or ""),
+                    "arguments": "",
+                }
+        elif event_type == "content_block_delta":
+            index = int(payload.get("index", 0) or 0)
+            delta = payload.get("delta")
+            if not isinstance(delta, Mapping):
+                continue
+            if delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+                texts.append(str(delta["text"]))
+            if delta.get("type") == "input_json_delta" and isinstance(delta.get("partial_json"), str):
+                calls.setdefault(index, {"id": "", "name": "", "arguments": ""})["arguments"] += str(delta["partial_json"])
+    message = Message(
+        "assistant",
+        "".join(texts),
+        tool_calls=tuple(
+            ToolCall(item["id"], "function", FunctionCall(item["name"], item["arguments"]))
+            for item in calls.values()
+            if item["name"]
+        ),
+    )
+    if not message.content and not message.tool_calls:
+        raise ModelCallError("model response was empty", layer="empty")
+    return message

@@ -195,10 +195,9 @@ class ModelRouter:
             raise RuntimeError("没有配置能容纳当前上下文窗口")
         last_error: Exception | None = None
         for provider_index, provider in enumerate(available):
-            retry_rule = _provider_retry_rule(provider, policy)
-            attempts = _retry_attempts(retry_rule, delays)
             failed: Exception | None = None
-            for retry_index in range(attempts):
+            retry_counts = {"connect": 0, "empty": 0, "stream": 0}
+            while True:
                 try:
                     return self._complete_provider(provider, messages, tools, session_id)
                 except Exception as exc:
@@ -206,11 +205,16 @@ class ModelRouter:
                     failed = exc
                     if not _can_failover(exc):
                         raise
-                    if retry_index + 1 < attempts:
+                    layer = _retry_layer(exc)
+                    retry_rule = _provider_retry_rule(provider, policy, layer)
+                    retry_counts[layer] += 1
+                    if retry_counts[layer] < _retry_attempts(retry_rule, delays):
                         if _is_retryable(exc):
-                            self._sleep(_retry_delay(retry_rule, delays, retry_index))
+                            self._sleep(
+                                _retry_delay(retry_rule, delays, retry_counts[layer] - 1)
+                            )
                             continue
-                        break
+                    break
             if failed is None:
                 continue
             self._record_failure(provider, failed, policy)
@@ -445,16 +449,26 @@ def _retry_policy(value: str) -> _RetryPolicy:
     return _RetryPolicy(**rules)
 
 
-def _provider_retry_rule(provider: _ProviderState, policy: _RetryPolicy) -> _RetryRule:
-    rule = provider.retry.get("stream") if provider.retry else None
+def _provider_retry_rule(
+    provider: _ProviderState, policy: _RetryPolicy, layer: str
+) -> _RetryRule:
+    default = getattr(policy, layer, policy.stream)
+    rule = provider.retry.get(layer) if provider.retry else None
     if rule is None:
-        return policy.stream
+        return default
     attempts = rule["attempts"]
     interval = rule["interval_ms"]
     return _RetryRule(
-        attempts if attempts != 0 else policy.stream.attempts,
-        interval if interval != 0 else policy.stream.interval_ms,
+        attempts if attempts != 0 else default.attempts,
+        interval if interval != 0 else default.interval_ms,
     )
+
+
+def _retry_layer(error: Exception) -> str:
+    layer = getattr(error, "layer", "")
+    if layer in _PROFILE_LAYERS:
+        return layer
+    return "stream"
 
 
 def _normalized_profile_retry(value: Any) -> Mapping[str, Mapping[str, int]]:

@@ -33,6 +33,12 @@ class FakeResponse:
         return self._body
 
 
+class RawResponse(FakeResponse):
+    def __init__(self, body: bytes, status: int = 200) -> None:
+        self.status = status
+        self._body = body
+
+
 def _headers(request: Request) -> dict[str, str]:
     return {name.lower(): value for name, value in request.header_items()}
 
@@ -274,3 +280,63 @@ def test_streaming_flag_is_forwarded_for_every_protocol(
 
     payload = json.loads(captured[0].data or b"{}")
     assert payload["stream"] is False
+
+
+def test_openai_chat_stream_is_accumulated(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        b'data: {"choices":[{"delta":{"content":"chat"}}]}\n\n'
+        b'data: {"choices":[{"delta":{"content":"-ok"}}]}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    monkeypatch.setattr(model_module, "urlopen", lambda *_a, **_k: RawResponse(body))
+
+    message = OpenAIClient(
+        "https://provider.example/v1", "secret", protocol="openai-chat"
+    ).complete("demo", [Message("user", "hello")])
+
+    assert message.content == "chat-ok"
+
+
+def test_responses_stream_is_accumulated(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        b'data: {"type":"response.output_text.delta","delta":"res"}\n\n'
+        b'data: {"type":"response.output_text.delta","delta":"ponses"}\n\n'
+    )
+    monkeypatch.setattr(model_module, "urlopen", lambda *_a, **_k: RawResponse(body))
+
+    message = OpenAIClient(
+        "https://provider.example/v1", "secret", protocol="openai-responses"
+    ).complete("demo", [Message("user", "hello")])
+
+    assert message.content == "responses"
+
+
+def test_anthropic_stream_is_accumulated(monkeypatch: pytest.MonkeyPatch) -> None:
+    body = (
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"anthro"}}\n\n'
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"pic"}}\n\n'
+    )
+    monkeypatch.setattr(model_module, "urlopen", lambda *_a, **_k: RawResponse(body))
+
+    message = OpenAIClient(
+        "https://provider.example/v1", "secret", protocol="anthropic"
+    ).complete("demo", [Message("user", "hello")])
+
+    assert message.content == "anthropic"
+
+
+def test_empty_completion_is_marked_as_empty_layer(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        model_module,
+        "urlopen",
+        lambda *_a, **_k: FakeResponse(
+            {"choices": [{"message": {"role": "assistant", "content": ""}}]}
+        ),
+    )
+
+    with pytest.raises(model_module.ModelCallError) as raised:
+        OpenAIClient(
+            "https://provider.example/v1", "secret", protocol="openai-chat"
+        ).complete("demo", [Message("user", "hello")])
+
+    assert raised.value.layer == "empty"

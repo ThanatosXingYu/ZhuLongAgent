@@ -255,3 +255,31 @@ def test_model_router_skips_profile_that_cannot_hold_context() -> None:
     assert result.content == "large"
     assert small.calls == 0
     assert large.calls == 1
+
+
+def test_profile_retry_overrides_apply_to_each_failure_layer() -> None:
+    sleeps: list[float] = []
+    config = _config("failover")
+    providers = json.loads(config.model_providers_json)
+    providers[0]["retry"] = {
+        "connect": {"attempts": 1, "interval_ms": 250},
+        "empty": {"attempts": 2, "interval_ms": 500},
+        "stream": {"attempts": -1, "interval_ms": 0},
+    }
+    providers[1]["poolExclude"] = True
+    config = replace(config, model_providers_json=json.dumps(providers))
+    router = ModelRouter(config, sleep=sleeps.append)
+
+    connect = FakeClient(ModelCallError("timeout", layer="connect"))
+    empty = FakeClient(ModelCallError("empty", layer="empty"))
+    stream = FakeClient(ModelCallError("stream", layer="stream"))
+
+    for client, expected in ((connect, 2), (empty, 3), (stream, 1)):
+        router._providers[0].client = client  # type: ignore[assignment]
+        router._providers[0].fails = 0
+        router._providers[0].unavailable_until = 0
+        with pytest.raises(RuntimeError, match="所有模型提供商均失败"):
+            router.complete("auto", [Message("user", "solve")])
+        assert client.calls == expected
+
+    assert sleeps == [0.25, 0.5, 0.5]
