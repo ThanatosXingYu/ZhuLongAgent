@@ -881,6 +881,20 @@ def test_llm_profile_crud_activation_and_retry_policy(tmp_path: Path) -> None:
         assert persisted["stream"]["attempts"] == 4
         assert persisted["intent"]["interval_ms"] == 3000
 
+        clamped = client.post(
+            "/api/llm/retry-policy",
+            json={
+                "connect": {"attempts": 999, "interval_ms": -5},
+                "empty": {"attempts": -99, "interval_ms": 9_999_999},
+                "stream": {"attempts": 0, "interval_ms": 0},
+                "breaker": {"attempts": 0, "interval_ms": 0},
+                "intent": {"attempts": 0, "interval_ms": 0},
+            },
+        )
+        assert clamped.status_code == 200
+        assert clamped.json()["data"]["connect"] == {"attempts": 20, "interval_ms": 0}
+        assert clamped.json()["data"]["empty"] == {"attempts": -1, "interval_ms": 3_600_000}
+
 
 def test_listen_address_parsing_matches_go_tcp_address_forms() -> None:
     assert _listen_parts("127.0.0.1:8080") == ("127.0.0.1", 8080)

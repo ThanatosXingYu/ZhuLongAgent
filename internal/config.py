@@ -703,12 +703,12 @@ def _normalize_retry_rule(value: Any) -> dict[str, int]:
     if (
         isinstance(attempts, bool)
         or not isinstance(attempts, int)
-        or not -1 <= attempts <= 100
         or isinstance(interval_ms, bool)
         or not isinstance(interval_ms, int)
-        or not 0 <= interval_ms <= 3_600_000
     ):
         raise ConfigError("model retry rule is invalid")
+    attempts = max(-1, min(20, attempts))
+    interval_ms = max(0, min(3_600_000, interval_ms))
     return {"attempts": attempts, "interval_ms": interval_ms}
 
 
