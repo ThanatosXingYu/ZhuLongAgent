@@ -354,7 +354,7 @@ export function createModelRoutingController({
     const saveIcon = els.modelSheetSave.querySelector("[data-lucide]");
     if (saveIcon) saveIcon.setAttribute("data-lucide", profile ? "save" : "plus");
     els.modelSheetName.value = profile?.name || "";
-    els.modelSheetProtocol.value = profile?.protocol || "openai-chat";
+    els.modelSheetProtocol.value = profile?.protocol || "anthropic";
     els.modelSheetBaseUrl.value = profile?.baseUrl || "";
     els.modelSheetModel.value = profile?.model || "";
     els.modelSheetApiKey.value = "";
