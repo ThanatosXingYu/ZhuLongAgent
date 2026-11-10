@@ -111,8 +111,13 @@ export function createModelRoutingController({
       const star = createElement("span", "model-provider-star");
       star.append(icon(isActiveProfile(profile) ? "star" : "circle"));
       const identity = createElement("span", "model-provider-identity");
-      identity.append(
+      const nameRow = createElement("span", "model-provider-name-row");
+      nameRow.append(
         createElement("strong", "", profile.name || profile.id),
+        createElement("span", "model-protocol-badge", protocolLabel(profile.protocol)),
+      );
+      identity.append(
+        nameRow,
         createElement("code", "", profile.model || "未填写模型"),
       );
       const badge = createElement("span", `model-health ${health.tone}`, health.label);
@@ -120,27 +125,28 @@ export function createModelRoutingController({
       top.append(star, identity, badge);
 
       const details = createElement("div", "model-provider-card-details");
+      if (profile.apiKeyMasked) details.append(createElement("span", "", profile.apiKeyMasked));
       details.append(
-        createElement("span", "model-provider-protocol", protocolLabel(profile.protocol)),
-        createElement(
-          "span",
-          "",
-          isActiveProfile(profile) ? "请求首选" : profile.poolExclude ? "不参与轮询" : `优先级 ${profile.priority ?? 0}`,
-        ),
-        createElement("span", "", profile.apiKeyConfigured ? "Key 已配置" : "Key 未配置"),
-      );
-      const meta = createElement("div", "model-provider-card-details");
-      meta.append(
         createElement("span", "", `${formatNumber(profile.ratePerSecond || 0)}/s · ${formatNumber(profile.ratePerMinute || 0)}/min`),
-        profile.reasoningEffort ? createElement("span", "", `思考 ${profile.reasoningEffort}`) : createElement("span", "", ""),
-        profile.proxy ? createElement("span", "truncate", `代理 ${profile.proxy}`) : createElement("span", "", ""),
       );
-      const url = createElement("code", "model-provider-card-url", profile.baseUrl || "未填写 Base URL");
+      if (profile.proxy) details.append(createElement("span", "truncate", `代理 ${profile.proxy}`));
+      if (profile.reasoningEffort) {
+        details.append(createElement("span", "", `思考 ${profile.reasoningEffort}`));
+      }
+      if (pool.enabled && !isActiveProfile(profile)) {
+        details.append(
+          createElement(
+            "span",
+            "",
+            profile.poolExclude ? "不参与轮询" : `优先级 ${profile.priority ?? 0}`,
+          ),
+        );
+      }
 
       const actions = createElement("div", "model-provider-card-actions");
       const activate = createElement(
         "button",
-        `button button-compact ${isActiveProfile(profile) ? "button-ghost" : "button-primary"}`,
+        "button button-compact model-provider-activate",
         isActiveProfile(profile) ? "已激活" : "设为激活",
       );
       activate.type = "button";
@@ -149,14 +155,17 @@ export function createModelRoutingController({
         event.stopPropagation();
         void activateProfile(profile);
       });
-      const edit = createElement("button", "button button-ghost button-compact", "编辑");
-      edit.type = "button";
-      edit.addEventListener("click", (event) => {
+      const remove = createElement("button", "icon-button model-provider-remove", "");
+      remove.type = "button";
+      remove.title = "删除配置";
+      remove.setAttribute("aria-label", "删除配置");
+      remove.append(icon("trash-2"));
+      remove.addEventListener("click", (event) => {
         event.stopPropagation();
-        openProfileSheet(profile.id);
+        void deleteProfileFromCard(profile);
       });
-      actions.append(activate, edit);
-      card.append(top, details, meta, url, actions);
+      actions.append(activate, remove);
+      card.append(top, details, actions);
       card.addEventListener("click", () => openProfileSheet(profile.id));
       card.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -186,11 +195,15 @@ export function createModelRoutingController({
       ? pool.chain
       : pool.chain.filter((member) => member.active);
     const fragment = document.createDocumentFragment();
-    order.forEach((member) => {
+    order.forEach((member, index) => {
       const excluded = member.excluded && !member.active;
       const row = createElement("div", `model-pool-chain-row${excluded ? " is-excluded" : ""}`);
       row.dataset.providerId = String(member.profile_id);
-      const orderBadge = createElement("span", "model-pool-order", member.active ? "1" : String(member.rank + 2));
+      const orderBadge = createElement(
+        "span",
+        "model-pool-order",
+        excluded ? "—" : String(index + 1),
+      );
       const copy = createElement("span", "model-pool-chain-copy");
       const title = createElement("span", "model-pool-chain-title");
       title.append(createElement("strong", "", member.name || String(member.profile_id)));
@@ -200,6 +213,9 @@ export function createModelRoutingController({
         title,
         createElement("code", "", member.model || "未填写模型"),
       );
+      if (!member.active) {
+        copy.append(createElement("small", "", `优先级 ${member.priority ?? 0}`));
+      }
       if (member.last_error) copy.append(createElement("small", "", member.last_error));
       const state = createElement("span", `model-health ${member.state === "tripped" ? "error" : member.state === "degraded" ? "warning" : "success"}`, memberStateLabel(member));
       row.append(orderBadge, copy, state);
@@ -216,6 +232,15 @@ export function createModelRoutingController({
     });
     if (!order.length) {
       fragment.append(createElement("div", "model-pool-empty", "还没有可用模型配置"));
+    }
+    if (pool.enabled && order.filter((member) => !member.excluded || member.active).length < 2) {
+      fragment.append(
+        createElement(
+          "p",
+          "model-pool-hint",
+          `当前只有 ${order.filter((member) => !member.excluded || member.active).length} 个可用配置，至少需要 2 个已填 API Key 且参与轮询的配置。`,
+        ),
+      );
     }
     els.modelPoolChain.replaceChildren(fragment);
     refreshIcons();
@@ -250,6 +275,11 @@ export function createModelRoutingController({
       els.modelPoolParticipantCountSheet.textContent = pool.enabled
         ? `${formatNumber(participants)} 个参与项`
         : "轮询已关闭，仅使用激活配置";
+    }
+    if (els.modelPoolRecoverAll) {
+      els.modelPoolRecoverAll.hidden = !pool.chain.some(
+        (member) => member.state === "tripped",
+      );
     }
     if (els.modelStrategySummary) els.modelStrategySummary.textContent = "优先级故障转移";
     if (els.modelRecoverySummary) {
@@ -415,6 +445,24 @@ export function createModelRoutingController({
         setStatus(`删除失败：${error.message}`, "error");
       }
     });
+  }
+
+  async function deleteProfileFromCard(profile) {
+    if (isActiveProfile(profile)) {
+      setStatus("当前激活配置不能删除，请先把其它配置设为激活", "error");
+      return;
+    }
+    if (!window.confirm(`删除模型配置「${profile.name || profile.id}」？`)) return;
+    try {
+      await request(`/api/llm/profiles/${encodeURIComponent(profile.id)}`, {
+        method: "DELETE",
+      });
+      await refresh({ silent: true });
+      setStatus(`已删除：${profile.name || profile.id}`, "success");
+      showToast("模型配置已删除", "success");
+    } catch (error) {
+      setStatus(`删除失败：${error.message}`, "error");
+    }
   }
 
   async function fetchModels() {
@@ -667,6 +715,7 @@ export function createModelRoutingController({
     els.modelPoolBindFallbackSheet.addEventListener("change", () => {
       void togglePool(els.modelPoolEnabledSheet.checked, els.modelPoolBindFallbackSheet.checked);
     });
+    els.modelPoolRecoverAll?.addEventListener("click", () => void resetPool(""));
     els.saveModelRouting.addEventListener("click", () => void saveRetryPolicy());
     els.modelRoutingPage.querySelectorAll("[data-model-tab]").forEach((button) => {
       button.addEventListener("click", () => setTab(button.dataset.modelTab || "providers"));

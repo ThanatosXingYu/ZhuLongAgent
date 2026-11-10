@@ -962,8 +962,8 @@
     <header class="model-sheet-header">
       <div>
         <p class="eyebrow">Routing</p>
-        <h2 id="model-pool-sheet-title">轮询与故障转移</h2>
-        <p>管理参与请求链的提供商、重试和恢复策略。</p>
+        <h2 id="model-pool-sheet-title">LLM 轮询 · 故障转移</h2>
+        <p>开启后，<strong>未指定模型</strong>的 Agent 在当前配置不可用（余额不足 / Key 失效 / 限流 / 服务异常）时自动切到下一个配置。</p>
       </div>
       <button id="close-model-pool-sheet" class="icon-button" type="button" title="关闭" aria-label="关闭轮询配置">
         <i data-lucide="x" aria-hidden="true"></i>
@@ -972,7 +972,7 @@
     <div class="model-sheet-body">
       <section class="model-sheet-group">
         <div class="model-sheet-toggle">
-          <span><strong>启用轮询</strong><small>当前配置不可用时切换到下一条健康配置</small></span>
+          <span><strong>启用轮询</strong><small>默认关闭。关闭时始终只用激活配置，失败即失败。</small></span>
           <label class="switch-row" title="启用模型提供商轮询">
             <span class="visually-hidden">启用轮询</span>
             <input id="model-pool-enabled-sheet" type="checkbox" role="switch" checked>
@@ -991,7 +991,10 @@
       <section class="model-pool-chain-section">
         <div class="model-sheet-section-heading">
           <h3>故障转移顺序</h3>
-          <p id="model-pool-participant-count-sheet">0 个参与项</p>
+          <div class="model-pool-heading-actions">
+            <p id="model-pool-participant-count-sheet">0 个参与项</p>
+            <button id="model-pool-recover-all" class="button button-ghost button-compact" type="button" hidden>全部恢复</button>
+          </div>
         </div>
         <div id="model-pool-chain" class="model-pool-chain"></div>
       </section>

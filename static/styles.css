@@ -6042,3 +6042,125 @@ dialog.is-page-dialog .dialog-header,
     width: calc(100% - 24px);
   }
 }
+
+/* BRTEX model configuration card geometry. */
+.model-provider-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.model-provider-card {
+  min-height: 140px;
+  gap: 8px;
+  padding: 16px;
+  border-radius: 8px;
+}
+
+.model-provider-card-top {
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.model-provider-name-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.model-provider-name-row strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-protocol-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  color: var(--text-muted);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.model-provider-card-details {
+  min-height: 18px;
+  padding-left: 24px;
+  gap: 2px 12px;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+.model-provider-card-actions {
+  margin-top: auto;
+  padding-left: 24px;
+  gap: 8px;
+}
+
+.model-provider-card-actions .model-provider-activate {
+  flex: 1 1 auto;
+  min-height: 28px;
+  color: var(--text);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  font-size: 12.8px;
+}
+
+.model-provider-card-actions .model-provider-activate:disabled {
+  color: var(--text-muted);
+  background: #fafafa;
+}
+
+.model-provider-card-actions .model-provider-remove {
+  width: 28px;
+  min-height: 28px;
+  flex: 0 0 28px;
+  color: var(--red);
+  background: #fff;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+}
+
+dialog.model-provider-sheet {
+  width: min(576px, calc(100vw - 24px));
+}
+
+dialog.model-pool-sheet {
+  width: min(512px, calc(100vw - 24px));
+}
+
+.model-sheet-field input,
+.model-sheet-field select {
+  min-height: 32px;
+  font-size: 12px;
+}
+
+.model-sheet-model-button {
+  min-height: 32px;
+}
+
+.model-pool-hint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.model-pool-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-pool-heading-actions .button {
+  min-height: 26px;
+  font-size: 11px;
+}
