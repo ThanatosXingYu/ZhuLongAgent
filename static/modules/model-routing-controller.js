@@ -107,7 +107,7 @@ export function createModelRoutingController({
       card.setAttribute("aria-label", `编辑模型配置 ${profile.name || profile.id}`);
       const top = createElement("div", "model-provider-card-top");
       const star = createElement("span", "model-provider-star");
-      star.append(icon(isActiveProfile(profile) ? "star" : "circle"));
+      star.append(icon("star"));
       const health = healthOf(profile);
       const badge = createElement("span", `model-health ${health.tone}`, health.label);
       badge.title = health.hint;
@@ -352,7 +352,7 @@ export function createModelRoutingController({
     els.modelProviderSheetTitle.textContent = profile ? `编辑：${profile.name || profile.id}` : "新建模型配置";
     els.modelProviderSheetDescription.textContent = profile
       ? "修改后点击保存；激活配置保存后对全部 Agent 立即生效。"
-      : "新建后不会自动激活，请在卡片上「设为激活」。";
+      : "新建后不会自动激活，请在卡片上「设为激活」以启用。";
     if (els.modelSheetActiveBadge) els.modelSheetActiveBadge.hidden = !isActiveProfile(profile);
     const saveLabel = els.modelSheetSave.querySelector("span");
     if (saveLabel) saveLabel.textContent = profile ? "保存" : "新建";
