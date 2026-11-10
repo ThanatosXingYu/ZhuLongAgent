@@ -2116,32 +2116,13 @@ dialog.is-page-dialog {
 
 .model-provider-empty {
   grid-column: 1 / -1;
-  min-height: 180px;
-  display: grid;
-  place-items: center;
-  align-content: center;
-  gap: 6px;
+  padding: 40px;
   color: var(--text-muted);
   background: transparent;
   border: 1px dashed #d4d4d8;
   border-radius: 8px;
   text-align: center;
-}
-
-.model-provider-empty svg {
-  width: 20px;
-  height: 20px;
-  color: var(--text-faint);
-}
-
-.model-provider-empty strong {
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.model-provider-empty span {
-  font-size: 11px;
+  font-size: 14px;
 }
 
 /* Retry policy */
@@ -2297,6 +2278,19 @@ dialog.model-pool-sheet::backdrop {
   font-size: 16px;
   font-weight: 620;
   line-height: 1.35;
+}
+
+.model-sheet-header h2.model-sheet-title-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+}
+
+.model-sheet-header h2.model-sheet-title-with-icon svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
 }
 
 .model-sheet-header p:last-child {
@@ -2521,88 +2515,125 @@ dialog.model-pool-sheet::backdrop {
 
 .model-pool-chain {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .model-pool-chain-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 9px;
+  gap: 4px;
   padding: 10px;
   background: #fff;
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
 }
 
 .model-pool-chain-row.is-excluded {
   opacity: 0.55;
 }
 
-.model-pool-chain-row .icon-button {
+.model-pool-chain-row.is-tripped {
+  border-color: #f2c8c5;
+}
+
+.model-pool-chain-head {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.model-pool-order {
+  width: 20px;
+  flex: 0 0 20px;
+  color: var(--text-muted);
+  font-family: var(--font-code);
+  font-size: 12px;
+  text-align: center;
+}
+
+.model-pool-chain-name {
+  min-width: 0;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.model-pool-chain-state {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.model-pool-state-note {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.model-pool-recover {
   width: 26px;
   min-height: 26px;
   flex: 0 0 26px;
 }
 
+.model-pool-recover svg {
+  width: 14px;
+  height: 14px;
+}
+
+.model-pool-active-badge {
+  padding: 0 6px;
+  color: #d97706;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
 .model-pool-excluded-badge {
-  padding: 0 5px;
-  color: var(--text-faint);
-  background: #f4f4f5;
-  border-radius: 4px;
-  font-size: 9px;
-  font-weight: 600;
-}
-
-.model-pool-order {
-  width: 22px;
-  height: 22px;
-  display: grid;
-  place-items: center;
+  padding: 0 6px;
   color: var(--text-muted);
-  background: #f4f4f5;
-  border-radius: 5px;
-  font-family: var(--font-code);
-  font-size: 9px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
 }
 
-.model-pool-chain-copy {
-  min-width: 0;
-  display: grid;
-  gap: 2px;
-}
-
-.model-pool-chain-title {
+.model-pool-chain-meta {
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 2px 12px;
+  padding-left: 28px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
-.model-pool-chain-title strong {
+.model-pool-chain-meta code,
+.model-pool-chain-meta span {
   overflow: hidden;
-  font-size: 12px;
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-pool-active-badge {
-  padding: 0 5px;
-  color: #92400e;
-  background: #fffbeb;
-  border: 1px solid #fde68a;
-  border-radius: 4px;
-  font-size: 8px;
-  font-weight: 600;
+.model-pool-chain-meta code {
+  font-family: var(--font-code);
 }
 
-.model-pool-chain-copy code,
-.model-pool-chain-copy small {
+.model-pool-chain-error {
+  margin: 0;
   overflow: hidden;
+  padding-left: 28px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-family: var(--font-code);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -6152,17 +6183,6 @@ dialog.model-pool-sheet {
   color: var(--text-faint);
   font-size: 11px;
   line-height: 1.5;
-}
-
-.model-pool-heading-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.model-pool-heading-actions .button {
-  min-height: 26px;
-  font-size: 11px;
 }
 
 /* Model profile sheet: reference field rhythm and grouped option cards. */

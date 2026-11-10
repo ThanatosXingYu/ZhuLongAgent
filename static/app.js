@@ -211,7 +211,6 @@ import {
     modelPoolEnabledSheet: $("model-pool-enabled-sheet"),
     modelPoolBindFallbackSheet: $("model-pool-bind-fallback-sheet"),
     modelPoolBindFallbackRow: $("model-pool-bind-fallback-row"),
-    modelPoolParticipantCountSheet: $("model-pool-participant-count-sheet"),
     modelPoolChain: $("model-pool-chain"),
     modelPoolChainSection: $("model-pool-chain-section"),
     modelPoolNote: $("model-pool-note"),
@@ -4252,10 +4251,9 @@ import {
   }
 
   function bindModelRoutingEvents() {
-    bindModuleOnce("模型配置", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "close-model-routing", "model-provider-list", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-routing-status", "save-model-routing"], () => {
+    bindModuleOnce("模型配置", ["open-model-routing", "open-model-routing-settings", "model-routing-page", "model-provider-list", "add-model-provider", "open-model-pool", "model-provider-sheet", "model-pool-sheet", "model-routing-status", "save-model-routing"], () => {
       els.openModelRouting.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
       els.openModelRoutingSettings.addEventListener("click", (event) => void loadModelRoutingPage(event.currentTarget));
-      $("close-model-routing").addEventListener("click", closeModelRoutingPage);
       ensureModelRoutingController().bind();
       document.addEventListener("keydown", (event) => {
         if (event.key !== "Escape" || els.modelRoutingPage.hidden) return;

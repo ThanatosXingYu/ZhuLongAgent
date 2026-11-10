@@ -182,11 +182,11 @@ export function createModelRoutingController({
       fragment.append(card);
     });
     if (!profiles.length) {
-      const empty = createElement("div", "model-provider-empty");
-      empty.append(
-        icon("server"),
-        createElement("strong", "", "还没有模型配置"),
-        createElement("span", "", "点击右上角「新建」创建第一个。"),
+      // BRTEX renders a single dashed placeholder line, not an icon + heading.
+      const empty = createElement(
+        "div",
+        "model-provider-empty",
+        "还没有模型配置，点击右上角「新建」创建第一个。",
       );
       fragment.append(empty);
     }
@@ -203,62 +203,62 @@ export function createModelRoutingController({
     const fragment = document.createDocumentFragment();
     order.forEach((member, index) => {
       const excluded = member.excluded && !member.active;
-      const row = createElement("div", `model-pool-chain-row${excluded ? " is-excluded" : ""}`);
+      // BRTEX: tripped rows get a destructive border; excluded rows fade out.
+      const row = createElement(
+        "div",
+        `model-pool-chain-row${excluded ? " is-excluded" : ""}${member.state === "tripped" ? " is-tripped" : ""}`,
+      );
       row.dataset.providerId = String(member.profile_id);
-      const orderBadge = createElement(
-        "span",
-        "model-pool-order",
-        excluded ? "—" : String(index + 1),
+      const head = createElement("div", "model-pool-chain-head");
+      head.append(
+        createElement("span", "model-pool-order", excluded ? "—" : String(index + 1)),
+        createElement("span", "model-pool-chain-name", member.name || String(member.profile_id)),
       );
-      const copy = createElement("span", "model-pool-chain-copy");
-      const title = createElement("span", "model-pool-chain-title");
-      title.append(createElement("strong", "", member.name || String(member.profile_id)));
-      if (member.active) title.append(createElement("span", "model-pool-active-badge", "激活"));
-      if (excluded) title.append(createElement("span", "model-pool-excluded-badge", "不参与轮询"));
-      copy.append(
-        title,
-        createElement("code", "", member.model || "未填写模型"),
-      );
-      if (!member.active) {
-        copy.append(createElement("small", "", `优先级 ${member.priority ?? 0}`));
+      if (member.active) head.append(createElement("span", "model-pool-active-badge", "激活"));
+      if (excluded) head.append(createElement("span", "model-pool-excluded-badge", "不参与轮询"));
+      const actions = createElement("div", "model-pool-chain-state");
+      if (member.state === "tripped" && Number(member.cooldown_secs || 0) > 0) {
+        actions.append(createElement("span", "model-pool-state-note", `冷却 ${cooldownText(Number(member.cooldown_secs || 0))}`));
       }
-      if (member.last_error) copy.append(createElement("small", "", member.last_error));
-      const state = createElement("span", `model-health ${member.state === "tripped" ? "error" : member.state === "degraded" ? "warning" : "success"}`, memberStateLabel(member));
-      row.append(orderBadge, copy, state);
-      if (member.state !== "ok" && member.state !== "degraded") {
-        const recover = createElement("button", "icon-button button-compact", "");
+      if (member.state === "degraded") {
+        actions.append(createElement("span", "model-pool-state-note", `连续失败 ${formatNumber(member.fails || 0)} 次`));
+      }
+      if (member.state !== "ok") {
+        const recover = createElement("button", "icon-button model-pool-recover", "");
         recover.type = "button";
-        recover.title = "立即恢复";
+        recover.title = "立即恢复：清除熔断，下次调用重试该配置";
         recover.setAttribute("aria-label", "立即恢复");
         recover.append(icon("rotate-ccw"));
         recover.addEventListener("click", () => void resetPool(String(member.profile_id)));
-        row.append(recover);
+        actions.append(recover);
+      }
+      head.append(actions);
+      const meta = createElement("div", "model-pool-chain-meta");
+      meta.append(createElement("code", "", member.model || "未填写模型"));
+      if (!member.active) meta.append(createElement("span", "", `优先级 ${member.priority ?? 0}`));
+      row.append(head, meta);
+      if (member.last_error) {
+        const error = createElement("p", "model-pool-chain-error", member.last_error);
+        error.title = member.last_error;
+        row.append(error);
       }
       fragment.append(row);
     });
     if (!order.length) {
-      fragment.append(createElement("div", "model-pool-empty", "还没有可用模型配置"));
+      fragment.append(createElement("div", "model-pool-empty", "暂无配置"));
     }
-    if (pool.enabled && order.filter((member) => !member.excluded || member.active).length < 2) {
+    const participants = order.filter((member) => !member.excluded || member.active).length;
+    if (pool.enabled && participants < 2) {
       fragment.append(
         createElement(
           "p",
           "model-pool-hint",
-          `当前只有 ${order.filter((member) => !member.excluded || member.active).length} 个可用配置，至少需要 2 个已填 API Key 且参与轮询的配置。`,
+          `当前只有 ${participants} 个可用配置，轮询不会生效——至少需要 2 个已填 API Key 且参与轮询的配置。`,
         ),
       );
     }
     els.modelPoolChain.replaceChildren(fragment);
     refreshIcons();
-  }
-
-  function memberStateLabel(member) {
-    if (member.state === "tripped") {
-      const seconds = Number(member.cooldown_secs || 0);
-      return seconds > 0 ? `冷却 ${cooldownText(seconds)}` : "已熔断";
-    }
-    if (member.state === "degraded") return `连续失败 ${formatNumber(member.fails || 0)} 次`;
-    return "正常";
   }
 
   function updateSummary() {
@@ -279,11 +279,6 @@ export function createModelRoutingController({
       els.modelPoolParticipantCount.textContent = pool.enabled
         ? `${formatNumber(participants)} 个参与项`
         : "仅使用激活配置";
-    }
-    if (els.modelPoolParticipantCountSheet) {
-      els.modelPoolParticipantCountSheet.textContent = pool.enabled
-        ? `${formatNumber(participants)} 个参与项`
-        : "轮询已关闭，仅使用激活配置";
     }
     if (els.modelPoolRecoverAll) {
       els.modelPoolRecoverAll.hidden = !pool.chain.some(
