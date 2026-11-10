@@ -796,46 +796,47 @@
       <div class="model-sheet-grid two">
         <label class="model-sheet-field">
           <span>名称</span>
-          <input id="model-sheet-name" type="text" maxlength="128" placeholder="例如：生产环境">
+          <input id="model-sheet-name" type="text" maxlength="128" placeholder="例如：OpenAI 生产">
         </label>
         <label class="model-sheet-field">
-          <span>协议</span>
+          <span>格式</span>
           <span class="select-wrap">
             <select id="model-sheet-protocol">
-              <option value="openai-chat">OpenAI Chat</option>
-              <option value="openai-responses">OpenAI Responses</option>
-              <option value="anthropic">Anthropic Messages</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai-chat">OpenAI (Chat Completions)</option>
+              <option value="openai-responses">OpenAI (Responses API)</option>
             </select>
             <i data-lucide="chevron-down" aria-hidden="true"></i>
           </span>
         </label>
       </div>
-      <label class="model-sheet-field">
-        <span>Base URL</span>
-        <input id="model-sheet-base-url" class="is-mono" type="url" placeholder="https://api.example.com/v1">
-      </label>
-      <div class="model-sheet-grid two model-sheet-model-row">
-        <label class="model-sheet-field">
-          <span>模型</span>
-          <input id="model-sheet-model" class="is-mono" type="text" maxlength="256" placeholder="模型名称">
-        </label>
-        <button id="model-sheet-fetch-models" class="button button-ghost model-sheet-model-button" type="button">
-          <i data-lucide="refresh-cw" aria-hidden="true"></i>
-          <span>获取模型</span>
-        </button>
+      <div class="model-sheet-field">
+        <span>模型</span>
+        <div class="model-sheet-inline">
+          <input id="model-sheet-model" class="is-mono" type="text" maxlength="256" placeholder="claude-opus-4-8">
+          <button id="model-sheet-fetch-models" class="icon-button model-sheet-icon-button" type="button" title="从 API 加载可用模型" aria-label="从 API 加载可用模型">
+            <i data-lucide="refresh-cw" aria-hidden="true"></i>
+          </button>
+        </div>
       </div>
       <div id="model-sheet-models" class="model-sheet-models" hidden></div>
       <label class="model-sheet-field">
+        <span>Base URL（可选）</span>
+        <input id="model-sheet-base-url" class="is-mono" type="url" placeholder="https://api.openai.com/v1">
+      </label>
+      <div class="model-sheet-field">
+        <span>代理（可选）</span>
+        <input id="model-sheet-proxy" class="is-mono" type="text" maxlength="2048" placeholder="socks5://user:pass@127.0.0.1:1080 · http://127.0.0.1:8080">
+        <small class="model-sheet-field-hint">仅 LLM 出站请求走此代理，支持 http/https/socks5，可带账号密码；留空表示直连。</small>
+      </div>
+      <div class="model-sheet-field">
+        <span>自定义会话头（可选）</span>
+        <input id="model-sheet-session-header" class="is-mono" type="text" maxlength="128" placeholder="如 x-session-id（留空=不发送）">
+        <small class="model-sheet-field-hint">填写头名后，每次请求都会带上该 HTTP 头，头值为当前会话的 session id；留空不发送。</small>
+      </div>
+      <label class="model-sheet-field">
         <span>API Key</span>
-        <input id="model-sheet-api-key" type="password" autocomplete="new-password" placeholder="API Key">
-      </label>
-      <label class="model-sheet-field">
-        <span>代理</span>
-        <input id="model-sheet-proxy" class="is-mono" type="text" maxlength="2048" placeholder="socks5://user:pass@127.0.0.1:1080">
-      </label>
-      <label class="model-sheet-field">
-        <span>自定义会话头</span>
-        <input id="model-sheet-session-header" class="is-mono" type="text" maxlength="128" placeholder="可选，如 x-session-id">
+        <input id="model-sheet-api-key" type="password" autocomplete="new-password" placeholder="sk-…">
       </label>
       <div class="model-sheet-grid three">
         <label class="model-sheet-field">
@@ -848,33 +849,44 @@
         </label>
         <label class="model-sheet-field">
           <span>上下文窗口(K)</span>
-          <input id="model-sheet-context-window" type="number" min="0" max="1000000" step="1" value="0">
+          <input id="model-sheet-context-window" type="number" min="0" max="1000000" step="1" value="0" placeholder="200">
         </label>
       </div>
-      <div class="model-sheet-grid three">
-        <label class="model-sheet-field">
-          <span>轮询优先级</span>
+      <p class="model-sheet-field-hint">限速 0 = 不限，全 Agent 共享。上下文窗口单位 K（千 token），0 = 默认 200K。</p>
+      <section class="model-sheet-card">
+        <div class="model-sheet-card-row">
+          <span><strong>轮询优先级</strong><small>数字越大越先被选中；激活配置恒为第 1 顺位，相同优先级会轮流打头。</small></span>
           <input id="model-sheet-priority" type="number" min="-1000000" max="1000000" step="1" value="0">
+        </div>
+        <label class="model-sheet-card-row is-bordered" for="model-sheet-pool">
+          <span><strong>不参与轮询</strong><small>开启后不会被当作故障转移目标，仍可被 Agent / 任务显式指定使用。</small></span>
+          <input id="model-sheet-pool" type="checkbox">
         </label>
-        <label class="model-sheet-field">
-          <span>输出上限</span>
-          <input id="model-sheet-max-tokens" type="number" min="0" max="10000000" step="1" value="0" placeholder="0 = 不发送">
+        <label class="model-sheet-card-row is-bordered" for="model-sheet-streaming">
+          <span><strong>流式输出 · streaming</strong><small>开启走流式 SSE；关闭走非流式，部分网关更稳定。</small></span>
+          <input id="model-sheet-streaming" type="checkbox" checked>
         </label>
-        <label class="model-sheet-field">
-          <span>上限字段名</span>
-          <span class="select-wrap">
+      </section>
+      <section class="model-sheet-card">
+        <div class="model-sheet-card-row">
+          <span><strong>输出上限 · max tokens</strong><small>单次回复最多生成多少 token；0 = 不发送该字段。它和上下文窗口是两回事。</small></span>
+          <input id="model-sheet-max-tokens" type="number" min="0" max="10000000" step="1" value="0" placeholder="0">
+        </div>
+        <div class="model-sheet-card-row is-bordered">
+          <span><strong>上限字段名</strong><small>仅 OpenAI Chat 格式可选；其它格式字段名固定。</small></span>
+          <span class="select-wrap model-sheet-select-compact">
             <select id="model-sheet-max-tokens-field">
               <option value="">max_tokens（默认）</option>
               <option value="max_completion_tokens">max_completion_tokens</option>
             </select>
             <i data-lucide="chevron-down" aria-hidden="true"></i>
           </span>
-        </label>
-      </div>
-      <div class="model-sheet-grid two">
-        <label class="model-sheet-field">
-          <span>思考开关</span>
-          <span class="select-wrap">
+        </div>
+      </section>
+      <section class="model-sheet-card">
+        <div class="model-sheet-card-row">
+          <span><strong>思考开关 · thinking.type</strong><small>不发送 = 不带该字段；关闭 = disabled；开启 = enabled。与思考强度互相独立。</small></span>
+          <span class="select-wrap model-sheet-select-compact">
             <select id="model-sheet-thinking-type">
               <option value="">不发送（默认）</option>
               <option value="disabled">关闭</option>
@@ -882,10 +894,10 @@
             </select>
             <i data-lucide="chevron-down" aria-hidden="true"></i>
           </span>
-        </label>
-        <label class="model-sheet-field">
-          <span>思考强度</span>
-          <span class="select-wrap">
+        </div>
+        <div class="model-sheet-card-row is-bordered">
+          <span><strong>思考强度 · reasoning_effort</strong><small>独立的强度档位；有些接口只靠强度即可激活思考。</small></span>
+          <span class="select-wrap model-sheet-select-compact">
             <select id="model-sheet-reasoning-effort">
               <option value="">不发送（默认）</option>
               <option value="low">low</option>
@@ -896,17 +908,7 @@
             </select>
             <i data-lucide="chevron-down" aria-hidden="true"></i>
           </span>
-        </label>
-      </div>
-      <section class="model-sheet-group">
-        <label class="model-sheet-toggle">
-          <span><strong>参与轮询</strong><small>激活配置始终参与；其它配置可单独排除</small></span>
-          <input id="model-sheet-pool" type="checkbox" checked>
-        </label>
-        <label class="model-sheet-toggle">
-          <span><strong>流式输出</strong><small>关闭后走非流式请求，部分网关更稳定</small></span>
-          <input id="model-sheet-streaming" type="checkbox" checked>
-        </label>
+        </div>
       </section>
       <section class="model-sheet-group">
         <div class="model-sheet-section-heading">
