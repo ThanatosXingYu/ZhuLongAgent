@@ -1255,11 +1255,7 @@ dialog.model-pool-sheet {
 
 .model-sheet-toggle small,
 .model-sheet-test-result,
-.model-pool-note,
-.model-pool-chain-copy small,
-.model-pool-chain-copy code,
-.model-pool-chain-title strong,
-.model-pool-chain-copy > small {
+.model-pool-note {
   font-size: 11px;
 }
 
