@@ -952,7 +952,7 @@
           </div>
           <div class="model-sheet-retry-controls">
             <label><span>重试次数</span><input id="model-sheet-retry-connect-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 3"></label>
-            <label><span>间隔 ms</span><input id="model-sheet-retry-connect-interval" type="number" min="0" step="1" value="0" placeholder="默认退避"></label>
+            <label><span>间隔 ms</span><input id="model-sheet-retry-connect-interval" type="number" min="0" step="1" value="0" placeholder="默认退避"><span class="model-retry-default">0.5s→1s→2s 指数（封顶 8s）</span></label>
           </div>
         </div>
         <div class="model-sheet-retry-layer">
@@ -962,7 +962,7 @@
           </div>
           <div class="model-sheet-retry-controls">
             <label><span>重试次数</span><input id="model-sheet-retry-empty-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 2"></label>
-            <label><span>间隔 ms</span><input id="model-sheet-retry-empty-interval" type="number" min="0" step="1" value="0" placeholder="默认退避"></label>
+            <label><span>间隔 ms</span><input id="model-sheet-retry-empty-interval" type="number" min="0" step="1" value="0" placeholder="默认退避"><span class="model-retry-default">0.5s→1s→2s 指数（封顶 8s）</span></label>
           </div>
         </div>
         <div class="model-sheet-retry-layer">
@@ -972,7 +972,7 @@
           </div>
           <div class="model-sheet-retry-controls">
             <label><span>重试次数</span><input id="model-sheet-retry-stream-attempts" type="number" min="-1" step="1" value="0" placeholder="默认 10"></label>
-            <label><span>间隔 ms</span><input id="model-sheet-retry-stream-interval" type="number" min="0" step="1" value="0" placeholder="默认退避"></label>
+            <label><span>间隔 ms</span><input id="model-sheet-retry-stream-interval" type="number" min="0" step="1" value="0" placeholder="默认退避"><span class="model-retry-default">固定 10s</span></label>
           </div>
         </div>
       </section>
