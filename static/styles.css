@@ -6161,22 +6161,21 @@ dialog.model-pool-sheet {
 
 .model-sheet-card {
   display: grid;
-  gap: 0;
-  padding: 0 12px;
+  gap: 12px;
+  padding: 12px;
   border: 1px solid var(--line);
-  border-radius: 7px;
+  border-radius: 8px;
 }
 
 .model-sheet-card-row {
-  min-height: 64px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 10px 0;
 }
 
 .model-sheet-card-row.is-bordered {
+  padding-top: 12px;
   border-top: 1px solid var(--line);
 }
 
