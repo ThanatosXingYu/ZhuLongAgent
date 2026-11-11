@@ -390,7 +390,7 @@ dialog.model-pool-sheet,
   border: 1px solid var(--line);
   border-radius: 10px;
   font-size: 12px;
-  line-height: 1.6;
+  line-height: 1.625;
 }
 
 .model-retry-layout {
@@ -425,7 +425,7 @@ dialog.model-pool-sheet,
 
 .model-settings-card-heading p {
   font-size: 12px;
-  line-height: 1.55;
+  line-height: 1.3333;
 }
 
 .model-retry-actions {
