@@ -2526,7 +2526,7 @@ dialog.model-pool-sheet::backdrop {
 .model-pool-chain-name {
   min-width: 0;
   overflow: hidden;
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 500;
   text-overflow: ellipsis;
   white-space: nowrap;
