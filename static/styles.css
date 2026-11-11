@@ -2404,13 +2404,14 @@ dialog.model-pool-sheet::backdrop {
 
 .model-sheet-toggle strong {
   color: var(--text);
-  font-size: 12px;
-  font-weight: 560;
+  font-size: 14px;
+  font-weight: 500;
 }
 
 .model-sheet-toggle small {
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .model-sheet-toggle > input[type="checkbox"] {
