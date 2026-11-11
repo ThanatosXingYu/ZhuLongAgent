@@ -21,9 +21,9 @@
 .model-routing-shell {
   width: var(--model-track);
   max-width: calc(100% - 32px);
-  margin: 0 auto 32px;
+  margin: 24px auto 32px;
   display: grid;
-  gap: 10px;
+  gap: 16px;
 }
 
 .model-routing-tabs {
