@@ -1853,7 +1853,7 @@ dialog.is-page-dialog {
 .model-routing-header-copy {
   min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 0;
 }
 
 .model-routing-header-copy .eyebrow {
@@ -1864,16 +1864,17 @@ dialog.is-page-dialog {
   margin: 0;
   color: var(--text);
   font-size: 20px;
-  font-weight: 620;
-  line-height: 1.25;
-  letter-spacing: -0.01em;
+  font-weight: 600;
+  line-height: 28px;
+  letter-spacing: -0.025em;
 }
 
 .model-routing-header-copy > p:last-child {
   max-width: 680px;
   margin: 0;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 14px;
+  line-height: 20px;
 }
 
 .model-routing-header-actions {
